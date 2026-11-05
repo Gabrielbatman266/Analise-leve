@@ -14,7 +14,7 @@ class AiException(val code: Int, msg: String) : Exception(msg)
 /** Conversa com a IA escolhida (Claude ou Gemini) usando a chave do próprio usuário. */
 object Ai {
     const val DEFAULT_CLAUDE = "claude-haiku-5-5"
-    const val DEFAULT_GEMINI = "gemini-2.5-flash"
+    const val DEFAULT_GEMINI = "gemini-3.8-flash"
 
     private const val EXTRACT = """Estes são prints de um perfil do Threads, com posts de foto e legenda curta.
 Para CADA post visível, anote: a legenda exata ("" se não tiver), o que a foto mostra em poucas palavras, e os números embaixo do post (curtidas, comentários, reposts). "1,2 mil" = 1200. Se um número não aparecer, use 0. Ignore posts cortados sem números e ignore anúncios.
