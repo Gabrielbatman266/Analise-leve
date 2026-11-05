@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -21,6 +22,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -31,6 +33,7 @@ class MainActivity : Activity() {
 
     private val REQ_PROJ = 11
     private val REQ_GALLERY = 12
+    private val REQ_POSTS = 13
     private val POST_LEVE_URL = "https://claude.ai/artifact/8aJFev2aBeuqNZ7mx2i1NJ"
 
     // paleta AMOLED
@@ -48,6 +51,11 @@ class MainActivity : Activity() {
     private lateinit var tvErr: TextView
     private lateinit var tvTop: TextView
     private lateinit var tvPat: TextView
+    private lateinit var postList: LinearLayout
+    private lateinit var tvPostInfo: TextView
+    private lateinit var everyRow: LinearLayout
+    private var postStamp = -1L
+    private val thumbs = HashMap<String, Bitmap>()
     private lateinit var btnBubble: Button
     private lateinit var btnClaude: Button
     private lateinit var btnGemini: Button
@@ -104,6 +112,22 @@ class MainActivity : Activity() {
         tvErr = text("", 13f, ACCENT, parent = st)
 
         // captura
+        // fila de posts
+        val cp = card("Fila de posts")
+        text("Adicione fotos: cada uma sai sem metadados e ganha legendas. Toque em Postar e o Threads abre com a foto e a legenda juntas. É só publicar.", 13f, MUTED, parent = cp)
+        button("＋ Adicionar fotos pra postar", cp, primary = true) { pickPosts() }
+        text("Lembrete pra postar", 12f, MUTED, parent = cp)
+        everyRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        cp.addView(everyRow, lpMatch())
+        listOf(0 to "Off", 15 to "15m", 30 to "30m", 60 to "1h", 120 to "2h").forEach { (m, t) ->
+            button(t, everyRow, weight = true) { Reminder.setEvery(this, m); styleEvery(); refresh()
+                toast(if (m == 0) "Lembrete desligado" else "Vou avisar a cada $t com a próxima foto") }.tag = m
+        }
+        tvPostInfo = text("", 13f, OK, parent = cp)
+        postList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        cp.addView(postList, lpMatch())
+        styleEvery()
+
         val c1 = card("Prints")
         btnBubble = button("Ligar bolha de print", c1, primary = true) { toggleBubble() }
         text("Toque na bolha = 1 print. Segure a bolha = modo automático (você rola o perfil devagar e ele tira os prints sozinho, sem repetir). Arraste pra mudar de lugar.", 13f, MUTED, parent = c1)
@@ -223,7 +247,98 @@ class MainActivity : Activity() {
         etModel.hint = if (p == "gemini") Ai.DEFAULT_GEMINI else Ai.DEFAULT_CLAUDE
     }
 
+    private fun styleEvery() {
+        val cur = Reminder.every(this)
+        for (k in 0 until everyRow.childCount) {
+            val b = everyRow.getChildAt(k) as Button
+            val on = b.tag == cur
+            b.setTextColor(if (on) 0xFF1A0A10.toInt() else FG)
+            b.background = GradientDrawable().apply { setColor(if (on) ACCENT else 0xFF1C1C24.toInt()); cornerRadius = dp(10).toFloat() }
+        }
+    }
+
+    private fun thumb(id: String): Bitmap? = thumbs[id] ?: try {
+        val f = PostQueue.imageFile(this, id)
+        val b = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(f.path, b)
+        var smp = 1; while (b.outWidth / (smp * 2) >= dp(110)) smp *= 2
+        BitmapFactory.decodeFile(f.path, BitmapFactory.Options().apply { inSampleSize = smp })?.also { thumbs[id] = it }
+    } catch (e: Exception) { null }
+
+    private fun renderPosts() {
+        val list = PostQueue.load(this)
+        val ready = list.filter { it.optString("status") != "postada" }
+        val done = list.filter { it.optString("status") == "postada" }.sortedByDescending { it.optLong("postedAt") }.take(10)
+        val next = PostQueue.next(this)?.optString("id")
+        postList.removeAllViews()
+        if (list.isEmpty()) { text("Nenhuma foto na fila ainda.", 13f, MUTED, parent = postList); return }
+        text("${ready.size} pra postar · ${list.size - ready.size} postadas", 13f, MUTED, parent = postList)
+        for (o in ready + done) {
+            val id = o.optString("id"); val st = o.optString("status")
+            val box = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(10), dp(10), dp(10), dp(10))
+                background = GradientDrawable().apply { setColor(BG); cornerRadius = dp(12).toFloat()
+                    setStroke(dp(if (id == next) 2 else 1), if (id == next) ACCENT else LINE) }
+            }
+            postList.addView(box, lpMatch().apply { topMargin = dp(10) })
+            val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            box.addView(head, lpMatch())
+            head.addView(ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setImageBitmap(thumb(id)) },
+                LinearLayout.LayoutParams(dp(84), dp(105)).apply { rightMargin = dp(10) })
+            val side = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            head.addView(side, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val usos = o.optInt("usos")
+            val label = when (st) {
+                "gerando" -> "Gerando legendas…"
+                "postada" -> "✓ Postada " + android.text.format.DateFormat.format("dd/MM HH:mm", o.optLong("postedAt"))
+                else -> if (id == next) "Próxima" else "Pronta"
+            } + if (usos > 1) " · ${usos}x" else ""
+            text(label, 13f, if (st == "postada") OK else ACCENT, parent = side, bold = true)
+            o.optString("aviso").takeIf { it.isNotEmpty() }?.let { text(it, 12f, MUTED, parent = side) }
+            if (st != "gerando") {
+                val post = button(if (st == "postada") "Postar de novo ↗" else "Postar ↗", side, primary = true) { }
+                post.setOnClickListener {
+                    val cap = PostQueue.captionOf(o)
+                    startActivity(Intent(this, PostActivity::class.java).putExtra("id", id).putExtra("caption", cap))
+                }
+            }
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            side.addView(row, lpMatch())
+            if (st == "postada") button("Usar de novo", row, weight = true) { PostQueue.requeue(this, id); refresh() }
+            else if (st != "gerando") button("Mais legendas", row, weight = true) {
+                PostQueue.update(this, id) { it.put("status", "gerando") }
+                LeveService.send(this, LeveService.ACT_ANALYZE); refresh()
+            }
+            val del = button("Apagar", row, weight = true) { }
+            del.setOnClickListener {
+                if (del.tag != "armed") { del.tag = "armed"; del.text = "De novo"; ui.postDelayed({ del.tag = null; del.text = "Apagar" }, 2500) }
+                else { PostQueue.remove(this, id); thumbs.remove(id); refresh() }
+            }
+            if (st == "pronta") {
+                val caps = o.optJSONArray("legendas")
+                val chosen = PostQueue.captionOf(o)
+                if (caps != null) for (k in 0 until caps.length()) {
+                    val cap = caps.optString(k)
+                    val on = cap == chosen
+                    val t = TextView(this).apply {
+                        text = cap; textSize = 14f; setTextColor(FG)
+                        setPadding(dp(10), dp(8), dp(10), dp(8))
+                        background = GradientDrawable().apply { setColor(if (on) 0xFF3A1824.toInt() else CARD); cornerRadius = dp(8).toFloat()
+                            setStroke(dp(1), if (on) ACCENT else LINE) }
+                        setOnClickListener { PostQueue.update(this@MainActivity, id) { it.put("escolhida", cap) }; refresh() }
+                    }
+                    box.addView(t, lpMatch().apply { topMargin = dp(6) })
+                }
+            }
+        }
+    }
+
     private fun refresh() {
+        val ps = PostQueue.stamp(this)
+        if (ps != postStamp) { postStamp = ps; renderPosts() }
+        val ev = Reminder.every(this); val at = Reminder.nextAt(this)
+        tvPostInfo.text = if (ev > 0 && at > 0) "Próximo lembrete: " + android.text.format.DateFormat.format("HH:mm", at) else ""
         val fila = Store.pending(this).size
         val list = Store.sorted(this)
         val lidos = Store.prefs(this).getInt("prints_lidos", 0)
@@ -282,6 +397,12 @@ class MainActivity : Activity() {
                 toast("Bolha ligada. Abra o Threads e toque nela pra tirar print.")
                 moveTaskToBack(true)
             }
+            REQ_POSTS -> {
+                val uris = ArrayList<Uri>()
+                data.clipData?.let { cd -> for (k in 0 until cd.itemCount) uris.add(cd.getItemAt(k).uri) }
+                if (uris.isEmpty()) data.data?.let { uris.add(it) }
+                importPosts(uris)
+            }
             REQ_GALLERY -> {
                 val uris = ArrayList<Uri>()
                 data.clipData?.let { cd -> for (k in 0 until cd.itemCount) uris.add(cd.getItemAt(k).uri) }
@@ -301,6 +422,47 @@ class MainActivity : Activity() {
         }
         if (uris.isNotEmpty()) importUris(uris)
     }
+
+    private fun pickPosts() {
+        val i = Intent(Intent.ACTION_GET_CONTENT).apply {
+            type = "image/*"; putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); addCategory(Intent.CATEGORY_OPENABLE)
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(Intent.createChooser(i, "Fotos pra postar"), REQ_POSTS)
+    }
+
+    private fun importPosts(uris: List<Uri>) {
+        toast("Limpando ${uris.size} foto(s)…")
+        Thread {
+            var n = 0
+            for (u in uris) try {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+                var smp = 1
+                while (bounds.outWidth / (smp * 2) >= 1440) smp *= 2
+                val raw = contentResolver.openInputStream(u)?.use {
+                    BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = smp })
+                } ?: continue
+                val bmp = rotateByExif(u, raw)
+                PostQueue.add(this, bmp); n++
+            } catch (e: Exception) { }
+            ui.post {
+                toast("$n foto(s) na fila, sem metadados. Gerando legendas…")
+                LeveService.send(this, LeveService.ACT_ANALYZE)
+                refresh()
+            }
+        }.start()
+    }
+
+    /** Vira a foto conforme a orientação original antes de descartar os metadados. */
+    private fun rotateByExif(u: Uri, b: Bitmap): Bitmap = try {
+        val deg = contentResolver.openInputStream(u)?.use {
+            when (android.media.ExifInterface(it).getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1)) {
+                6 -> 90f; 3 -> 180f; 8 -> 270f; else -> 0f
+            }
+        } ?: 0f
+        if (deg == 0f) b else Bitmap.createBitmap(b, 0, 0, b.width, b.height, android.graphics.Matrix().apply { postRotate(deg) }, true)
+    } catch (e: Exception) { b }
 
     private fun importUris(uris: List<Uri>) {
         toast("Colocando ${uris.size} print(s) na fila…")

@@ -53,6 +53,44 @@ Responda só com JSON: {"padroes":["4 a 7 frases curtas e práticas em portuguê
         return parseObj(ask(c, prompt, emptyList())).optJSONArray("padroes") ?: JSONArray()
     }
 
+    private val CTAS = listOf("gostou, amor?", "e aí, aprova?", "me fala nos comentários 👇", "1 a 10, sem mentir",
+        "posto mais assim?", "fala a verdade, ficou bom?", "vem conversar comigo", "me conta o que achou", "gostou ou quer mais?")
+    val OFFLINE = listOf("sem filtro, sem desculpa", "hoje eu só quero paz e um bom ângulo", "era pra ser só uma foto",
+        "modo sexta-feira: ativado", "fiquei pensando… vocês notaram?")
+
+    fun withCta(list: List<String>): List<String> {
+        val pool = CTAS.shuffled()
+        return list.mapIndexed { i, c -> c.trimEnd() + "\n" + pool[i % pool.size] }
+    }
+
+    /** Legendas pra uma foto da fila, no estilo do que mais engajou no banco. */
+    fun captions(c: Context, img: File): List<String> {
+        val top = Store.sorted(c).map { it.optString("legenda") }.filter { it.isNotBlank() }.take(8)
+        val pats = Store.loadPatterns(c).let { a -> (0 until a.length()).map { a.optString(it) } }
+        val prompt = """Você escreve legendas para posts de foto no Threads, em português do Brasil, no estilo de perfis que viralizam.
+${if (top.isNotEmpty()) "Legendas que mais engajaram (copie o ritmo e o tom, nunca o texto):\n" + top.joinToString("\n") { "- $it" } else ""}
+${if (pats.isNotEmpty()) "Padrões que funcionam (siga):\n" + pats.joinToString("\n") { "- $it" } else ""}
+Use a foto anexada para deixar as legendas específicas.
+Não termine com pergunta ou chamada pra comentar: o app adiciona esse final depois.
+Regras: naturais, em minúsculas quando combinar, no máximo 1 emoji, sem hashtags, nada explícito, nada que finja ser outra pessoa real.
+Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
+        val b64 = Base64.encodeToString(shrink(img), Base64.NO_WRAP)
+        val txt = ask(c, prompt, listOf(b64))
+        val arr = parseObj(txt).optJSONArray("legendas")
+            ?: throw AiException(-2, "Resposta que não entendi: " + txt.take(120))
+        val list = (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotBlank() }.take(6)
+        if (list.isEmpty()) throw AiException(-2, "Nenhuma legenda veio")
+        return withCta(list)
+    }
+
+    private fun shrink(f: File): ByteArray {
+        val o = android.graphics.BitmapFactory.Options().apply { inSampleSize = 2 }
+        val bmp = android.graphics.BitmapFactory.decodeFile(f.path, o) ?: return f.readBytes()
+        val out = java.io.ByteArrayOutputStream()
+        bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, out)
+        return out.toByteArray()
+    }
+
     /** Pedido mínimo pra conferir chave e modelo. */
     fun test(c: Context): String = ask(c, "Responda só com JSON: {\"ok\":true}", emptyList()).trim().take(200)
 
