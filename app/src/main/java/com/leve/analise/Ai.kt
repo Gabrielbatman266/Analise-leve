@@ -22,10 +22,15 @@ Responda só com JSON, sem texto antes ou depois: {"posts":[{"legenda":"","foto"
 
     fun provider(c: Context) = Store.prefs(c).getString("provider", "claude") ?: "claude"
     fun key(c: Context) = Store.prefs(c).getString("key", "")?.trim() ?: ""
-    fun model(c: Context): String {
-        val m = Store.prefs(c).getString("model", "")?.trim().orEmpty()
-        return m.ifEmpty { if (provider(c) == "gemini") DEFAULT_GEMINI else DEFAULT_CLAUDE }
+    /** Pode ter vários modelos separados por vírgula: quando um está lotado, usa o próximo. */
+    fun models(c: Context): List<String> {
+        val m = Store.prefs(c).getString("model", "")?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
+        return m.ifEmpty { listOf(if (provider(c) == "gemini") DEFAULT_GEMINI else DEFAULT_CLAUDE) }
     }
+    @Volatile private var rot = 0
+    fun model(c: Context): String { val l = models(c); return l[rot % l.size] }
+    /** Troca pro próximo modelo da lista. Retorna false se só tem um. */
+    fun nextModel(c: Context): Boolean { val n = models(c).size; if (n < 2) return false; rot = (rot + 1) % n; return true }
 
     /** Lê um lote de prints e devolve os posts encontrados. */
     fun extract(c: Context, files: List<File>): JSONArray {

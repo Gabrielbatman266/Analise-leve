@@ -323,6 +323,7 @@ class LeveService : Service() {
         val wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "leve:analise")
         wl.acquire(60 * 60 * 1000L)
         var fails = 0
+        var busy = 0
         var addedRun = 0
         try {
             while (!stopFlag) {
@@ -340,15 +341,28 @@ class LeveService : Service() {
                     p.edit().putInt("prints_lidos", p.getInt("prints_lidos", 0) + batch.size).apply()
                 } catch (e: AiException) {
                     lastError = "IA: ${e.message}"
-                    if (e.code in listOf(400, 401, 403, 404)) break
-                    if (e.code == -2 && fails >= 2) break // resposta sem posts: não apaga os prints // chave ou modelo errado: não adianta insistir
+                    if (e.code in listOf(400, 401, 403, 404)) break // chave ou modelo errado: não adianta insistir
+                    if (e.code == 503 || e.code == 429 || e.code == 500 || e.code == 529) {
+                        // IA lotada: não conta como falha, espera e tenta de novo sem desistir
+                        busy++
+                        val n = Ai.models(this).size
+                        if (Ai.nextModel(this) && busy % n != 0) { lastError = "Modelo lotado, trocando pra ${Ai.model(this)}…"; SystemClock.sleep(2000); continue }
+                        val wait = minOf(180L, 15L * ((busy + n - 1) / n))
+                        lastError = "IA lotada no momento. Tentando de novo em ${wait}s (tentativa $busy)…"
+                        main.post { updateNotif() }
+                        var t = 0L
+                        while (t < wait && !stopFlag) { SystemClock.sleep(1000); t++ }
+                        continue
+                    }
                     fails++
-                    SystemClock.sleep(if (e.code == 429) 30000L else 8000L * fails)
+                    if (e.code == -2 && fails >= 2) break // resposta sem posts: não apaga os prints
+                    SystemClock.sleep(8000L * fails)
                 } catch (e: Exception) {
                     fails++
                     lastError = "Sem conexão. Tentando de novo…"
                     SystemClock.sleep(minOf(60000L, 6000L * fails))
                 }
+                busy = 0
                 if (fails >= 8) { lastError = "Parei depois de várias falhas. Toque em Analisar fila pra tentar de novo."; break }
                 main.post { updateNotif() }
             }
