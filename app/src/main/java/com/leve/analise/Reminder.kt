@@ -81,6 +81,7 @@ object Reminder {
 class ReminderReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         if (i.action == Intent.ACTION_BOOT_COMPLETED) { Reminder.schedule(c); return }
+        PostQueue.cleanGallery(c, false)
         Reminder.notifyNow(c)
         Reminder.schedule(c)
     }
@@ -100,6 +101,7 @@ class PostActivity : Activity() {
         try {
             getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("legenda", cap))
         } catch (e: Exception) { }
+        PostQueue.putInGallery(this, id) // fica em primeiro na galeria; a cópia anterior é apagada
         try {
             startActivity(PostQueue.shareIntent(this, id, cap))
             PostQueue.update(this, id) {

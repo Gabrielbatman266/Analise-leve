@@ -1,10 +1,14 @@
 package com.leve.analise
 
 import android.content.ClipData
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -98,5 +102,46 @@ object PostQueue {
         val direct = Intent(i).setPackage(THREADS)
         return if (direct.resolveActivity(c.packageManager) != null) direct
                else Intent.createChooser(i, "Postar em…").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+
+    // ---------- galeria: só uma cópia, sempre a mais recente ----------
+    fun galleryOn(c: Context) = Store.prefs(c).getBoolean("gallery_first", true)
+
+    /** Coloca a foto em primeiro na galeria (pasta Pictures/PostLeve). Apaga a cópia anterior antes. */
+    fun putInGallery(c: Context, id: String): Uri? {
+        cleanGallery(c, true)
+        if (Build.VERSION.SDK_INT < 29 || !galleryOn(c)) return null
+        return try {
+            val cr = c.contentResolver
+            val cv = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, "post_${System.currentTimeMillis()}.jpg")
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/PostLeve")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+            val uri = cr.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: return null
+            cr.openOutputStream(uri)?.use { out -> imageFile(c, id).inputStream().use { it.copyTo(out) } }
+            cr.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
+            Store.prefs(c).edit().putString("gallery_uri", uri.toString()).putLong("gallery_at", System.currentTimeMillis()).apply()
+            uri
+        } catch (e: Exception) { null }
+    }
+
+    /** Apaga a cópia da galeria feita pelo app (depois de 10 min, ou já se force). */
+    fun cleanGallery(c: Context, force: Boolean) {
+        val p = Store.prefs(c)
+        val u = p.getString("gallery_uri", null) ?: return
+        if (!force && System.currentTimeMillis() - p.getLong("gallery_at", 0L) < 10 * 60_000L) return
+        try { c.contentResolver.delete(Uri.parse(u), null, null) } catch (e: Exception) { }
+        p.edit().remove("gallery_uri").remove("gallery_at").apply()
+    }
+
+    /** Legenda escrita na mão: entra no topo da lista e já fica escolhida. */
+    fun setManual(c: Context, id: String, text: String) = update(c, id) { o ->
+        val old = o.optJSONArray("legendas") ?: JSONArray()
+        val n = JSONArray().put(text)
+        for (i in 0 until old.length()) if (old.optString(i) != text) n.put(old.optString(i))
+        o.put("legendas", n); o.put("escolhida", text)
+        if (o.optString("status") == "gerando") o.put("status", "pronta")
     }
 }

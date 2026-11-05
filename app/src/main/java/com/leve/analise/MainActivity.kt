@@ -80,6 +80,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        Thread { PostQueue.cleanGallery(this, false) }.start()
         ui.post(refresher)
     }
 
@@ -123,6 +124,16 @@ class MainActivity : Activity() {
             button(t, everyRow, weight = true) { Reminder.setEvery(this, m); styleEvery(); refresh()
                 toast(if (m == 0) "Lembrete desligado" else "Vou avisar a cada $t com a próxima foto") }.tag = m
         }
+        val gal = button("", cp) { }
+        fun galText() { gal.text = if (PostQueue.galleryOn(this)) "Foto em primeiro na galeria: ligado" else "Foto em primeiro na galeria: desligado" }
+        galText()
+        gal.setOnClickListener {
+            val on = !PostQueue.galleryOn(this)
+            Store.prefs(this).edit().putBoolean("gallery_first", on).apply()
+            if (!on) Thread { PostQueue.cleanGallery(this, true) }.start()
+            galText()
+        }
+        text("Ao postar, a foto vai pra galeria (pasta PostLeve) em primeiro lugar. A cópia anterior é apagada, então nunca acumula duplicada.", 12f, MUTED, parent = cp)
         tvPostInfo = text("", 13f, OK, parent = cp)
         postList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         cp.addView(postList, lpMatch())
@@ -315,6 +326,27 @@ class MainActivity : Activity() {
                 if (del.tag != "armed") { del.tag = "armed"; del.text = "De novo"; ui.postDelayed({ del.tag = null; del.text = "Apagar" }, 2500) }
                 else { PostQueue.remove(this, id); thumbs.remove(id); refresh() }
             }
+            run {
+                val et = EditText(this).apply {
+                    hint = "Coloque sua legenda aqui"; setTextColor(FG); setHintTextColor(MUTED); textSize = 14f
+                    background = GradientDrawable().apply { setColor(CARD); cornerRadius = dp(8).toFloat(); setStroke(dp(1), LINE) }
+                    setPadding(dp(10), dp(8), dp(10), dp(8)); minLines = 1; maxLines = 5
+                    inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                }
+                box.addView(et, lpMatch().apply { topMargin = dp(8) })
+                val mine = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                box.addView(mine, lpMatch())
+                button("Usar minha legenda", mine, weight = true) {
+                    val t = et.text.toString().trim()
+                    if (t.isEmpty()) toast("Escreva a legenda primeiro")
+                    else { PostQueue.setManual(this, id, t); et.clearFocus(); toast("Legenda escolhida") ; refresh() }
+                }
+                button("Postar com ela ↗", mine, weight = true) {
+                    val t = et.text.toString().trim()
+                    if (t.isEmpty()) toast("Escreva a legenda primeiro")
+                    else { PostQueue.setManual(this, id, t); startActivity(Intent(this, PostActivity::class.java).putExtra("id", id).putExtra("caption", t)) }
+                }
+            }
             if (st == "pronta") {
                 val caps = o.optJSONArray("legendas")
                 val chosen = PostQueue.captionOf(o)
@@ -336,7 +368,7 @@ class MainActivity : Activity() {
 
     private fun refresh() {
         val ps = PostQueue.stamp(this)
-        if (ps != postStamp) { postStamp = ps; renderPosts() }
+        if (ps != postStamp && postList.findFocus() !is EditText) { postStamp = ps; renderPosts() }
         val ev = Reminder.every(this); val at = Reminder.nextAt(this)
         tvPostInfo.text = if (ev > 0 && at > 0) "Próximo lembrete: " + android.text.format.DateFormat.format("HH:mm", at) else ""
         val fila = Store.pending(this).size
