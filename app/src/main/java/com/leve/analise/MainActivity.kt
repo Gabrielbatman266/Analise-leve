@@ -227,7 +227,8 @@ class MainActivity : Activity() {
         val list = Store.sorted(this)
         val lidos = Store.prefs(this).getInt("prints_lidos", 0)
         tvStatus.text = "${list.size} posts no banco · $fila na fila · $lidos prints lidos" +
-            if (LeveService.working) "\nAnalisando em segundo plano…" else ""
+            (if (LeveService.working) "\nAnalisando em segundo plano…" else "") +
+            "\nIA: ${if (Ai.provider(this) == "gemini") "Gemini" else "Claude"} · ${Ai.model(this)}"
         val err = LeveService.lastError
         tvErr.text = if (err.isNotEmpty()) err else LeveService.lastBatchInfo
         tvErr.setTextColor(if (err.isNotEmpty()) ACCENT else OK)

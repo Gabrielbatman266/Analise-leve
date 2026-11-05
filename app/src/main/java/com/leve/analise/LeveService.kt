@@ -313,6 +313,7 @@ class LeveService : Service() {
     private fun kick() {
         if (working) return
         stopFlag = false
+        lastError = ""
         working = true
         work.post { processLoop() }
     }
