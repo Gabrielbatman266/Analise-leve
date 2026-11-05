@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#0B0B0F" android:pathData="M0,0h108v108h-108z" />
+    <!-- moldura de print -->
+    <path android:strokeColor="#FF5C82" android:strokeWidth="5" android:fillColor="#00000000"
+        android:pathData="M30,40 V30 H40 M68,30 H78 V40 M78,68 V78 H68 M40,78 H30 V68" />
+    <!-- barras de engajamento -->
+    <path android:fillColor="#FF5C82" android:pathData="M42,64h6v-10h-6z" />
+    <path android:fillColor="#FF5C82" android:pathData="M51,64h6v-18h-6z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M60,64h6v-24h-6z" />
+</vector>
