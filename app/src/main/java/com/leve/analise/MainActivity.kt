@@ -1,6 +1,7 @@
 package com.leve.analise
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
@@ -55,6 +56,9 @@ class MainActivity : Activity() {
     private lateinit var tvPostInfo: TextView
     private lateinit var everyRow: LinearLayout
     private var postStamp = -1L
+    private lateinit var btnFolder: Button
+    private lateinit var btn2k: Button
+    private lateinit var btnExisting: Button
     private val thumbs = HashMap<String, Bitmap>()
     private lateinit var btnBubble: Button
     private lateinit var btnClaude: Button
@@ -80,7 +84,15 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        Thread { PostQueue.cleanGallery(this, false) }.start()
+        Thread {
+            PostQueue.cleanGallery(this, false)
+            val n = FolderScan.scan(this)
+            FolderScan.schedule(this)
+            if (n > 0 || PostQueue.pendingCaptions(this).isNotEmpty()) ui.post {
+                if (n > 0) toast("$n foto(s) nova(s) da pasta ${FolderScan.bucket(this)} na fila")
+                LeveService.send(this, LeveService.ACT_ANALYZE)
+            }
+        }.start()
         ui.post(refresher)
     }
 
@@ -135,6 +147,14 @@ class MainActivity : Activity() {
         }
         text("Ao postar, a foto vai pra galeria (pasta PostLeve) em primeiro lugar. A cópia anterior é apagada, então nunca acumula duplicada.", 12f, MUTED, parent = cp)
         tvPostInfo = text("", 13f, OK, parent = cp)
+        // pasta do Flow
+        text("Pasta automática (ex.: Flow)", 12f, MUTED, parent = cp)
+        btnFolder = button("", cp) { askFolder() }
+        btn2k = button("", cp) { FolderScan.setOnly2k(this, !FolderScan.only2k(this)); updateFolderUi() }
+        btnExisting = button("", cp) { importExisting() }
+        text("Toda imagem nova que cair nessa pasta entra sozinha na fila, sem metadados, e ganha legendas. Com \"Só 2K\" ligado, ele ignora a versão menor e pega só a do upscale.", 12f, MUTED, parent = cp)
+        updateFolderUi()
+
         postList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         cp.addView(postList, lpMatch())
         styleEvery()
@@ -256,6 +276,64 @@ class MainActivity : Activity() {
         }
         style(btnClaude, p == "claude"); style(btnGemini, p == "gemini")
         etModel.hint = if (p == "gemini") Ai.DEFAULT_GEMINI else Ai.DEFAULT_CLAUDE
+    }
+
+    private fun updateFolderUi() {
+        val b = FolderScan.bucket(this)
+        btnFolder.text = if (b == null) "Escolher pasta pra vigiar" else "Vigiando: $b (trocar)"
+        btn2k.text = if (FolderScan.only2k(this)) "Só as em 2K (upscale): ligado" else "Só as em 2K (upscale): desligado"
+        btn2k.visibility = if (b == null) View.GONE else View.VISIBLE
+        btnExisting.visibility = View.GONE
+        if (b != null && FolderScan.hasPerm(this)) Thread {
+            val n = FolderScan.countExisting(this)
+            ui.post {
+                btnExisting.text = "Importar as $n que já estão na pasta"
+                btnExisting.visibility = if (n > 0) View.VISIBLE else View.GONE
+            }
+        }.start()
+    }
+
+    private fun askFolder() {
+        if (!FolderScan.hasPerm(this)) { requestPermissions(arrayOf(FolderScan.perm), 21); return }
+        Thread {
+            val list = FolderScan.buckets(this)
+            ui.post {
+                if (list.isEmpty()) { toast("Não achei pastas com imagens"); return@post }
+                val sorted = list.sortedByDescending { it.first.contains("flow", true) || it.first.contains("download", true) }
+                val names = sorted.map { "${it.first} (${it.second})" }.toMutableList()
+                val cur = FolderScan.bucket(this)
+                if (cur != null) names.add("Parar de vigiar")
+                AlertDialog.Builder(this)
+                    .setTitle("Qual pasta o Flow usa?")
+                    .setItems(names.toTypedArray()) { _, i ->
+                        if (i >= sorted.size) { FolderScan.stop(this); toast("Parei de vigiar a pasta") }
+                        else { FolderScan.choose(this, sorted[i].first); toast("Vigiando ${sorted[i].first}. Imagens novas entram sozinhas na fila.") }
+                        updateFolderUi()
+                    }.show()
+            }
+        }.start()
+    }
+
+    private fun importExisting() {
+        btnExisting.isEnabled = false
+        toast("Importando da pasta…")
+        Thread {
+            val n = FolderScan.scan(this, all = true)
+            ui.post {
+                btnExisting.isEnabled = true
+                toast("$n foto(s) na fila, sem metadados. Gerando legendas…")
+                LeveService.send(this, LeveService.ACT_ANALYZE)
+                updateFolderUi(); refresh()
+            }
+        }.start()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 21) {
+            if (FolderScan.hasPerm(this)) askFolder()
+            else toast("Sem permissão de ver as fotos não dá pra vigiar a pasta")
+        }
     }
 
     private fun styleEvery() {

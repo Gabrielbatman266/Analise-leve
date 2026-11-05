@@ -80,7 +80,7 @@ object Reminder {
 
 class ReminderReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
-        if (i.action == Intent.ACTION_BOOT_COMPLETED) { Reminder.schedule(c); return }
+        if (i.action == Intent.ACTION_BOOT_COMPLETED) { Reminder.schedule(c); FolderScan.schedule(c); return }
         PostQueue.cleanGallery(c, false)
         Reminder.notifyNow(c)
         Reminder.schedule(c)

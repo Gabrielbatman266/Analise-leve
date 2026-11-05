@@ -45,8 +45,9 @@ object PostQueue {
     /** Salva a foto limpa (JPEG novo, sem EXIF/GPS) e coloca na fila esperando legendas. */
     fun add(c: Context, src: Bitmap): String {
         val id = "f" + System.currentTimeMillis().toString(36) + (100..999).random()
-        val max = 1440
-        val bmp = if (src.width > max) Bitmap.createScaledBitmap(src, max, src.height * max / src.width, true) else src
+        val max = 2560 // mantém a qualidade 2K do upscale
+        val big = maxOf(src.width, src.height)
+        val bmp = if (big > max) Bitmap.createScaledBitmap(src, src.width * max / big, src.height * max / big, true) else src
         FileOutputStream(imageFile(c, id)).use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
         synchronized(lock) {
             val l = load(c)

@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
 
     <queries>
         <package android:name="com.instagram.barcelona" />
@@ -61,6 +63,11 @@
             android:authorities="com.leve.analise.img"
             android:exported="false"
             android:grantUriPermissions="true" />
+
+        <service
+            android:name=".FolderJob"
+            android:exported="true"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <service
             android:name=".LeveService"
