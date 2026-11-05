@@ -31,7 +31,9 @@ Responda só com JSON, sem texto antes ou depois: {"posts":[{"legenda":"","foto"
     fun extract(c: Context, files: List<File>): JSONArray {
         val images = files.map { Base64.encodeToString(it.readBytes(), Base64.NO_WRAP) }
         val txt = ask(c, EXTRACT, images)
-        return parseObj(txt).optJSONArray("posts") ?: JSONArray()
+        val arr = parseObj(txt).optJSONArray("posts")
+            ?: throw AiException(-2, "Resposta que não entendi: " + txt.replace("\n", " ").take(160).ifEmpty { "(vazia)" })
+        return arr
     }
 
     /** Compara os melhores com os piores e devolve frases curtas do que funciona. */
@@ -45,6 +47,9 @@ ${low.joinToString("\n") { line(it) }}
 Responda só com JSON: {"padroes":["4 a 7 frases curtas e práticas em português"]}"""
         return parseObj(ask(c, prompt, emptyList())).optJSONArray("padroes") ?: JSONArray()
     }
+
+    /** Pedido mínimo pra conferir chave e modelo. */
+    fun test(c: Context): String = ask(c, "Responda só com JSON: {\"ok\":true}", emptyList()).trim().take(200)
 
     private fun ask(c: Context, prompt: String, imagesB64: List<String>): String {
         val k = key(c)

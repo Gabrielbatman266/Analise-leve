@@ -109,6 +109,7 @@ class MainActivity : Activity() {
         text("Toque na bolha = 1 print. Segure a bolha = modo automático (você rola o perfil devagar e ele tira os prints sozinho, sem repetir). Arraste pra mudar de lugar.", 13f, MUTED, parent = c1)
         button("Adicionar prints da galeria", c1) { pickGallery() }
         button("Analisar fila agora", c1) { LeveService.send(this, LeveService.ACT_ANALYZE); toast("Analisando em segundo plano") }
+        button("Testar IA", c1) { testAi() }
 
         // resultado
         val c2 = card("O que deu mais certo")
@@ -227,7 +228,7 @@ class MainActivity : Activity() {
         val list = Store.sorted(this)
         val lidos = Store.prefs(this).getInt("prints_lidos", 0)
         tvStatus.text = "${list.size} posts no banco · $fila na fila · $lidos prints lidos" +
-            (if (LeveService.working) "\nAnalisando em segundo plano…" else "") +
+            (if (LeveService.working) "\nAnalisando em segundo plano…" else if (fila > 0) "\nParado. Toque em Analisar fila agora." else "") +
             "\nIA: ${if (Ai.provider(this) == "gemini") "Gemini" else "Claude"} · ${Ai.model(this)}"
         val err = LeveService.lastError
         tvErr.text = if (err.isNotEmpty()) err else LeveService.lastBatchInfo
@@ -319,6 +320,20 @@ class MainActivity : Activity() {
                 toast("$n print(s) na fila. Analisando em segundo plano.")
                 LeveService.send(this, LeveService.ACT_ANALYZE)
                 refresh()
+            }
+        }.start()
+    }
+
+    private fun testAi() {
+        tvErr.setTextColor(MUTED); tvErr.text = "Testando ${Ai.model(this)}…"
+        Thread {
+            val (ok, msg) = try { true to "IA respondeu: " + Ai.test(this) }
+                catch (e: AiException) { false to "Erro ${e.code}: ${e.message}" }
+                catch (e: Exception) { false to "Sem conexão: ${e.message}" }
+            ui.post {
+                ui.removeCallbacks(refresher)
+                tvErr.setTextColor(if (ok) OK else ACCENT); tvErr.text = msg
+                ui.postDelayed(refresher, 8000)
             }
         }.start()
     }

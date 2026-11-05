@@ -340,7 +340,8 @@ class LeveService : Service() {
                     p.edit().putInt("prints_lidos", p.getInt("prints_lidos", 0) + batch.size).apply()
                 } catch (e: AiException) {
                     lastError = "IA: ${e.message}"
-                    if (e.code in listOf(400, 401, 403, 404)) break // chave ou modelo errado: não adianta insistir
+                    if (e.code in listOf(400, 401, 403, 404)) break
+                    if (e.code == -2 && fails >= 2) break // resposta sem posts: não apaga os prints // chave ou modelo errado: não adianta insistir
                     fails++
                     SystemClock.sleep(if (e.code == 429) 30000L else 8000L * fails)
                 } catch (e: Exception) {
