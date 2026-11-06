@@ -392,9 +392,7 @@ class InstaEditor(private val a: MainActivity) {
         a.button("Importar do celular", mr, weight = true) { open("audio/*", REQ_MUSIC) }
         a.button("Extrair do vídeo aberto", mr, weight = true) { extract() }
         a.button("🎵 Extrair de vários vídeos de uma vez", cm, primary = true) {
-            val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { type = "video/*"; addCategory(Intent.CATEGORY_OPENABLE); putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true) }
-            @Suppress("DEPRECATION")
-            a.startActivityForResult(i, REQ_MULTI)
+            open("video/*", REQ_MULTI, true)
         }
         tvBatch = a.text("", 13f, a.OK, parent = cm)
         // player
@@ -436,9 +434,7 @@ class InstaEditor(private val a: MainActivity) {
         a.button("🎲 Postar vídeo aleatório", cl, primary = true) { postRandomVideo() }
         tvCycle = a.text("", 13f, a.OK, parent = cl)
         a.button("＋ Importar vídeos que já tenho (sem metadados)", cl) {
-            val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { type = "video/*"; addCategory(Intent.CATEGORY_OPENABLE); putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true) }
-            @Suppress("DEPRECATION")
-            a.startActivityForResult(i, REQ_IMPORT)
+            open("video/*", REQ_IMPORT, true)
         }
         tvImport = a.text("", 13f, a.OK, parent = cl)
         libBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
@@ -681,10 +677,37 @@ class InstaEditor(private val a: MainActivity) {
 
     // ------------------------------------------------------------------ escolher arquivos
 
-    private fun open(mime: String, req: Int) {
-        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { type = mime; addCategory(Intent.CATEGORY_OPENABLE) }
+    /** Pergunta onde procurar: Galeria (fotos e vídeos do celular) ou Arquivos (pastas). */
+    private fun open(mime: String, req: Int, multiple: Boolean = false) {
+        if (mime.startsWith("audio")) { openFiles(mime, req, multiple); return }
+        AlertDialog.Builder(a).setTitle("Procurar em")
+            .setItems(arrayOf("🖼  Galeria", "📁  Arquivos e pastas")) { _, i ->
+                if (i == 0) openGallery(mime, req, multiple) else openFiles(mime, req, multiple)
+            }.show()
+    }
+
+    private fun openFiles(mime: String, req: Int, multiple: Boolean) {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            type = mime; addCategory(Intent.CATEGORY_OPENABLE); if (multiple) putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        }
         @Suppress("DEPRECATION")
         a.startActivityForResult(i, req)
+    }
+
+    private fun openGallery(mime: String, req: Int, multiple: Boolean) {
+        val i = if (android.os.Build.VERSION.SDK_INT >= 33) {
+            Intent(android.provider.MediaStore.ACTION_PICK_IMAGES).apply {
+                type = mime
+                if (multiple) putExtra(android.provider.MediaStore.EXTRA_PICK_IMAGES_MAX, minOf(50, android.provider.MediaStore.getPickImagesMaxLimit()))
+            }
+        } else {
+            val col = if (mime.startsWith("video")) android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI else android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            Intent(Intent.ACTION_PICK, col).apply { type = mime; if (multiple) putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true) }
+        }
+        try {
+            @Suppress("DEPRECATION")
+            a.startActivityForResult(i, req)
+        } catch (e: Exception) { openFiles(mime, req, multiple) } // sem galeria compatível: cai pros arquivos
     }
 
     /** Devolve true se o resultado era deste editor. */

@@ -320,11 +320,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun pickIgPhoto() {
-        val i = Intent(Intent.ACTION_GET_CONTENT).apply { type = "image/*"; addCategory(Intent.CATEGORY_OPENABLE) }
-        @Suppress("DEPRECATION")
-        startActivityForResult(Intent.createChooser(i, "Escolher"), REQ_IGPHOTO)
-    }
+    private fun pickIgPhoto() = pickImages(REQ_IGPHOTO, false)
 
     private fun copyCaption(t: String) {
         if (t.isBlank()) return
@@ -879,12 +875,21 @@ class MainActivity : Activity() {
         if (uris.isNotEmpty()) importUris(uris)
     }
 
-    private fun pickPosts() {
-        val i = Intent(Intent.ACTION_GET_CONTENT).apply {
-            type = "image/*"; putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); addCategory(Intent.CATEGORY_OPENABLE)
-        }
-        @Suppress("DEPRECATION")
-        startActivityForResult(Intent.createChooser(i, "Fotos pra postar"), REQ_POSTS)
+    private fun pickPosts() = pickImages(REQ_POSTS, true)
+
+    /** Galeria (seletor de fotos do celular) ou Arquivos. */
+    internal fun pickImages(req: Int, multiple: Boolean) {
+        AlertDialog.Builder(this).setTitle("Procurar em")
+            .setItems(arrayOf("🖼  Galeria", "📁  Arquivos e pastas")) { _, w ->
+                val i = if (w == 0 && Build.VERSION.SDK_INT >= 33) Intent(android.provider.MediaStore.ACTION_PICK_IMAGES).apply {
+                    type = "image/*"; if (multiple) putExtra(android.provider.MediaStore.EXTRA_PICK_IMAGES_MAX, minOf(100, android.provider.MediaStore.getPickImagesMaxLimit()))
+                } else if (w == 0) Intent(Intent.ACTION_PICK, android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI).apply {
+                    type = "image/*"; if (multiple) putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                } else Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    type = "image/*"; addCategory(Intent.CATEGORY_OPENABLE); if (multiple) putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                }
+                try { @Suppress("DEPRECATION") startActivityForResult(i, req) } catch (e: Exception) { toast("Não achei a galeria. Use Arquivos.") }
+            }.show()
     }
 
     private fun importPosts(uris: List<Uri>) {
