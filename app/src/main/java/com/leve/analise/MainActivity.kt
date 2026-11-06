@@ -35,7 +35,6 @@ class MainActivity : Activity() {
     private val REQ_PROJ = 11
     private val REQ_GALLERY = 12
     private val REQ_POSTS = 13
-    private val POST_LEVE_URL = "https://claude.ai/artifact/8aJFev2aBeuqNZ7mx2i1NJ"
 
     // paleta AMOLED
     private val BG = 0xFF000000.toInt()
@@ -48,6 +47,10 @@ class MainActivity : Activity() {
 
     private val ui = Handler(Looper.getMainLooper())
     private lateinit var root: LinearLayout
+    private lateinit var page: LinearLayout
+    private val pages = LinkedHashMap<String, LinearLayout>()
+    private lateinit var tabRow: LinearLayout
+    private lateinit var refsBox: LinearLayout
     private lateinit var tvStatus: TextView
     private lateinit var tvErr: TextView
     private lateinit var tvTop: TextView
@@ -116,16 +119,27 @@ class MainActivity : Activity() {
         scroll.addView(root)
         setContentView(scroll)
 
-        text("Análise Leve", 30f, FG, bold = true)
-        text("Tire prints do Threads pela bolha. Eles vão direto pra análise em segundo plano.", 14f, MUTED)
+        text("Post Leve", 30f, FG, bold = true)
+        text("Fotos do Flow sem metadados, legendas que viralizam, postagem em um toque.", 14f, MUTED)
 
+        tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        root.addView(tabRow, lpMatch().apply { topMargin = dp(12) })
+        for (name in listOf("Postar", "Legendas", "Analisar", "Ajustes")) {
+            val pg = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            pages[name] = pg
+            button(name, tabRow, weight = true) { showTab(name) }.tag = name
+        }
+
+        page = root
         // status
         val st = card()
         tvStatus = text("", 16f, FG, parent = st, bold = true)
         tvErr = text("", 13f, ACCENT, parent = st)
 
-        // captura
-        // fila de posts
+        pages.values.forEach { root.addView(it, lpMatch()) }
+
+        // ===== Postar
+        page = pages["Postar"]!!
         val cp = card("Fila de posts")
         text("Adicione fotos: cada uma sai sem metadados e ganha legendas. Toque em Postar e o Threads abre com a foto e a legenda juntas. É só publicar.", 13f, MUTED, parent = cp)
         button("＋ Adicionar fotos pra postar", cp, primary = true) { pickPosts() }
@@ -159,7 +173,13 @@ class MainActivity : Activity() {
         cp.addView(postList, lpMatch())
         styleEvery()
 
-        val c1 = card("Prints")
+        // ===== Legendas
+        page = pages["Legendas"]!!
+        buildCaptionsTab()
+
+        // ===== Analisar
+        page = pages["Analisar"]!!
+        val c1 = card("Prints de perfis")
         btnBubble = button("Ligar bolha de print", c1, primary = true) { toggleBubble() }
         text("Toque na bolha = 1 print. Segure a bolha = modo automático (você rola o perfil devagar e ele tira os prints sozinho, sem repetir). Arraste pra mudar de lugar.", 13f, MUTED, parent = c1)
         button("Adicionar prints da galeria", c1) { pickGallery() }
@@ -172,13 +192,14 @@ class MainActivity : Activity() {
         tvTop = text("", 14f, FG, parent = c2)
         button("Atualizar padrões com IA", c2) { refreshPatterns() }
 
-        // Post Leve
-        val c3 = card("Mandar pro Post Leve")
-        text("Copie o banco e cole na seção \"Importar do Análise Leve\" do Post Leve. As melhores legendas e os padrões vão pro gerador.", 13f, MUTED, parent = c3)
-        button("Copiar banco", c3, primary = true) { copyExport() }
-        button("Abrir Post Leve", c3) { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(POST_LEVE_URL))) }
+        button("Levar as melhores pro banco de legendas", c2) {
+            val n = Captions.pullFromAnalysis(this)
+            toast(if (n > 0) "$n legenda(s) entraram no banco viral" else "O banco de prints ainda está vazio")
+            renderRefs()
+        }
 
-        // configurações
+        // ===== Ajustes
+        page = pages["Ajustes"]!!
         val c4 = card("Configurações da IA")
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         c4.addView(row, lpMatch())
@@ -195,7 +216,7 @@ class MainActivity : Activity() {
 
         // dicas Xiaomi
         val c5 = card("Se parar sozinho (Xiaomi)")
-        text("Configurações › Apps › Análise Leve › Economia de bateria: Sem restrições. Ative também \"Exibir janelas pop-up enquanto em segundo plano\" e \"Início automático\".", 13f, MUTED, parent = c5)
+        text("Configurações › Apps › Post Leve › Economia de bateria: Sem restrições. Ative também \"Exibir janelas pop-up enquanto em segundo plano\" e \"Início automático\".", 13f, MUTED, parent = c5)
         button("Abrir configurações do app", c5) {
             startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
         }
@@ -203,6 +224,88 @@ class MainActivity : Activity() {
         zero.setOnClickListener {
             if (!clearArmed) { clearArmed = true; zero.text = "Toque de novo pra apagar tudo"; ui.postDelayed({ clearArmed = false; zero.text = "Zerar banco" }, 3000) }
             else { Store.clearAll(this); clearArmed = false; zero.text = "Zerar banco"; toast("Banco zerado"); refresh() }
+        }
+        showTab(Store.prefs(this).getString("tab", "Postar") ?: "Postar")
+    }
+
+    private fun showTab(name: String) {
+        Store.prefs(this).edit().putString("tab", name).apply()
+        pages.forEach { (k, v) -> v.visibility = if (k == name) View.VISIBLE else View.GONE }
+        for (i in 0 until tabRow.childCount) {
+            val b = tabRow.getChildAt(i) as Button
+            val on = b.tag == name
+            b.setTextColor(if (on) 0xFF1A0A10.toInt() else FG)
+            b.background = GradientDrawable().apply { setColor(if (on) ACCENT else 0xFF1C1C24.toInt()); cornerRadius = dp(10).toFloat() }
+        }
+    }
+
+    // ------------------------------------------------------------------ aba Legendas
+
+    private fun chips(parent: LinearLayout, options: List<String>, current: () -> String, pick: (String) -> Unit) {
+        val wrap = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        parent.addView(wrap, lpMatch())
+        fun draw() {
+            wrap.removeAllViews()
+            options.chunked(2).forEach { pair ->
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                wrap.addView(row, lpMatch())
+                pair.forEach { opt ->
+                    val b = button(opt, row, weight = true) { pick(opt); draw() }
+                    b.textSize = 13f
+                    val on = opt == current()
+                    b.setTextColor(if (on) 0xFF1A0A10.toInt() else FG)
+                    b.background = GradientDrawable().apply { setColor(if (on) ACCENT else 0xFF1C1C24.toInt()); cornerRadius = dp(10).toFloat() }
+                }
+                if (pair.size == 1) row.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+            }
+        }
+        draw()
+    }
+
+    private fun buildCaptionsTab() {
+        val p = Store.prefs(this)
+        val cv = card("Estilo das legendas")
+        text("Vibe", 12f, MUTED, parent = cv)
+        chips(cv, Captions.VIBES, { Captions.vibe(this) }) { p.edit().putString("vibe", it).apply() }
+        text("Tamanho", 12f, MUTED, parent = cv)
+        chips(cv, Captions.SIZES, { Captions.size(this) }) { p.edit().putString("tam", it).apply() }
+        text("Final pra puxar interação", 12f, MUTED, parent = cv)
+        chips(cv, listOf("Variado", "Sem final", "Fixo"), { Captions.ctaMode(this) }) { p.edit().putString("cta_mode", it).apply() }
+        field("Final fixo (quando escolher Fixo)", p.getString("cta_fixed", "gostou, amor?") ?: "", cv) { p.edit().putString("cta_fixed", it.trim()).apply() }
+        field("Contexto (opcional: praia, sexta-feira, look novo…)", p.getString("ctx", "") ?: "", cv) { p.edit().putString("ctx", it.trim()).apply() }
+        button("Gerar legendas novas pra fila toda", cv, primary = true) {
+            val n = Captions.regenerateAll(this)
+            if (n > 0) { LeveService.send(this, LeveService.ACT_ANALYZE); toast("Gerando legendas novas pra $n foto(s)") } else toast("Nenhuma foto esperando na fila")
+            refresh()
+        }
+
+        val cb = card("Banco de legendas virais")
+        text("Viu uma legenda bombando no Threads? Salve aqui. O gerador copia o ritmo e o tom delas, nunca o texto.", 13f, MUTED, parent = cb)
+        val et = field("Cole uma legenda que viralizou", "", cb) { }
+        button("Salvar no banco", cb, primary = true) {
+            val t = et.text.toString().trim()
+            if (t.isEmpty()) toast("Cole uma legenda primeiro") else { Captions.addRef(this, t); et.setText(""); renderRefs(); toast("Legenda salva") }
+        }
+        refsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        cb.addView(refsBox, lpMatch())
+        renderRefs()
+    }
+
+    private fun renderRefs() {
+        if (!::refsBox.isInitialized) return
+        refsBox.removeAllViews()
+        val refs = Captions.refs(this)
+        if (refs.isEmpty()) { text("Banco vazio. Use também \"Levar as melhores pro banco\" na aba Analisar.", 12f, MUTED, parent = refsBox); return }
+        refs.forEach { r ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            refsBox.addView(row, lpMatch().apply { topMargin = dp(6) })
+            row.addView(TextView(this).apply { text = r; textSize = 14f; setTextColor(FG) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val x = Button(this).apply {
+                text = "✕"; setTextColor(MUTED); textSize = 14f
+                background = GradientDrawable().apply { setColor(0xFF1C1C24.toInt()); cornerRadius = dp(8).toFloat() }
+                setOnClickListener { Captions.removeRef(this@MainActivity, r); renderRefs() }
+            }
+            row.addView(x, LinearLayout.LayoutParams(dp(44), dp(40)))
         }
     }
 
@@ -214,7 +317,7 @@ class MainActivity : Activity() {
             setPadding(dp(14), dp(12), dp(14), dp(12))
             background = GradientDrawable().apply { setColor(CARD); cornerRadius = dp(14).toFloat(); setStroke(dp(1), LINE) }
         }
-        root.addView(c, lpMatch().apply { topMargin = dp(14) })
+        page.addView(c, lpMatch().apply { topMargin = dp(14) })
         if (title != null) text(title, 17f, FG, parent = c, bold = true)
         return c
     }

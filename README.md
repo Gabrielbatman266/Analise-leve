@@ -1,4 +1,4 @@
-# Análise Leve
+# Post Leve (app)
 
 App Android leve (sem bibliotecas extras) que tira prints do Threads e analisa o engajamento em segundo plano.
 

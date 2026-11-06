@@ -23,7 +23,7 @@
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
-        android:label="Análise Leve"
+        android:label="Post Leve"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
         <activity
