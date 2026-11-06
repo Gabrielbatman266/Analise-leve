@@ -44,3 +44,10 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 }
+
+dependencies {
+    // edição de vídeo (exportar 1080p com texto, extrair áudio)
+    implementation("androidx.media3:media3-transformer:1.4.1")
+    implementation("androidx.media3:media3-effect:1.4.1")
+    implementation("androidx.media3:media3-common:1.4.1")
+}

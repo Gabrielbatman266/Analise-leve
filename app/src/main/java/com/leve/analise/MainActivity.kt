@@ -36,6 +36,8 @@ class MainActivity : Activity() {
     private val REQ_GALLERY = 12
     private val REQ_POSTS = 13
     private val REQ_DEL = 14
+    private val REQ_VIDEO = 15
+    private val REQ_IGPHOTO = 16
 
     // paleta AMOLED
     private val BG = 0xFF000000.toInt()
@@ -53,6 +55,15 @@ class MainActivity : Activity() {
     private lateinit var tabRow: LinearLayout
     private lateinit var refsBox: LinearLayout
     private lateinit var mineBox: LinearLayout
+    private var videoUri: Uri? = null
+    private var exported: Uri? = null
+    private var exportedMime = "video/mp4"
+    private lateinit var tvVid: TextView
+    private lateinit var tvExp: TextView
+    private lateinit var etOverlay: EditText
+    private lateinit var etIgCap: EditText
+    private lateinit var btnIgPost: Button
+    private lateinit var tvAudios: TextView
     private lateinit var tvStatus: TextView
     private lateinit var tvErr: TextView
     private lateinit var tvTop: TextView
@@ -128,7 +139,7 @@ class MainActivity : Activity() {
 
         tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         root.addView(tabRow, lpMatch().apply { topMargin = dp(12) })
-        for (name in listOf("Postar", "Legendas", "Analisar", "Ajustes")) {
+        for (name in listOf("Postar", "Legendas", "Instagram", "Analisar", "Ajustes")) {
             if (name == "Analisar") { pages[name] = LinearLayout(this); continue } // desativada
             val pg = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             pages[name] = pg
@@ -201,6 +212,10 @@ class MainActivity : Activity() {
         page = pages["Legendas"]!!
         buildCaptionsTab()
 
+        // ===== Instagram
+        page = pages["Instagram"]!!
+        buildInstaTab()
+
         // ===== Analisar
         page = pages["Analisar"]!!
         val c1 = card("Prints de perfis")
@@ -261,6 +276,83 @@ class MainActivity : Activity() {
             b.setTextColor(if (on) 0xFF1A0A10.toInt() else FG)
             b.background = GradientDrawable().apply { setColor(if (on) ACCENT else 0xFF1C1C24.toInt()); cornerRadius = dp(10).toFloat() }
         }
+    }
+
+    // ------------------------------------------------------------------ aba Instagram
+
+    private fun buildInstaTab() {
+        val cv = card("Vídeo pro Instagram")
+        text("Seu vídeo vira um arquivo novo em 1080x1920 (sem os dados do original), com um texto embaixo se quiser. Depois é só postar.", 13f, MUTED, parent = cv)
+        button("Escolher meu vídeo", cv, primary = true) { pick("video/*", REQ_VIDEO) }
+        tvVid = text("Nenhum vídeo escolhido.", 13f, MUTED, parent = cv)
+        etOverlay = field("Texto no vídeo (aparece embaixo, opcional)", "", cv) { }
+        etIgCap = field("Legenda do post", "", cv) { }
+        button("🎲 Legenda aleatória", cv) { etIgCap.setText(Captions.randomCaption(this)) }
+        button("Exportar 1080p", cv, primary = true) { runExport(false) }
+        tvExp = text("", 13f, OK, parent = cv)
+        btnIgPost = button("Postar no Instagram ↗", cv, primary = true) { postExported() }
+        btnIgPost.visibility = View.GONE
+
+        val ca = card("Músicas extraídas")
+        text("Tira só o áudio do vídeo escolhido acima e salva na pasta Music/PostLeve.", 13f, MUTED, parent = ca)
+        button("Extrair só o áudio", ca) { runExport(true) }
+        tvAudios = text("", 13f, FG, parent = ca)
+        renderAudios()
+        text("Música de outros perfis: no Reels que você gostou, toque no nome do áudio › Salvar. Na hora de postar, escolha em Áudios salvos. Assim a música vem licenciada e o vídeo não é bloqueado.", 12f, MUTED, parent = ca)
+
+        val cf = card("Foto pro Instagram")
+        button("Escolher foto (sai sem metadados)", cf) { pick("image/*", REQ_IGPHOTO) }
+        button("🎲 Foto aleatória da fila", cf) {
+            val pk = Captions.randomPick(this)
+            if (pk == null) toast("A fila está vazia") else postPhotoIg(pk.first, pk.second)
+        }
+    }
+
+    private fun pick(mime: String, req: Int) {
+        val i = Intent(Intent.ACTION_GET_CONTENT).apply { type = mime; addCategory(Intent.CATEGORY_OPENABLE) }
+        @Suppress("DEPRECATION")
+        startActivityForResult(Intent.createChooser(i, "Escolher"), req)
+    }
+
+    private fun renderAudios() {
+        Thread {
+            val l = VideoExport.savedAudios(this)
+            ui.post { tvAudios.text = if (l.isEmpty()) "Nenhum áudio extraído ainda." else l.take(10).joinToString("\n") { "♪ $it" } }
+        }.start()
+    }
+
+    private fun runExport(audio: Boolean) {
+        val src = videoUri ?: run { toast("Escolha o vídeo primeiro"); return }
+        tvExp.setTextColor(MUTED); tvExp.text = if (audio) "Extraindo áudio…" else "Exportando 1080p…"
+        btnIgPost.visibility = View.GONE
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        VideoExport.export(this, src, if (audio) "" else etOverlay.text.toString(), audio,
+            { pct -> tvExp.text = (if (audio) "Extraindo áudio… " else "Exportando 1080p… ") + "$pct%" }) { uri, err ->
+            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            if (uri == null) { tvExp.setTextColor(ACCENT); tvExp.text = "Não deu: $err"; return@export }
+            tvExp.setTextColor(OK)
+            if (audio) { tvExp.text = "Áudio salvo em Music/PostLeve"; renderAudios() }
+            else { exported = uri; exportedMime = "video/mp4"; tvExp.text = "Vídeo pronto, salvo em Movies/PostLeve"; btnIgPost.visibility = View.VISIBLE }
+        }
+    }
+
+    private fun copyCaption(t: String) {
+        if (t.isBlank()) return
+        try { getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("legenda", t)) } catch (e: Exception) { }
+        Captions.addMine(this, t)
+    }
+
+    private fun postExported() {
+        val u = exported ?: return
+        copyCaption(etIgCap.text.toString().trim())
+        toast("Legenda copiada: no Instagram é só colar e postar")
+        startActivity(VideoExport.shareToInstagram(this, u, exportedMime))
+    }
+
+    private fun postPhotoIg(id: String, cap: String) {
+        copyCaption(cap)
+        toast("Legenda copiada: no Instagram é só colar e postar")
+        startActivity(VideoExport.shareToInstagram(this, PostQueue.uri(id), "image/jpeg"))
     }
 
     // ------------------------------------------------------------------ aba Legendas
@@ -703,6 +795,29 @@ class MainActivity : Activity() {
             updateFolderUi(); return
         }
         if (resultCode != RESULT_OK || data == null) return
+        if (requestCode == REQ_VIDEO) {
+            videoUri = data.data; exported = null; btnIgPost.visibility = View.GONE; tvExp.text = ""
+            tvVid.text = "Vídeo escolhido. Agora coloque o texto e exporte."; tvVid.setTextColor(OK); return
+        }
+        if (requestCode == REQ_IGPHOTO) {
+            val u = data.data ?: return
+            toast("Limpando a foto…")
+            Thread {
+                val id = try {
+                    val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it, null, o) }
+                    var smp = 1; while (maxOf(o.outWidth, o.outHeight) / (smp * 2) >= 2560) smp *= 2
+                    val b = contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = smp }) }
+                    if (b == null) null else PostQueue.add(this, rotateByExif(u, b))
+                } catch (e: Exception) { null }
+                ui.post {
+                    if (id == null) toast("Não abriu essa foto")
+                    else { PostQueue.update(this, id) { it.put("status", "pronta"); it.put("legendas", org.json.JSONArray(Captions.randomCaptions(this, 4))) }
+                        postPhotoIg(id, etIgCap.text.toString().trim().ifEmpty { Captions.randomCaption(this) }) }
+                }
+            }.start()
+            return
+        }
         when (requestCode) {
             REQ_PROJ -> {
                 val extra = Intent().putExtra("code", resultCode).putExtra("data", data)
