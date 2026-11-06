@@ -326,7 +326,9 @@ class LeveService : Service() {
         var busy = 0
         var addedRun = 0
         try {
+            doCaptions()
             while (!stopFlag) {
+                if (PostQueue.pendingCaptions(this).isNotEmpty()) doCaptions()
                 val batch = Store.pending(this).take(batchSize())
                 if (batch.isEmpty()) break
                 try {
@@ -351,7 +353,8 @@ class LeveService : Service() {
                         lastError = "IA lotada no momento. Tentando de novo em ${wait}s (tentativa $busy)…"
                         main.post { updateNotif() }
                         var t = 0L
-                        while (t < wait && !stopFlag) { SystemClock.sleep(1000); t++ }
+                        // se chegou foto pra postar, sai da espera e faz as legendas dela
+                        while (t < wait && !stopFlag && PostQueue.pendingCaptions(this).isEmpty()) { SystemClock.sleep(1000); t++ }
                         continue
                     }
                     fails++
@@ -365,30 +368,6 @@ class LeveService : Service() {
                 busy = 0
                 if (fails >= 8) { lastError = "Parei depois de várias falhas. Toque em Analisar fila pra tentar de novo."; break }
                 main.post { updateNotif() }
-            }
-            // legendas das fotos da fila de posts
-            for (id in PostQueue.pendingCaptions(this)) {
-                if (stopFlag) break
-                var tries = 0
-                var done = false
-                while (!done && tries < 6 && !stopFlag) {
-                    try {
-                        val caps = Ai.captions(this, PostQueue.imageFile(this, id))
-                        PostQueue.update(this, id) { it.put("legendas", org.json.JSONArray(caps)); it.put("status", "pronta"); it.remove("aviso") }
-                        done = true
-                    } catch (e: AiException) {
-                        if (e.code in listOf(400, 401, 403, 404)) break
-                        tries++
-                        lastError = "Legendas: ${e.message}"
-                        main.post { updateNotif() }
-                        var t = 0L; val wait = minOf(120L, 15L * tries)
-                        while (t < wait && !stopFlag) { SystemClock.sleep(1000); t++ }
-                    } catch (e: Exception) { tries++; SystemClock.sleep(8000) }
-                }
-                if (!done && !stopFlag) PostQueue.update(this, id) {
-                    it.put("legendas", org.json.JSONArray(Captions.withCta(this, Ai.OFFLINE.shuffled().take(4))))
-                    it.put("status", "pronta"); it.put("aviso", "IA indisponível: usei legendas prontas. Toque em Mais legendas depois.")
-                }
             }
             // fila vazia: atualiza os padrões quando entrou coisa nova
             if (addedRun > 0 && lastError.isEmpty()) {
@@ -404,6 +383,33 @@ class LeveService : Service() {
             main.post {
                 updateNotif()
                 if (!capturing) stopAll()
+            }
+        }
+    }
+
+    /** Legendas primeiro: a foto pra postar não pode esperar a fila de prints. */
+    private fun doCaptions() {
+        for (id in PostQueue.pendingCaptions(this)) {
+            if (stopFlag) break
+            var tries = 0
+            var done = false
+            while (!done && tries < 6 && !stopFlag) {
+                try {
+                    val caps = Ai.captions(this, PostQueue.imageFile(this, id))
+                    PostQueue.update(this, id) { it.put("legendas", org.json.JSONArray(caps)); it.put("status", "pronta"); it.remove("aviso") }
+                    done = true
+                } catch (e: AiException) {
+                    lastError = "Legendas: ${e.message}"
+                    if (e.code in listOf(400, 401, 403, 404)) break
+                    tries++
+                    main.post { updateNotif() }
+                    var t = 0L; val wait = minOf(120L, 15L * tries)
+                    while (t < wait && !stopFlag) { SystemClock.sleep(1000); t++ }
+                } catch (e: Exception) { tries++; SystemClock.sleep(8000) }
+            }
+            if (!done && !stopFlag) PostQueue.update(this, id) {
+                it.put("legendas", org.json.JSONArray(Captions.withCta(this, Ai.OFFLINE.shuffled().take(4))))
+                it.put("status", "pronta"); it.put("aviso", "IA não respondeu (${lastError.removePrefix("Legendas: ").take(80)}). Usei legendas prontas; toque em Mais legendas depois.")
             }
         }
     }
