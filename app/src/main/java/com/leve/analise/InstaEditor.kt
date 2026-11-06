@@ -67,12 +67,24 @@ class InstaEditor(private val a: MainActivity) {
     private lateinit var seek: SeekBar
     private lateinit var projBox: LinearLayout
     private var projId: String? = null
+    private lateinit var editorCard: LinearLayout
+
+    fun refreshLists() { renderProjects(); renderLibrary() }
 
     private val ui get() = a.ui
 
     fun build() {
+        // ---------- projetos
+        val cp = a.card("Esboços")
+        a.text("Os originais ficam aqui, sem perder nada. Os vídeos novos do Flow entram sozinhos. Toque em Editar, mude texto e música, exporte e poste. Dá pra repetir com o mesmo original quantas vezes quiser.", 13f, a.MUTED, parent = cp)
+        a.button("＋ Novo esboço (limpar editor)", cp) { newProject() }
+        projBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        cp.addView(projBox, a.lpMatch())
+        renderProjects()
+
         // ---------- editor
         val ce = a.card("Editor")
+        editorCard = ce
         val pick = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
         ce.addView(pick, a.lpMatch())
         a.button("🎬 Meu vídeo", pick, primary = true, weight = true) { open("video/*", REQ_VIDEO) }
@@ -163,14 +175,6 @@ class InstaEditor(private val a: MainActivity) {
         ce.addView(afterBox, a.lpMatch())
         a.button("Postar no Instagram ↗", afterBox, primary = true) { lastExportId?.let { post(it, etCap.text.toString()) } }
         a.button("Voltar pra prévia", afterBox) { showImagePreview() }
-
-        // ---------- projetos
-        val cp = a.card("Projetos salvos")
-        a.text("Todo vídeo ou foto que você abre vira um projeto, salvo sozinho a cada mudança. Abra de novo pra trocar só o texto e exportar outra versão.", 13f, a.MUTED, parent = cp)
-        a.button("＋ Novo projeto (limpar editor)", cp) { newProject() }
-        projBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
-        cp.addView(projBox, a.lpMatch())
-        renderProjects()
 
         // ---------- músicas
         val cm = a.card("Minhas músicas")
@@ -274,7 +278,8 @@ class InstaEditor(private val a: MainActivity) {
         updateMusicLabel()
         projId = id
         loadBase(if (photo) "Projeto de foto aberto" else "Projeto de vídeo aberto")
-        a.toast("Projeto aberto: mude o texto e exporte de novo")
+        a.scrollTo(editorCard)
+        a.toast("Esboço aberto: mude texto e música e exporte")
     }
 
     private fun renderProjects() {
@@ -295,11 +300,14 @@ class InstaEditor(private val a: MainActivity) {
                 LinearLayout.LayoutParams(a.dp(54), a.dp(96)).apply { rightMargin = a.dp(10) })
             val side = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
             box.addView(side, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            val t = o.optString("text").replace('\n', ' ').take(60).ifEmpty { "(sem texto)" }
+            val t = o.optString("text").replace('\n', ' ').take(60).ifEmpty { "(sem texto ainda)" }
+            val tag = if (o.optBoolean("flow")) " · do Flow" else ""
+            val ver = o.optInt("versoes")
             a.text((if (o.optBoolean("photo")) "🖼 " else "🎬 ") + t, 13f, a.FG, parent = side)
+            a.text((if (ver > 0) "$ver versão(ões) exportada(s)" else "Nunca exportado") + tag, 11f, a.MUTED, parent = side)
             val r = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
             side.addView(r, a.lpMatch())
-            a.button(if (id == projId) "Aberto" else "Abrir", r, primary = id != projId, weight = true) { if (id != projId) openProject(id) }
+            a.button(if (id == projId) "Aberto" else "✏ Editar", r, primary = id != projId, weight = true) { if (id != projId) openProject(id) else a.scrollTo(editorCard) }
             val del = a.button("Apagar", r, weight = true) { }
             del.setOnClickListener {
                 if (del.tag != "armed") { del.tag = "armed"; del.text = "De novo"; ui.postDelayed({ del.tag = null; del.text = "Apagar" }, 2500) }
@@ -531,13 +539,18 @@ class InstaEditor(private val a: MainActivity) {
             tvProg.text = "Salvando…"
             Thread {
                 val id = VideoExport.addToLibrary(a, f, etCap.text.toString().trim())
+                val pid = projId
+                if (pid != null) {
+                    VideoExport.updateLib(a, id) { it.put("proj", pid) }
+                    Projects.update(a, pid) { it.put("versoes", it.optInt("versoes") + 1) }
+                }
                 ui.post {
                     lastExportId = id
                     tvProg.setTextColor(a.OK); tvProg.text = "Pronto! Toque no vídeo pra pausar."
                     preview.visibility = View.GONE; video.visibility = View.VISIBLE
                     video.setVideoURI(Uri.fromFile(File(VideoExport.videoDir(a), "$id.mp4"))); video.start()
                     afterBox.visibility = View.VISIBLE
-                    renderLibrary()
+                    renderLibrary(); renderProjects()
                 }
             }.start()
         }
@@ -590,6 +603,8 @@ class InstaEditor(private val a: MainActivity) {
             val r1 = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
             side.addView(r1, a.lpMatch())
             a.button("🎲", r1, weight = true) { et.setText(Captions.randomCaption(a, listOf(et.text.toString()))) }
+            val pj = o.optString("proj")
+            if (pj.isNotEmpty() && Projects.get(a, pj) != null) a.button("✏", r1, weight = true) { openProject(pj) }
             a.button("Postar ↗", r1, primary = true, weight = true) { post(id, et.text.toString()) }
             val del = a.button("Apagar", r1, weight = true) { }
             del.setOnClickListener {

@@ -55,6 +55,14 @@ class MainActivity : Activity() {
     private lateinit var refsBox: LinearLayout
     private lateinit var mineBox: LinearLayout
     private lateinit var insta: InstaEditor
+    internal lateinit var scroller: ScrollView
+
+    internal fun scrollTo(v: View) {
+        v.post {
+            val r = android.graphics.Rect(); v.getDrawingRect(r)
+            try { scroller.offsetDescendantRectToMyCoords(v, r); scroller.smoothScrollTo(0, maxOf(0, r.top - dp(8))) } catch (e: Exception) { }
+        }
+    }
     private lateinit var tvStatus: TextView
     private lateinit var tvErr: TextView
     private lateinit var tvTop: TextView
@@ -67,6 +75,7 @@ class MainActivity : Activity() {
     private lateinit var btn2k: Button
     private lateinit var btnExisting: Button
     private lateinit var btnFlowNames: Button
+    private lateinit var btnVideos: Button
     private lateinit var btnCleanDl: Button
     private val thumbs = HashMap<String, Bitmap>()
     private lateinit var btnBubble: Button
@@ -84,10 +93,12 @@ class MainActivity : Activity() {
         buildUi()
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1)
         if (savedInstanceState == null) handleShare(intent)
+        intent.getStringExtra("tab")?.let { showTab(it) }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        intent.getStringExtra("tab")?.let { showTab(it) }
         handleShare(intent)
     }
 
@@ -96,6 +107,8 @@ class MainActivity : Activity() {
         Thread {
             PostQueue.cleanGallery(this, false)
             val n = FolderScan.scan(this)
+            val nv = FolderScan.scanVideos(this)
+            if (nv > 0) ui.post { toast("$nv vídeo(s) do Flow viraram esboço na aba Instagram"); if (::insta.isInitialized) insta.refreshLists() }
             FolderScan.schedule(this)
             if (n > 0 || PostQueue.pendingCaptions(this).isNotEmpty()) ui.post {
                 if (n > 0) toast("$n foto(s) nova(s) da pasta ${FolderScan.bucket(this)} na fila")
@@ -119,6 +132,7 @@ class MainActivity : Activity() {
 
     private fun buildUi() {
         val scroll = ScrollView(this).apply { setBackgroundColor(BG); isFillViewport = true }
+        scroller = scroll
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(22), dp(18), dp(40))
@@ -191,6 +205,11 @@ class MainActivity : Activity() {
         btnFolder = button("", cp) { askFolder() }
         btn2k = button("", cp) { FolderScan.setOnly2k(this, !FolderScan.only2k(this)); updateFolderUi() }
         btnFlowNames = button("", cp) { FolderScan.setFlowNames(this, !FolderScan.flowNames(this)); updateFolderUi() }
+        btnVideos = button("", cp) {
+            FolderScan.setVideosOn(this, !FolderScan.videosOn(this))
+            if (FolderScan.videosOn(this) && !FolderScan.hasVideoPerm(this)) requestPermissions(FolderScan.perms, 22)
+            updateFolderUi()
+        }
         btnExisting = button("", cp) { importExisting() }
         btnCleanDl = button("", cp) { cleanDownloads() }
         text("Escolha a pasta Download. Cada foto do Flow que cair lá entra sozinha na fila, sem metadados, e vai pra pasta \"PostLeve Flow\" da galeria. Depois você apaga as do Download com um toque. Foto que não era pra estar: toque em Apagar nela, que some da fila e da pasta.", 12f, MUTED, parent = cp)
@@ -480,6 +499,8 @@ class MainActivity : Activity() {
         btn2k.visibility = if (b == null) View.GONE else View.VISIBLE
         btnFlowNames.text = if (FolderScan.flowNames(this)) "Só fotos do Flow (nome com números): ligado" else "Só fotos do Flow (nome com números): desligado"
         btnFlowNames.visibility = if (b == null) View.GONE else View.VISIBLE
+        btnVideos.text = if (FolderScan.videosOn(this)) "Vídeos do Flow viram esboço (aba Instagram): ligado" else "Vídeos do Flow viram esboço (aba Instagram): desligado"
+        btnVideos.visibility = if (b == null) View.GONE else View.VISIBLE
         btnExisting.visibility = View.GONE
         btnCleanDl.visibility = View.GONE
         if (Build.VERSION.SDK_INT >= 30) Thread {
@@ -511,7 +532,7 @@ class MainActivity : Activity() {
     }
 
     private fun askFolder() {
-        if (!FolderScan.hasPerm(this)) { requestPermissions(arrayOf(FolderScan.perm), 21); return }
+        if (!FolderScan.hasPerm(this)) { requestPermissions(FolderScan.perms, 21); return }
         Thread {
             val list = FolderScan.buckets(this)
             ui.post {
@@ -535,7 +556,8 @@ class MainActivity : Activity() {
         btnExisting.isEnabled = false
         toast("Importando da pasta…")
         Thread {
-            val n = FolderScan.scan(this, all = true)
+            val n = FolderScan.scan(this, all = true) + FolderScan.scanVideos(this, all = true)
+            ui.post { if (::insta.isInitialized) insta.refreshLists() }
             ui.post {
                 btnExisting.isEnabled = true
                 toast("$n foto(s) na fila, sem metadados. Gerando legendas…")

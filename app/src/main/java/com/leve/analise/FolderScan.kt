@@ -38,7 +38,50 @@ object FolderScan {
     fun setOnly2k(c: Context, on: Boolean) = p(c).edit().putBoolean("watch_2k", on).apply()
 
     val perm: String get() = if (Build.VERSION.SDK_INT >= 33) "android.permission.READ_MEDIA_IMAGES" else "android.permission.READ_EXTERNAL_STORAGE"
+    val perms: Array<String> get() = if (Build.VERSION.SDK_INT >= 33) arrayOf("android.permission.READ_MEDIA_IMAGES", "android.permission.READ_MEDIA_VIDEO") else arrayOf("android.permission.READ_EXTERNAL_STORAGE")
     fun hasPerm(c: Context) = c.checkSelfPermission(perm) == PackageManager.PERMISSION_GRANTED
+    fun hasVideoPerm(c: Context) = c.checkSelfPermission(if (Build.VERSION.SDK_INT >= 33) "android.permission.READ_MEDIA_VIDEO" else "android.permission.READ_EXTERNAL_STORAGE") == PackageManager.PERMISSION_GRANTED
+    fun videosOn(c: Context) = p(c).getBoolean("watch_videos", true)
+    fun setVideosOn(c: Context, on: Boolean) = p(c).edit().putBoolean("watch_videos", on).apply()
+    private val FLOW_VID = Regex("^(\\d{5,}_\\d{12,}|.*flow.*)\\.(mp4|mov|webm|m4v)$", RegexOption.IGNORE_CASE)
+
+    /** Vídeos novos do Flow viram esboços (projetos) no editor do Instagram. Retorna quantos. */
+    @Synchronized
+    fun scanVideos(c: Context, all: Boolean = false): Int {
+        val b = bucket(c) ?: return 0
+        if (!videosOn(c) || !hasVideoPerm(c) || Build.VERSION.SDK_INT < 29) return 0
+        val now = System.currentTimeMillis() / 1000
+        val since = if (all) 0L else p(c).getLong("vwatch_since", p(c).getLong("watch_since", now))
+        val seen = HashSet(p(c).getStringSet("vwatch_seen", emptySet()) ?: emptySet())
+        var n = 0; var maxAdded = since
+        try {
+            c.contentResolver.query(MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Video.Media._ID, MediaStore.Video.Media.DATE_ADDED, MediaStore.Video.Media.DISPLAY_NAME),
+                MediaStore.Video.Media.BUCKET_DISPLAY_NAME + "=? AND " + MediaStore.Video.Media.DATE_ADDED + ">?",
+                arrayOf(b, since.toString()), MediaStore.Video.Media.DATE_ADDED + " ASC")?.use { cur ->
+                while (cur.moveToNext()) {
+                    val id = cur.getLong(0); val added = cur.getLong(1); val name = cur.getString(2) ?: ""
+                    maxAdded = maxOf(maxAdded, added)
+                    if (id.toString() in seen) continue
+                    if (flowNames(c) && !FLOW_VID.matches(name)) continue
+                    val uri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
+                    val pid = Projects.create(c, false)
+                    val f = Projects.srcFile(c, pid, false)
+                    val ok = try { c.contentResolver.openInputStream(uri)?.use { i -> f.outputStream().use { i.copyTo(it) } }; f.length() > 0 } catch (e: Exception) { false }
+                    if (!ok) { Projects.remove(c, pid); continue }
+                    Projects.update(c, pid) { it.put("flow", true); it.put("text", ""); it.put("updated", System.currentTimeMillis()) }
+                    VideoExport.baseFrame(c, Uri.fromFile(f), false)?.let { Projects.saveThumb(c, pid, it) }
+                    seen.add(id.toString()); n++
+                    addOriginal(c, id, true)
+                }
+            }
+        } catch (e: Exception) { }
+        val keep = if (seen.size > 600) seen.toList().takeLast(600).toSet() else seen
+        val e = p(c).edit().putStringSet("vwatch_seen", keep)
+        if (!all) e.putLong("vwatch_since", maxAdded)
+        e.apply()
+        return n
+    }
 
     /** Pastas da galeria com quantas imagens cada uma tem (as com mais imagens recentes primeiro). */
     fun buckets(c: Context): List<Pair<String, Int>> {
@@ -161,12 +204,15 @@ object FolderScan {
     }
 
     // ---------- originais que ficaram no Download ----------
-    private fun addOriginal(c: Context, id: Long) {
+    private fun addOriginal(c: Context, id: Long, video: Boolean = false) {
         val set = HashSet(p(c).getStringSet("orig_pending", emptySet()) ?: emptySet())
-        set.add(id.toString()); p(c).edit().putStringSet("orig_pending", set).apply()
+        set.add((if (video) "v" else "") + id.toString()); p(c).edit().putStringSet("orig_pending", set).apply()
     }
     fun originals(c: Context): List<Uri> = (p(c).getStringSet("orig_pending", emptySet()) ?: emptySet())
-        .mapNotNull { it.toLongOrNull() }.map { ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, it) }
+        .mapNotNull { k ->
+            val v = k.startsWith("v")
+            k.removePrefix("v").toLongOrNull()?.let { ContentUris.withAppendedId(if (v) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI, it) }
+        }
         .filter { u -> try { c.contentResolver.query(u, arrayOf(MediaStore.Images.Media._ID), null, null, null)?.use { it.count > 0 } ?: false } catch (e: Exception) { false } }
     fun clearOriginals(c: Context) = p(c).edit().remove("orig_pending").apply()
 
@@ -177,10 +223,25 @@ object FolderScan {
         val job = JobInfo.Builder(JOB_ID, ComponentName(c, FolderJob::class.java))
             .addTriggerContentUri(JobInfo.TriggerContentUri(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 JobInfo.TriggerContentUri.FLAG_NOTIFY_FOR_DESCENDANTS))
+            .addTriggerContentUri(JobInfo.TriggerContentUri(MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                JobInfo.TriggerContentUri.FLAG_NOTIFY_FOR_DESCENDANTS))
             .setTriggerContentUpdateDelay(4000)
             .setTriggerContentMaxDelay(30000)
             .build()
         try { js.schedule(job) } catch (e: Exception) { }
+    }
+
+    fun notifyVideos(c: Context, n: Int) {
+        val nm = c.getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(NotificationChannel("pasta", "Fotos novas da pasta", NotificationManager.IMPORTANCE_DEFAULT))
+        val open = PendingIntent.getActivity(c, 4, Intent(c, MainActivity::class.java).putExtra("tab", "Instagram"),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val nb = Notification.Builder(c, "pasta")
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentTitle("$n vídeo(s) do Flow viraram esboço")
+            .setContentText("Abra na aba Instagram, coloque texto e música e poste.")
+            .setContentIntent(open).setAutoCancel(true)
+        try { nm.notify(11, nb.build()) } catch (e: SecurityException) { }
     }
 
     fun notifyNew(c: Context, n: Int) {
@@ -201,6 +262,8 @@ class FolderJob : JobService() {
     override fun onStartJob(params: JobParameters): Boolean {
         Thread {
             val n = try { FolderScan.scan(this) } catch (e: Exception) { 0 }
+            val nv = try { FolderScan.scanVideos(this) } catch (e: Exception) { 0 }
+            if (nv > 0) FolderScan.notifyVideos(this, nv)
             if (n > 0) {
                 FolderScan.notifyNew(this, n)
                 try { LeveService.send(this, LeveService.ACT_ANALYZE) } catch (e: Exception) { }
