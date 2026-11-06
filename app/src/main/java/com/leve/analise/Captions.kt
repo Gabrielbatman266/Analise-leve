@@ -94,7 +94,20 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         val o = (if (fresh.isNotEmpty()) fresh else all).random()
         val own = o.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
         val pool = (own + mine(c)).filter { it.isNotBlank() }.distinct()
-        val cap = pool.randomOrNull() ?: withCta(c, Ai.OFFLINE.shuffled().take(1)).first()
+        val cap = pool.randomOrNull() ?: randomCaption(c)
         return o.optString("id") to cap
+    }
+    /** Legenda sem IA: sorteia das suas (como estão) ou das prontas (com o final de interação). */
+    fun randomCaption(c: Context, avoid: Collection<String> = emptyList()): String {
+        val mine = mine(c).filter { it !in avoid }
+        if (mine.isNotEmpty() && (Math.random() < 0.6)) return mine.random()
+        val base = Ai.OFFLINE.filter { o -> avoid.none { it.startsWith(o) } }.ifEmpty { Ai.OFFLINE }
+        return withCta(c, listOf(base.random())).first()
+    }
+
+    fun randomCaptions(c: Context, n: Int): List<String> {
+        val out = ArrayList<String>()
+        repeat(n * 3) { if (out.size < n) { val r = randomCaption(c, out); if (r !in out) out.add(r) } }
+        return out
     }
 }

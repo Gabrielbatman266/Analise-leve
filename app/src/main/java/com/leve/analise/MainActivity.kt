@@ -576,6 +576,16 @@ class MainActivity : Activity() {
                 PostQueue.update(this, id) { it.put("status", "gerando") }
                 LeveService.send(this, LeveService.ACT_ANALYZE); refresh()
             }
+            if (st != "postada") button("🎲 Aleatória", row, weight = true) {
+                val cur = o.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
+                val cap = Captions.randomCaption(this, cur)
+                PostQueue.update(this, id) { it2 ->
+                    val n = org.json.JSONArray().put(cap); cur.filter { it != cap }.forEach { n.put(it) }
+                    it2.put("legendas", n); it2.put("escolhida", cap)
+                    if (it2.optString("status") == "gerando") it2.put("status", "pronta")
+                }
+                refresh()
+            }
             val del = button("Apagar", row, weight = true) { }
             del.setOnClickListener {
                 if (del.tag != "armed") { del.tag = "armed"; del.text = "De novo"; ui.postDelayed({ del.tag = null; del.text = "Apagar" }, 2500) }

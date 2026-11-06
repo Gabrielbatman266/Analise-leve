@@ -56,7 +56,13 @@ Responda só com JSON: {"padroes":["4 a 7 frases curtas e práticas em portuguê
     private val CTAS = listOf("gostou, amor?", "e aí, aprova?", "me fala nos comentários 👇", "1 a 10, sem mentir",
         "posto mais assim?", "fala a verdade, ficou bom?", "vem conversar comigo", "me conta o que achou", "gostou ou quer mais?")
     val OFFLINE = listOf("sem filtro, sem desculpa", "hoje eu só quero paz e um bom ângulo", "era pra ser só uma foto",
-        "modo sexta-feira: ativado", "fiquei pensando… vocês notaram?")
+        "modo sexta-feira: ativado", "fiquei pensando… vocês notaram?", "o espelho pediu e eu deixei",
+        "dia bom é dia leve", "posando pra ninguém e pra todo mundo", "mais um dia, mais um look",
+        "a luz tava perfeita, não resisti", "nem tudo precisa de legenda", "domingo com cara de domingo",
+        "hoje acordei assim", "só passando pra deixar isso aqui", "tô com saudade de sair",
+        "foto tirada no impulso", "esse ângulo eu aprovo", "vibe do dia: tranquila",
+        "não planejei, só aconteceu", "um café e essa foto", "deixa eu aparecer um pouquinho",
+        "sexta chegou e eu também", "às vezes o simples é tudo", "registro do dia ✨", "quase não postei")
 
     fun withCta(list: List<String>): List<String> {
         val pool = CTAS.shuffled()

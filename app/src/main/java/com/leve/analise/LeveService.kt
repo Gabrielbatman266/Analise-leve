@@ -410,7 +410,7 @@ class LeveService : Service() {
                 } catch (e: Exception) { tries++; SystemClock.sleep(8000) }
             }
             if (!done && !stopFlag) PostQueue.update(this, id) {
-                it.put("legendas", org.json.JSONArray(Captions.withCta(this, Ai.OFFLINE.shuffled().take(4))))
+                it.put("legendas", org.json.JSONArray(Captions.randomCaptions(this, 4)))
                 it.put("status", "pronta"); it.put("aviso", "IA não respondeu (${lastError.removePrefix("Legendas: ").take(80)}). Usei legendas prontas; toque em Mais legendas depois.")
             }
         }
