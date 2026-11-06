@@ -111,6 +111,17 @@ Responda só com JSON: {"fotos":[{"n":1,"legendas":["...","...","...","...","...
         return out.toByteArray()
     }
 
+    /** Prompt pro Flow a partir de uma foto de referência: pose, roupa, cenário, luz e câmera, sem identificar a pessoa. */
+    fun flowPrompt(c: Context, img: File): String {
+        val prompt = """Look at this reference photo and write ONE prompt in English for an AI image/video generator (Google Flow).
+Describe only: the pose and body position, camera angle and framing, outfit and accessories, setting/background, lighting, colors and mood.
+Do NOT describe the face, identity, ethnicity or any identifying traits of the person, and do not name anyone; call them "the subject".
+Max 70 words, one paragraph, no quotes, no lists.
+Reply only with JSON: {"prompt":"..."}"""
+        val txt = ask(c, prompt, listOf(Base64.encodeToString(shrink(img), Base64.NO_WRAP)))
+        return parseObj(txt).optString("prompt").ifBlank { throw AiException(-2, "A IA não mandou o prompt") }
+    }
+
     /** Pedido mínimo pra conferir chave e modelo. */
     fun test(c: Context): String = ask(c, "Responda só com JSON: {\"ok\":true}", emptyList()).trim().take(200)
 

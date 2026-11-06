@@ -56,6 +56,7 @@ class MainActivity : Activity() {
     private lateinit var mineBox: LinearLayout
     private lateinit var tvLearn: TextView
     private lateinit var insta: InstaEditor
+    private lateinit var refs: RefsTab
     internal lateinit var scroller: ScrollView
 
     internal fun scrollTo(v: View) {
@@ -152,7 +153,7 @@ class MainActivity : Activity() {
 
         tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         root.addView(tabRow, lpMatch().apply { topMargin = dp(12) })
-        for (name in listOf("Postar", "Legendas", "Instagram", "Analisar", "Ajustes")) {
+        for (name in listOf("Postar", "Legendas", "Instagram", "Refs", "Analisar", "Ajustes")) {
             if (name == "Analisar") { pages[name] = LinearLayout(this); continue } // desativada
             val pg = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             pages[name] = pg
@@ -254,6 +255,11 @@ class MainActivity : Activity() {
             toast(if (n > 0) "$n legenda(s) entraram no banco viral" else "O banco de prints ainda está vazio")
             renderRefs()
         }
+
+        // ===== Refs
+        page = pages["Refs"]!!
+        refs = RefsTab(this)
+        refs.build()
 
         // ===== Ajustes
         page = pages["Ajustes"]!!
@@ -819,6 +825,7 @@ class MainActivity : Activity() {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
         if (::insta.isInitialized && insta.onResult(requestCode, resultCode, data)) return
+        if (::refs.isInitialized && refs.onResult(requestCode, resultCode, data)) return
         if (requestCode == REQ_DEL) {
             if (resultCode == RESULT_OK) { FolderScan.clearOriginals(this); toast("Apagadas do Download") }
             updateFolderUi(); return
@@ -867,13 +874,24 @@ class MainActivity : Activity() {
 
     private fun handleShare(i: Intent?) {
         if (i == null) return
+        // link compartilhado (Instagram, TikTok, YouTube…) vira referência
+        if (i.action == Intent.ACTION_SEND && i.type?.startsWith("text/") == true) {
+            val url = i.getStringExtra(Intent.EXTRA_TEXT)?.let { Refs.findUrl(it) }
+            if (url != null && ::refs.isInitialized) { showTab("Refs"); refs.saveUrl(url) }
+            else toast("Não achei um link no que foi compartilhado")
+            return
+        }
         val uris = ArrayList<Uri>()
         @Suppress("DEPRECATION")
         when (i.action) {
             Intent.ACTION_SEND -> (i.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))?.let { uris.add(it) }
             Intent.ACTION_SEND_MULTIPLE -> i.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
         }
-        if (uris.isNotEmpty()) importUris(uris)
+        if (uris.isEmpty()) return
+        AlertDialog.Builder(this).setTitle("Guardar ${uris.size} foto(s) onde?")
+            .setItems(arrayOf("🖼  Estoque de referência", "📮  Fila de posts (Threads)")) { _, w ->
+                if (w == 0) { showTab("Refs"); refs.addPhotos(uris) } else { showTab("Postar"); importPosts(uris) }
+            }.show()
     }
 
     private fun pickPosts() = pickImages(REQ_POSTS, true)
