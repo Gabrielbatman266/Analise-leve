@@ -104,6 +104,8 @@ class InstaEditor(private val a: MainActivity) {
         if (i == 2 && etText.text.isBlank() && pendingTextFocus) { pendingTextFocus = false; etText.requestFocus() }
     }
     private var pendingMusicAsk = false
+    private var postAfter = false
+    private lateinit var btnExpPost: Button
     private var pendingTextFocus = false
 
     private fun outDur() = maxOf(0L, cutEnd - cutStart)
@@ -521,11 +523,15 @@ class InstaEditor(private val a: MainActivity) {
         fun galT() { gal.text = if (Store.prefs(a).getBoolean("save_gallery", false)) "Também salvar cópia na galeria: ligado" else "Também salvar cópia na galeria: desligado" }
         galT()
         gal.setOnClickListener { Store.prefs(a).edit().putBoolean("save_gallery", !Store.prefs(a).getBoolean("save_gallery", false)).apply(); galT() }
-        btnExport = a.button("Exportar ${quality()}", pExport, primary = true) { export() }
+        // exportar e postar ficam sempre visíveis, embaixo das abas
+        val expRow = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        ce.addView(expRow, a.lpMatch().apply { topMargin = a.dp(10) })
+        btnExport = a.button("Exportar ${quality()}", expRow, primary = true, weight = true) { postAfter = false; export() }
+        btnExpPost = a.button("⬆ Exportar e postar", expRow, weight = true) { postAfter = true; export() }
         qNote()
-        tvProg = a.text("", 13f, a.OK, parent = pExport)
+        tvProg = a.text("", 13f, a.OK, parent = ce)
         afterBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
-        pExport.addView(afterBox, a.lpMatch())
+        ce.addView(afterBox, a.lpMatch())
         a.button("Postar no Instagram ↗", afterBox, primary = true) { lastExportId?.let { post(it, etCap.text.toString()) } }
         a.button("Voltar pra edição", afterBox) { val s0 = src; if (s0 != null && !isPhoto) showEditVideo(s0) else { showImagePreview(); drawPreview() } }
 
@@ -1139,7 +1145,7 @@ class InstaEditor(private val a: MainActivity) {
         val s = src ?: run { a.toast("Escolha um vídeo ou uma foto primeiro"); return }
         if (VideoExport.busy()) { a.toast("Já está exportando"); return }
         stopPlay(); showImagePreview()
-        btnExport.isEnabled = false
+        btnExport.isEnabled = false; btnExpPost.isEnabled = false
         tvProg.setTextColor(a.MUTED); tvProg.text = "Exportando ${quality()}…"
         a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val job = VideoExport.Job(s, isPhoto, photoSecs, etText.text.toString(), style.copy(), music, mute, quality(),
@@ -1148,7 +1154,7 @@ class InstaEditor(private val a: MainActivity) {
         val qn = quality()
         VideoExport.export(a, job, { p -> tvProg.text = "Exportando $qn… $p%" }) { f, err ->
             a.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            btnExport.isEnabled = true
+            btnExport.isEnabled = true; btnExpPost.isEnabled = true
             if (f == null) { tvProg.setTextColor(a.ACCENT); tvProg.text = "Não deu: $err"; return@export }
             tvProg.text = "Salvando…"
             Thread {
@@ -1165,6 +1171,7 @@ class InstaEditor(private val a: MainActivity) {
                     video.setVideoURI(Uri.fromFile(File(VideoExport.videoDir(a), "$id.mp4"))); video.start()
                     afterBox.visibility = View.VISIBLE
                     renderLibrary(); renderProjects()
+                    if (postAfter) { postAfter = false; post(id, etCap.text.toString()) }
                 }
             }.start()
         }
