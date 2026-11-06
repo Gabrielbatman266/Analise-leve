@@ -67,3 +67,28 @@ class PostTile : TileService() {
         else @Suppress("DEPRECATION") startActivityAndCollapse(QuickPost.intent(this))
     }
 }
+
+/** Porta de entrada pro Leve Launcher (e outros atalhos): "Postar próximo". Só abre o fluxo, não lê nada. */
+class QuickPostEntry : android.app.Activity() {
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        try { startActivity(QuickPost.intent(this)) } catch (e: Exception) { }
+        finish()
+    }
+}
+
+/** Informa só quantas fotos estão prontas (pro cartão do Leve Launcher). Nada de fotos ou legendas sai daqui. */
+class StatusProvider : android.content.ContentProvider() {
+    override fun onCreate() = true
+    override fun query(uri: android.net.Uri, p: Array<out String>?, s: String?, a: Array<out String>?, o: String?): android.database.Cursor {
+        val c = context!!
+        val l = PostQueue.load(c)
+        return android.database.MatrixCursor(arrayOf("prontas", "total")).apply {
+            addRow(arrayOf<Any>(l.count { it.optString("status") == "pronta" }, l.size))
+        }
+    }
+    override fun getType(uri: android.net.Uri): String? = null
+    override fun insert(uri: android.net.Uri, v: android.content.ContentValues?): android.net.Uri? = null
+    override fun update(uri: android.net.Uri, v: android.content.ContentValues?, s: String?, a: Array<out String>?) = 0
+    override fun delete(uri: android.net.Uri, s: String?, a: Array<out String>?) = 0
+}
