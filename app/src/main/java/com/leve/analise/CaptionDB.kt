@@ -52,7 +52,8 @@ object CaptionDB {
     fun texts(c: Context, src: String) = all(c, src).map { it.optString("t") }
     fun size(c: Context) = load(c).size
 
-    fun add(c: Context, t: String, src: String) = synchronized(lock) {
+    fun add(c: Context, t: String, src: String) {
+        synchronized(lock) {
         val txt = t.trim(); if (txt.isEmpty()) return
         val l = load(c)
         val i = l.indexOfFirst { norm(it.optString("t")) == norm(txt) }
@@ -65,25 +66,30 @@ object CaptionDB {
         }
         save(c)
     }
+    }
 
     fun remove(c: Context, t: String) = synchronized(lock) { load(c).removeAll { norm(it.optString("t")) == norm(t) }; save(c) }
 
     private fun find(c: Context, t: String) = load(c).firstOrNull { norm(it.optString("t")) == norm(t) }
 
     /** Conta que a legenda foi usada num post. */
-    fun used(c: Context, t: String, src: String = "ia") = synchronized(lock) {
+    fun used(c: Context, t: String, src: String = "ia") {
+        synchronized(lock) {
         if (t.isBlank()) return
         if (find(c, t) == null) add(c, t, src)
         find(c, t)?.let { it.put("uses", it.optInt("uses") + 1); it.put("last", System.currentTimeMillis()) }
         save(c)
     }
+    }
 
     /** Resultado do post: "good" (bombou), "meh" (normal) ou "bad" (flopou). */
-    fun rate(c: Context, t: String, r: String) = synchronized(lock) {
+    fun rate(c: Context, t: String, r: String) {
+        synchronized(lock) {
         if (t.isBlank()) return
         if (find(c, t) == null) add(c, t, "ia")
         find(c, t)?.let { it.put(r, it.optInt(r) + 1) }
         save(c)
+    }
     }
 
     /** Nota média (0..1): bombou = 1, normal = 0,5, flopou = 0. */
