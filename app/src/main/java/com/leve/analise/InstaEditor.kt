@@ -68,6 +68,42 @@ class InstaEditor(private val a: MainActivity) {
     private lateinit var projBox: LinearLayout
     private var projId: String? = null
     private lateinit var editorCard: LinearLayout
+    private lateinit var cutRow: LinearLayout
+    private lateinit var tvCut: TextView
+    private lateinit var sbStart: SeekBar
+    private lateinit var sbEnd: SeekBar
+    private var durMs = 0L
+    private var cutStart = 0L
+    private var cutEnd = 0L
+    private var musicStart = 0L
+    private lateinit var tvMusicStart: TextView
+
+    private fun t(ms: Long) = "%d:%02d,%d".format(ms / 60000, (ms / 1000) % 60, (ms % 1000) / 100)
+
+    private fun syncCut() {
+        if (durMs <= 0) return
+        sbStart.max = (durMs / 100).toInt(); sbEnd.max = (durMs / 100).toInt()
+        sbStart.progress = (cutStart / 100).toInt(); sbEnd.progress = (cutEnd / 100).toInt()
+        tvCut.text = "${t(cutStart)} → ${t(cutEnd)}  ·  fica com ${t(cutEnd - cutStart)}"
+    }
+
+    private fun nudge(start: Boolean, d: Long) {
+        if (durMs <= 0) return
+        if (start) cutStart = (cutStart + d).coerceIn(0, cutEnd - 500) else cutEnd = (cutEnd + d).coerceIn(cutStart + 500, durMs)
+        syncCut(); scheduleSave(); frameAtCut(start)
+    }
+
+    private var frameJob = 0
+    /** Mostra na prévia o quadro do ponto de corte. */
+    private fun frameAtCut(start: Boolean) {
+        val s = src ?: return
+        val ms = if (start) cutStart else maxOf(0, cutEnd - 100)
+        val my = ++frameJob
+        Thread {
+            val b = VideoExport.frameAt(a, s, ms)
+            ui.post { if (my == frameJob && b != null) { if (start) base = b; preview.setImageBitmap(VideoExport.preview(b, etText.text.toString(), style)) } }
+        }.start()
+    }
     private lateinit var tvQ: TextView
     private fun quality() = Store.prefs(a).getString("quality", "1080p") ?: "1080p"
     private fun qNote() {
@@ -151,6 +187,36 @@ class InstaEditor(private val a: MainActivity) {
         redraws += a.chips(ce, TextStyle.POS, { style.pos }) { style.pos = it; changed() }
         redraws += a.chips(ce, TextStyle.ALIGNS, { style.align }) { style.align = it; changed() }
 
+        // corte (vídeo)
+        cutRow = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        ce.addView(cutRow, a.lpMatch())
+        a.text("✂ Cortar", 12f, a.MUTED, parent = cutRow)
+        tvCut = a.text("", 14f, a.FG, parent = cutRow, bold = true)
+        a.text("Início", 12f, a.MUTED, parent = cutRow)
+        sbStart = SeekBar(a); cutRow.addView(sbStart, a.lpMatch())
+        a.text("Fim", 12f, a.MUTED, parent = cutRow)
+        sbEnd = SeekBar(a); cutRow.addView(sbEnd, a.lpMatch())
+        val cr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        cutRow.addView(cr, a.lpMatch())
+        a.button("−0,5s início", cr, weight = true) { nudge(true, -500) }
+        a.button("+0,5s início", cr, weight = true) { nudge(true, 500) }
+        val cr2 = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        cutRow.addView(cr2, a.lpMatch())
+        a.button("−0,5s fim", cr2, weight = true) { nudge(false, -500) }
+        a.button("+0,5s fim", cr2, weight = true) { nudge(false, 500) }
+        a.button("Sem corte (vídeo inteiro)", cutRow) { cutStart = 0; cutEnd = durMs; syncCut(); scheduleSave(); frameAtCut(true) }
+        val l = object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                if (sb === sbStart) cutStart = minOf(p.toLong() * 100, cutEnd - 500) else cutEnd = maxOf(p.toLong() * 100, cutStart + 500)
+                cutStart = maxOf(0, cutStart); cutEnd = minOf(durMs, cutEnd)
+                syncCut(); frameAtCut(sb === sbStart)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) { scheduleSave() }
+        }
+        sbStart.setOnSeekBarChangeListener(l); sbEnd.setOnSeekBarChangeListener(l)
+
         // duração (foto)
         durRow = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         ce.addView(durRow, a.lpMatch())
@@ -161,6 +227,12 @@ class InstaEditor(private val a: MainActivity) {
         a.text("Música de fundo", 12f, a.MUTED, parent = ce)
         tvMusic = a.text("", 14f, a.FG, parent = ce, bold = true)
         a.button("🎵 Escolher música", ce) { chooseMusic() }
+        tvMusicStart = a.text("", 12f, a.MUTED, parent = ce)
+        val mr0 = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        ce.addView(mr0, a.lpMatch())
+        a.button("Música −5s", mr0, weight = true) { musicStart = maxOf(0, musicStart - 5000); musicLabel2(); scheduleSave() }
+        a.button("Música +5s", mr0, weight = true) { musicStart += 5000; music?.let { val d = VideoExport.durationMs(it); if (d > 0) musicStart = minOf(musicStart, maxOf(0, d - 5000)) }; musicLabel2(); scheduleSave() }
+        a.button("▶ Ouvir daí", mr0, weight = true) { music?.let { play(it); try { player?.seekTo(musicStart.toInt()) } catch (e: Exception) { } } ?: a.toast("Escolha uma música primeiro") }
         updateMusicLabel()
 
         // legenda + exportar
@@ -263,6 +335,7 @@ class InstaEditor(private val a: MainActivity) {
             it.put("style", org.json.JSONObject().put("size", style.size).put("color", style.color).put("bg", style.bg)
                 .put("pos", style.pos).put("font", style.font).put("align", style.align))
             it.put("music", music?.path ?: ""); it.put("mute", mute); it.put("updated", System.currentTimeMillis())
+            it.put("cutStart", cutStart); it.put("cutEnd", cutEnd); it.put("musicStart", musicStart)
         }
         base?.let { b -> Projects.saveThumb(a, id, VideoExport.preview(b, etText.text.toString(), style)) }
         ui.removeCallbacks(projRefresh); ui.postDelayed(projRefresh, 800)
@@ -272,6 +345,7 @@ class InstaEditor(private val a: MainActivity) {
     private fun newProject() {
         saveNow()
         projId = null; src = null; base = null; isPhoto = false; music = null; mute = false; lastExportId = null
+        cutStart = 0; cutEnd = 0; durMs = 0; musicStart = 0; cutRow.visibility = View.GONE
         etText.setText(""); etCap.setText(""); durRow.visibility = View.GONE
         tvSrc.setTextColor(a.MUTED); tvSrc.text = "Escolha um vídeo ou uma foto pra começar."
         updateMusicLabel(); showImagePreview(); drawPreview(); renderProjects()
@@ -292,6 +366,7 @@ class InstaEditor(private val a: MainActivity) {
         etText.setText(o.optString("text")); etCap.setText(o.optString("caption"))
         music = o.optString("music").takeIf { it.isNotEmpty() }?.let { File(it) }?.takeIf { it.exists() }
         mute = o.optBoolean("mute")
+        cutStart = o.optLong("cutStart"); cutEnd = o.optLong("cutEnd"); musicStart = o.optLong("musicStart")
         seek.progress = style.size - 20
         redraws.forEach { it() }
         durRow.visibility = if (photo) View.VISIBLE else View.GONE
@@ -393,6 +468,7 @@ class InstaEditor(private val a: MainActivity) {
                     ui.post {
                         if (!ok) { Projects.remove(a, pid); a.toast("Não consegui abrir esse vídeo"); return@post }
                         projId = pid; isPhoto = false; src = Uri.fromFile(f); durRow.visibility = View.GONE
+                        cutStart = 0; cutEnd = 0
                         loadBase("Vídeo salvo no projeto"); saveNow(); renderProjects()
                     }
                 }.start()
@@ -431,15 +507,31 @@ class InstaEditor(private val a: MainActivity) {
         val s = src ?: return
         showImagePreview()
         tvSrc.text = label; tvSrc.setTextColor(a.OK)
+        cutRow.visibility = if (isPhoto) View.GONE else View.VISIBLE
         Thread {
             val b = VideoExport.baseFrame(a, s, isPhoto)
-            ui.post { base = b; drawPreview() }
+            val d = if (isPhoto) 0L else VideoExport.durationMs(a, s)
+            ui.post {
+                base = b; durMs = d
+                if (!isPhoto && d > 0) {
+                    if (cutEnd <= 0 || cutEnd > d) cutEnd = d
+                    if (cutStart >= cutEnd) cutStart = 0
+                    syncCut()
+                    if (cutStart > 0) frameAtCut(true) else drawPreview()
+                } else drawPreview()
+            }
         }.start()
     }
 
     // ------------------------------------------------------------------ música
 
+    private fun musicLabel2() {
+        if (!::tvMusicStart.isInitialized) return
+        tvMusicStart.text = if (music != null) "A música começa em ${t(musicStart)}" else ""
+    }
+
     private fun updateMusicLabel() {
+        musicLabel2()
         tvMusic.text = when {
             music != null -> "♪ " + VideoExport.nice(music!!)
             mute -> "Sem som"
@@ -456,7 +548,7 @@ class InstaEditor(private val a: MainActivity) {
                 0 -> { music = null; mute = false }
                 1 -> { music = null; mute = true }
                 2 -> open("audio/*", REQ_MUSIC)
-                else -> { music = list[i - 3]; mute = false }
+                else -> { music = list[i - 3]; mute = false; musicStart = 0 }
             }
             updateMusicLabel(); scheduleSave()
         }.show()
@@ -551,7 +643,8 @@ class InstaEditor(private val a: MainActivity) {
         btnExport.isEnabled = false
         tvProg.setTextColor(a.MUTED); tvProg.text = "Exportando ${quality()}…"
         a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        val job = VideoExport.Job(s, isPhoto, photoSecs, etText.text.toString(), style.copy(), music, mute, quality())
+        val job = VideoExport.Job(s, isPhoto, photoSecs, etText.text.toString(), style.copy(), music, mute, quality(),
+            if (isPhoto) 0 else cutStart, if (isPhoto || cutEnd >= durMs) 0 else cutEnd, musicStart)
         val qn = quality()
         VideoExport.export(a, job, { p -> tvProg.text = "Exportando $qn… $p%" }) { f, err ->
             a.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)

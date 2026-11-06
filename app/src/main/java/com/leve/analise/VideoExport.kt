@@ -121,6 +121,24 @@ object VideoExport {
     // ------------------------------------------------------------------ prévia
 
     /** Primeiro quadro (vídeo) ou a foto, encaixado em 9:16 com fundo preto. */
+    fun durationMs(c: Context, src: Uri): Long = try {
+        val r = MediaMetadataRetriever(); r.setDataSource(c, src)
+        val d = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+        r.release(); d
+    } catch (e: Exception) { 0L }
+
+    fun durationMs(f: File): Long = try {
+        val r = MediaMetadataRetriever(); r.setDataSource(f.path)
+        val d = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+        r.release(); d
+    } catch (e: Exception) { 0L }
+
+    fun frameAt(c: Context, src: Uri, ms: Long): Bitmap? = try {
+        val r = MediaMetadataRetriever(); r.setDataSource(c, src)
+        val b = r.getFrameAtTime(ms * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        r.release(); b?.let { fit(it, W / 2, H / 2) }
+    } catch (e: Exception) { null }
+
     fun baseFrame(c: Context, src: Uri, isPhoto: Boolean): Bitmap? = try {
         val raw: Bitmap? = if (isPhoto) {
             val o = BitmapFactory.Options().apply { inSampleSize = 2 }
@@ -152,7 +170,8 @@ object VideoExport {
     // ------------------------------------------------------------------ exportar
 
     class Job(val src: Uri, val isPhoto: Boolean, val photoSeconds: Int, val text: String, val style: TextStyle,
-              val music: File?, val mute: Boolean, val quality: String = "1080p")
+              val music: File?, val mute: Boolean, val quality: String = "1080p",
+              val startMs: Long = 0, val endMs: Long = 0, val musicStartMs: Long = 0)
 
     /** Tamanho (9:16), bitrate e codec por qualidade. 2K/4K usam HEVC: mesma qualidade com arquivo bem menor. */
     data class Q(val w: Int, val h: Int, val bitrate: Int, val mime: String)
@@ -173,7 +192,12 @@ object VideoExport {
             val fx = ArrayList<androidx.media3.common.Effect>()
             fx.add(Presentation.createForWidthAndHeight(qq.w, qq.h, Presentation.LAYOUT_SCALE_TO_FIT))
             if (job.text.isNotBlank()) fx.add(OverlayEffect(ImmutableList.of(BitmapOverlay.createStaticBitmapOverlay(textBitmap(job.text, job.style, qq.w, qq.h)))))
-            val media = if (job.isPhoto) MediaItem.Builder().setUri(job.src).setMimeType(MimeTypes.IMAGE_JPEG).build() else MediaItem.fromUri(job.src)
+            val media = if (job.isPhoto) MediaItem.Builder().setUri(job.src).setMimeType(MimeTypes.IMAGE_JPEG).build()
+                else if (job.startMs > 0 || job.endMs > 0) {
+                    val clip = MediaItem.ClippingConfiguration.Builder().setStartPositionMs(job.startMs)
+                    if (job.endMs > job.startMs) clip.setEndPositionMs(job.endMs)
+                    MediaItem.Builder().setUri(job.src).setClippingConfiguration(clip.build()).build()
+                } else MediaItem.fromUri(job.src)
             val vb = EditedMediaItem.Builder(media).setEffects(Effects(emptyList(), fx))
             if (job.isPhoto) {
                 @Suppress("DEPRECATION")
@@ -184,7 +208,10 @@ object VideoExport {
             val seqs = ArrayList<EditedMediaItemSequence>()
             seqs.add(EditedMediaItemSequence(vb.build()))
             if (job.music != null) {
-                seqs.add(EditedMediaItemSequence(listOf(EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(job.music))).build()), true))
+                val mi = if (job.musicStartMs > 0) MediaItem.Builder().setUri(Uri.fromFile(job.music))
+                    .setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setStartPositionMs(job.musicStartMs).build()).build()
+                    else MediaItem.fromUri(Uri.fromFile(job.music))
+                seqs.add(EditedMediaItemSequence(listOf(EditedMediaItem.Builder(mi).build()), true))
             }
             val comp = Composition.Builder(seqs).build()
             val enc = DefaultEncoderFactory.Builder(c)
