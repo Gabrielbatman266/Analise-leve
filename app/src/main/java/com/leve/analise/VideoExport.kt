@@ -67,6 +67,19 @@ data class TextStyle(
     }
 }
 
+/** Texto que só aparece entre início e fim (tempo contado do começo do vídeo exportado). */
+class TimedOverlay(private val bmp: Bitmap, private val startUs: Long, private val endUs: Long) : BitmapOverlay() {
+    private var first = Long.MIN_VALUE
+    private val shown = androidx.media3.effect.OverlaySettings.Builder().build()
+    private val hidden = androidx.media3.effect.OverlaySettings.Builder().setAlphaScale(0f).build()
+    private fun base(t: Long): Long { if (first == Long.MIN_VALUE) first = t; return first }
+    override fun getBitmap(presentationTimeUs: Long): Bitmap { base(presentationTimeUs); return bmp }
+    override fun getOverlaySettings(presentationTimeUs: Long): androidx.media3.effect.OverlaySettings {
+        val rel = presentationTimeUs - base(presentationTimeUs)
+        return if (rel >= startUs && (endUs <= 0 || rel < endUs)) shown else hidden
+    }
+}
+
 /** Grava o MP4 sem localização, data de criação nem outros dados do original (só mantém a rotação). */
 class CleanMuxerFactory(private val d: androidx.media3.muxer.Muxer.Factory = androidx.media3.transformer.DefaultMuxer.Factory()) :
     androidx.media3.muxer.Muxer.Factory by d {
@@ -184,7 +197,8 @@ object VideoExport {
 
     class Job(val src: Uri, val isPhoto: Boolean, val photoSeconds: Int, val text: String, val style: TextStyle,
               val music: File?, val mute: Boolean, val quality: String = "1080p",
-              val startMs: Long = 0, val endMs: Long = 0, val musicStartMs: Long = 0)
+              val startMs: Long = 0, val endMs: Long = 0, val musicStartMs: Long = 0,
+              val textStartMs: Long = 0, val textEndMs: Long = 0, val musicEndMs: Long = 0)
 
     /** Tamanho (9:16), bitrate e codec por qualidade. 2K/4K usam HEVC: mesma qualidade com arquivo bem menor. */
     data class Q(val w: Int, val h: Int, val bitrate: Int, val mime: String)
@@ -204,7 +218,12 @@ object VideoExport {
         try {
             val fx = ArrayList<androidx.media3.common.Effect>()
             fx.add(Presentation.createForWidthAndHeight(qq.w, qq.h, Presentation.LAYOUT_SCALE_TO_FIT))
-            if (job.text.isNotBlank()) fx.add(OverlayEffect(ImmutableList.of(BitmapOverlay.createStaticBitmapOverlay(textBitmap(job.text, job.style, qq.w, qq.h)))))
+            if (job.text.isNotBlank()) {
+                val tb = textBitmap(job.text, job.style, qq.w, qq.h)
+                val ov = if (job.textStartMs > 0 || job.textEndMs > 0) TimedOverlay(tb, job.textStartMs * 1000, job.textEndMs * 1000)
+                         else BitmapOverlay.createStaticBitmapOverlay(tb)
+                fx.add(OverlayEffect(ImmutableList.of(ov)))
+            }
             val media = if (job.isPhoto) MediaItem.Builder().setUri(job.src).setMimeType(MimeTypes.IMAGE_JPEG).build()
                 else if (job.startMs > 0 || job.endMs > 0) {
                     val clip = MediaItem.ClippingConfiguration.Builder().setStartPositionMs(job.startMs)
@@ -221,10 +240,11 @@ object VideoExport {
             val seqs = ArrayList<EditedMediaItemSequence>()
             seqs.add(EditedMediaItemSequence(vb.build()))
             if (job.music != null) {
-                val mi = if (job.musicStartMs > 0) MediaItem.Builder().setUri(Uri.fromFile(job.music))
-                    .setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setStartPositionMs(job.musicStartMs).build()).build()
-                    else MediaItem.fromUri(Uri.fromFile(job.music))
-                seqs.add(EditedMediaItemSequence(listOf(EditedMediaItem.Builder(mi).build()), true))
+                val clip = MediaItem.ClippingConfiguration.Builder().setStartPositionMs(job.musicStartMs)
+                if (job.musicEndMs > 0) clip.setEndPositionMs(job.musicStartMs + job.musicEndMs)
+                val mi = MediaItem.Builder().setUri(Uri.fromFile(job.music)).setClippingConfiguration(clip.build()).build()
+                // com corte no fim a música toca uma vez só; sem corte ela repete até o vídeo acabar
+                seqs.add(EditedMediaItemSequence(listOf(EditedMediaItem.Builder(mi).build()), job.musicEndMs <= 0))
             }
             val comp = Composition.Builder(seqs).build()
             val enc = DefaultEncoderFactory.Builder(c)

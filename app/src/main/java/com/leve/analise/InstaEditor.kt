@@ -71,21 +71,147 @@ class InstaEditor(private val a: MainActivity) {
     private lateinit var editorCard: LinearLayout
     private lateinit var cutRow: LinearLayout
     private lateinit var tvCut: TextView
-    private lateinit var sbStart: SeekBar
-    private lateinit var sbEnd: SeekBar
     private var durMs = 0L
     private var cutStart = 0L
     private var cutEnd = 0L
     private var musicStart = 0L
     private lateinit var tvMusicStart: TextView
+    private lateinit var timeline: TimelineView
+    private lateinit var tlHint: TextView
+    private lateinit var pVideo: LinearLayout
+    private lateinit var pMusic: LinearLayout
+    private lateinit var pText: LinearLayout
+    private lateinit var pExport: LinearLayout
+    private val tabBtns = ArrayList<Button>()
+    private var textStart = 0L
+    private var textEnd = 0L
+    private var musicEnd = 0L
+    private var musicDurMs = 0L
+    private var waveFor: File? = null
+
+    private fun panel(parent: LinearLayout) = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        .also { parent.addView(it, a.lpMatch().apply { topMargin = a.dp(4) }) }
+
+    private fun showPanel(i: Int) {
+        Store.prefs(a).edit().putInt("ed_panel", i).apply()
+        listOf(pVideo, pMusic, pText, pExport).forEachIndexed { k, v -> v.visibility = if (k == i) View.VISIBLE else View.GONE }
+        tabBtns.forEachIndexed { k, b ->
+            val on = k == i
+            b.setTextColor(if (on) 0xFF1A0A10.toInt() else a.FG); b.textSize = 13f
+            b.background = GradientDrawable().apply { setColor(if (on) a.ACCENT else 0xFF1C1C24.toInt()); cornerRadius = a.dp(10).toFloat() }
+        }
+        if (i == 1 && music == null && ::timeline.isInitialized && timeline.visibility == View.VISIBLE && pendingMusicAsk) { pendingMusicAsk = false; chooseMusic() }
+        if (i == 2 && etText.text.isBlank() && pendingTextFocus) { pendingTextFocus = false; etText.requestFocus() }
+    }
+    private var pendingMusicAsk = false
+    private var pendingTextFocus = false
+
+    private fun outDur() = maxOf(0L, cutEnd - cutStart)
+    private fun cursorOut(): Long = ((try { video.currentPosition.toLong() } catch (e: Exception) { cutStart }) - cutStart).coerceIn(0, outDur())
+    private fun textVisibleAt(out: Long) = out >= textStart && (textEnd <= 0 || out < textEnd)
+
+    /** Copia o estado do editor pra linha do tempo. */
+    private fun syncTimeline() {
+        if (!::timeline.isInitialized) return
+        timeline.dur = durMs; timeline.cutS = cutStart; timeline.cutE = cutEnd
+        timeline.musicOn = music != null; timeline.musicName = music?.let { VideoExport.nice(it) } ?: ""
+        timeline.musicDur = musicDurMs; timeline.musicStart = musicStart; timeline.musicEnd = musicEnd
+        timeline.text = etText.text.toString(); timeline.textS = textStart; timeline.textE = textEnd
+        timeline.invalidate()
+    }
+
+    /** Depois de um botão mexer no tempo: atualiza tudo, mostra o ponto e salva. */
+    private fun afterEdit(what: String) {
+        if (cutEnd <= cutStart) cutEnd = durMs
+        syncTimeline(); timeline.clampRel()
+        textStart = timeline.textS; textEnd = timeline.textE; musicEnd = timeline.musicEnd
+        syncCut(); musicLabel2(); scheduleSave()
+        if (editMode) {
+            val ms = when (what) { "cut" -> cutStart; "text" -> cutStart + textStart; else -> null }
+            if (ms != null) { pauseEdit(); seekPrecise(ms); timeline.playhead = ms; updateTextLayer(ms - cutStart) }
+            else if (video.isPlaying) bgmStart(cursorOut())
+        }
+    }
+
+    private fun onTimeline(what: String, fin: Boolean) {
+        cutStart = timeline.cutS; cutEnd = timeline.cutE
+        textStart = timeline.textS; textEnd = timeline.textE
+        musicStart = timeline.musicStart; musicEnd = timeline.musicEnd
+        when (what) {
+            "cut", "text", "seek" -> {
+                if (video.isPlaying) pauseEdit()
+                seekPrecise(timeline.playhead); tvPos.text = t(timeline.playhead)
+                updateTextLayer(timeline.playhead - cutStart)
+                if (what == "cut") syncCut()
+            }
+            "music" -> { musicLabel2(); if (fin && video.isPlaying) bgmStart(cursorOut()) }
+        }
+        if (fin && what != "seek") scheduleSave()
+        if (what == "music" && fin && !video.isPlaying && music != null) previewMusicSnippet()
+    }
+
+    /** Toca 3 segundos da música a partir do cursor, pra conferir a batida depois de arrastar. */
+    private fun previewMusicSnippet() {
+        bgmStart(cursorOut())
+        ui.postDelayed({ if (!video.isPlaying) bgmStop() }, 3000)
+    }
+
+    private fun updateTextLayer(out: Long) {
+        if (::textLayer.isInitialized && editMode) textLayer.visibility = if (textVisibleAt(out)) View.VISIBLE else View.INVISIBLE
+    }
+
+    private fun slip(d: Long) {
+        if (music == null) { a.toast("Escolha uma música primeiro"); return }
+        musicStart = (musicStart + d).coerceIn(0, maxOf(0L, musicDurMs - 1000))
+        afterEdit("music"); if (!video.isPlaying) previewMusicSnippet()
+    }
+
+    private fun cutAtCursor(start: Boolean) {
+        if (durMs <= 0) return
+        val pos = try { video.currentPosition.toLong() } catch (e: Exception) { return }
+        if (start) cutStart = pos.coerceIn(0, cutEnd - 500) else cutEnd = pos.coerceIn(cutStart + 500, durMs)
+        afterEdit("cut")
+    }
+
+    /** Duração e onda da música escolhida (em segundo plano, com cache). */
+    private fun refreshMusicMeta() {
+        val f = music
+        if (f == null) { musicDurMs = 0; timeline.wave = null; waveFor = null; syncTimeline(); return }
+        if (f == waveFor) { syncTimeline(); return }
+        waveFor = f; timeline.wave = null
+        Thread {
+            val d = VideoExport.durationMs(f)
+            ui.post { if (waveFor == f) { musicDurMs = d; syncTimeline() } }
+            val w = Wave.load(a, f)
+            ui.post { if (waveFor == f) { timeline.wave = w; timeline.invalidate() } }
+        }.start()
+    }
+
+    /** Miniaturas do vídeo pra camada de vídeo. */
+    private fun loadThumbs(s: Uri, d: Long) {
+        Thread {
+            val out = ArrayList<Bitmap>()
+            try {
+                val r = android.media.MediaMetadataRetriever(); r.setDataSource(a, s)
+                val n = 10
+                for (i in 0 until n) {
+                    val us = d * 1000 * i / n + 1000
+                    val b = if (android.os.Build.VERSION.SDK_INT >= 27) r.getScaledFrameAtTime(us, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 96, 170)
+                            else r.getFrameAtTime(us, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let { Bitmap.createScaledBitmap(it, 96, 170, true) }
+                    if (b != null) out.add(b)
+                }
+                r.release()
+            } catch (e: Exception) { }
+            ui.post { if (src == s) { timeline.thumbs = out; timeline.invalidate() } }
+        }.start()
+    }
 
     private fun t(ms: Long) = "%d:%02d,%d".format(ms / 60000, (ms / 1000) % 60, (ms % 1000) / 100)
 
     private fun syncCut() {
         if (durMs <= 0) return
-        sbStart.max = (durMs / 100).toInt(); sbEnd.max = (durMs / 100).toInt()
-        sbStart.progress = (cutStart / 100).toInt(); sbEnd.progress = (cutEnd / 100).toInt()
-        tvCut.text = "${t(cutStart)} → ${t(cutEnd)}  ·  fica com ${t(cutEnd - cutStart)}"
+        tvCut.text = "✂ ${t(cutStart)} → ${t(cutEnd)}  ·  fica com ${t(cutEnd - cutStart)}"
+        syncTimeline()
     }
 
     private fun nudge(start: Boolean, d: Long) {
@@ -113,6 +239,7 @@ class InstaEditor(private val a: MainActivity) {
     private fun bgmStart(offset: Long) {
         bgmStop()
         val f = music ?: return
+        if (musicEnd > 0 && offset >= musicEnd) return
         bgm = try { MediaPlayer().apply { setDataSource(f.path); prepare(); seekTo((musicStart + offset).toInt()); start() } } catch (e: Exception) { null }
     }
     private fun bgmStop() { try { bgm?.stop(); bgm?.release() } catch (e: Exception) { }; bgm = null }
@@ -138,7 +265,12 @@ class InstaEditor(private val a: MainActivity) {
         override fun run() {
             if (!editMode) return
             val pos = try { video.currentPosition.toLong() } catch (e: Exception) { 0L }
-            tvPos.text = t(pos)
+            if (video.isPlaying) {
+                tvPos.text = t(pos)
+                timeline.playhead = pos; timeline.invalidate()
+                updateTextLayer(pos - cutStart)
+                if (musicEnd > 0 && pos - cutStart >= musicEnd && bgm != null) bgmStop()
+            }
             if (video.isPlaying && pos >= cutEnd) { seekPrecise(cutStart); bgmStart(0) }
             ui.postDelayed(this, 50)
         }
@@ -150,6 +282,8 @@ class InstaEditor(private val a: MainActivity) {
         afterBox.visibility = View.GONE
         preview.visibility = View.GONE
         video.visibility = View.VISIBLE; textLayer.visibility = View.VISIBLE; playRow.visibility = View.VISIBLE
+        timeline.visibility = View.VISIBLE; tlHint.visibility = View.VISIBLE
+        timeline.playhead = cutStart; syncTimeline(); updateTextLayer(0)
         btnTrecho.text = "▶ Ver trecho"
         video.setVideoURI(s)
         ui.removeCallbacks(loopTick); ui.post(loopTick)
@@ -159,7 +293,7 @@ class InstaEditor(private val a: MainActivity) {
     private var frameJob = 0
     /** Mostra na prévia o quadro do ponto de corte. */
     private fun frameAtCut(start: Boolean) {
-        if (editMode) { pauseEdit(); seekPrecise(if (start) cutStart else maxOf(0, cutEnd - 100)); return }
+        if (editMode) { pauseEdit(); val ms = if (start) cutStart else maxOf(0, cutEnd - 100); seekPrecise(ms); timeline.playhead = ms; timeline.invalidate(); return }
         val s = src ?: return
         val ms = if (start) cutStart else maxOf(0, cutEnd - 100)
         val my = ++frameJob
@@ -267,8 +401,26 @@ class InstaEditor(private val a: MainActivity) {
         tvPos = TextView(a).apply { setTextColor(a.FG); textSize = 15f; gravity = Gravity.CENTER; text = "0:00,0" }
         playRow.addView(tvPos, LinearLayout.LayoutParams(a.dp(90), ViewGroup.LayoutParams.WRAP_CONTENT))
 
+        // ---------- linha do tempo (camadas) + ferramentas de cada camada
+        timeline = TimelineView(a).apply { visibility = View.GONE }
+        ce.addView(timeline, a.lpMatch().apply { topMargin = a.dp(10) })
+        tlHint = a.text("Toque numa camada pra editar. Bordas cortam; arrastar a música sincroniza; o bloco do texto escolhe quando ele aparece.", 11f, a.MUTED, parent = ce)
+        tlHint.visibility = View.GONE
+        timeline.onSelect = { tk ->
+            if (tk == 1 && music == null) pendingMusicAsk = true
+            if (tk == 2) pendingTextFocus = true
+            showPanel(tk)
+        }
+        timeline.onChange = { what, fin -> onTimeline(what, fin) }
+        val tabs = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        ce.addView(tabs, a.lpMatch().apply { topMargin = a.dp(8) })
+        listOf("🎬 Vídeo", "🎵 Música", "T Texto", "⬆ Exportar").forEachIndexed { i, n ->
+            tabBtns += a.button(n, tabs, weight = true) { showPanel(i); if (i < 3) { timeline.selected = i; timeline.invalidate() } }
+        }
+        pVideo = panel(ce); pMusic = panel(ce); pText = panel(ce); pExport = panel(ce)
+
         // texto
-        a.text("Texto no vídeo (Enter = novo parágrafo)", 12f, a.MUTED, parent = ce)
+        a.text("Texto no vídeo (Enter = novo parágrafo)", 12f, a.MUTED, parent = pText)
         etText = EditText(a).apply {
             setTextColor(a.FG); setHintTextColor(a.MUTED); textSize = 16f; hint = "Escreva aqui…"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
@@ -278,14 +430,14 @@ class InstaEditor(private val a: MainActivity) {
             addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, x: Int, y: Int, z: Int) {}
                 override fun onTextChanged(s: CharSequence?, x: Int, y: Int, z: Int) {}
-                override fun afterTextChanged(s: Editable?) { schedulePreview(); scheduleSave() }
+                override fun afterTextChanged(s: Editable?) { schedulePreview(); scheduleSave(); syncTimeline() }
             })
         }
-        ce.addView(etText, a.lpMatch())
+        pText.addView(etText, a.lpMatch())
 
-        a.text("Tamanho", 12f, a.MUTED, parent = ce)
+        a.text("Tamanho", 12f, a.MUTED, parent = pText)
         seek = SeekBar(a)
-        ce.addView(seek.apply {
+        pText.addView(seek.apply {
             max = 80; progress = style.size - 20
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) { style.size = p + 20; schedulePreview() }
@@ -293,66 +445,59 @@ class InstaEditor(private val a: MainActivity) {
                 override fun onStopTrackingTouch(sb: SeekBar?) { style.save(a); scheduleSave() }
             })
         }, a.lpMatch())
-        a.text("Cor", 12f, a.MUTED, parent = ce)
-        redraws += a.chips(ce, TextStyle.COLORS.keys.toList(), { style.color }) { style.color = it; changed() }
-        a.text("Fundo do texto", 12f, a.MUTED, parent = ce)
-        redraws += a.chips(ce, TextStyle.BGS, { style.bg }) { style.bg = it; changed() }
-        a.text("Fonte", 12f, a.MUTED, parent = ce)
-        redraws += a.chips(ce, TextStyle.FONTS, { style.font }) { style.font = it; changed() }
-        a.text("Posição e alinhamento", 12f, a.MUTED, parent = ce)
-        redraws += a.chips(ce, TextStyle.POS, { style.pos }) { style.pos = it; changed() }
-        redraws += a.chips(ce, TextStyle.ALIGNS, { style.align }) { style.align = it; changed() }
+        a.text("Cor", 12f, a.MUTED, parent = pText)
+        redraws += a.chips(pText, TextStyle.COLORS.keys.toList(), { style.color }) { style.color = it; changed() }
+        a.text("Fundo do texto", 12f, a.MUTED, parent = pText)
+        redraws += a.chips(pText, TextStyle.BGS, { style.bg }) { style.bg = it; changed() }
+        a.text("Fonte", 12f, a.MUTED, parent = pText)
+        redraws += a.chips(pText, TextStyle.FONTS, { style.font }) { style.font = it; changed() }
+        a.text("Posição e alinhamento", 12f, a.MUTED, parent = pText)
+        redraws += a.chips(pText, TextStyle.POS, { style.pos }) { style.pos = it; changed() }
+        redraws += a.chips(pText, TextStyle.ALIGNS, { style.align }) { style.align = it; changed() }
 
-        // corte (vídeo)
+        a.text("Quando o texto aparece (ou arraste o bloco rosa na linha do tempo)", 12f, a.MUTED, parent = pText)
+        val tr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        pText.addView(tr, a.lpMatch())
+        a.button("Aparece no cursor", tr, weight = true) { val o = cursorOut(); textStart = o.coerceIn(0, maxOf(0, (if (textEnd > 0) textEnd else outDur()) - 300)); afterEdit("text") }
+        a.button("Some no cursor", tr, weight = true) { val o = cursorOut(); textEnd = if (o >= outDur() - 150) 0 else o.coerceAtLeast(textStart + 300); afterEdit("text") }
+        a.button("O vídeo todo", pText) { textStart = 0; textEnd = 0; afterEdit("text") }
+
+        // camada Vídeo: corte
         cutRow = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
-        ce.addView(cutRow, a.lpMatch())
-        a.text("✂ Cortar", 12f, a.MUTED, parent = cutRow)
+        pVideo.addView(cutRow, a.lpMatch())
         tvCut = a.text("", 14f, a.FG, parent = cutRow, bold = true)
-        a.text("Início", 12f, a.MUTED, parent = cutRow)
-        sbStart = SeekBar(a); cutRow.addView(sbStart, a.lpMatch())
-        a.text("Fim", 12f, a.MUTED, parent = cutRow)
-        sbEnd = SeekBar(a); cutRow.addView(sbEnd, a.lpMatch())
+        a.text("Arraste as bordas brancas na linha do tempo, ou corte onde está o cursor:", 12f, a.MUTED, parent = cutRow)
         val cr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
         cutRow.addView(cr, a.lpMatch())
-        a.button("−0,5s início", cr, weight = true) { nudge(true, -500) }
-        a.button("+0,5s início", cr, weight = true) { nudge(true, 500) }
-        val cr2 = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
-        cutRow.addView(cr2, a.lpMatch())
-        a.button("−0,5s fim", cr2, weight = true) { nudge(false, -500) }
-        a.button("+0,5s fim", cr2, weight = true) { nudge(false, 500) }
-        a.button("Sem corte (vídeo inteiro)", cutRow) { cutStart = 0; cutEnd = durMs; syncCut(); scheduleSave(); frameAtCut(true) }
-        val l = object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
-                if (!fromUser) return
-                if (sb === sbStart) cutStart = minOf(p.toLong() * 100, cutEnd - 500) else cutEnd = maxOf(p.toLong() * 100, cutStart + 500)
-                cutStart = maxOf(0, cutStart); cutEnd = minOf(durMs, cutEnd)
-                syncCut(); frameAtCut(sb === sbStart)
-            }
-            override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?) { scheduleSave() }
-        }
-        sbStart.setOnSeekBarChangeListener(l); sbEnd.setOnSeekBarChangeListener(l)
+        a.button("✂ Início no cursor", cr, weight = true) { cutAtCursor(true) }
+        a.button("✂ Fim no cursor", cr, weight = true) { cutAtCursor(false) }
+        a.button("Sem corte (vídeo inteiro)", cutRow) { cutStart = 0; cutEnd = durMs; afterEdit("cut") }
 
         // duração (foto)
         durRow = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
-        ce.addView(durRow, a.lpMatch())
+        pVideo.addView(durRow, a.lpMatch())
         a.text("Duração da foto em vídeo", 12f, a.MUTED, parent = durRow)
         redraws += a.chips(durRow, listOf("5s", "8s", "12s", "15s"), { "${photoSecs}s" }) { photoSecs = it.removeSuffix("s").toInt(); scheduleSave() }
 
-        // música
-        a.text("Música de fundo", 12f, a.MUTED, parent = ce)
-        tvMusic = a.text("", 14f, a.FG, parent = ce, bold = true)
-        a.button("🎵 Escolher música", ce) { chooseMusic() }
-        tvMusicStart = a.text("", 12f, a.MUTED, parent = ce)
+        // camada Música
+        tvMusic = a.text("", 14f, a.FG, parent = pMusic, bold = true)
+        a.button("🎵 Escolher música", pMusic, primary = true) { chooseMusic() }
+        tvMusicStart = a.text("", 12f, a.MUTED, parent = pMusic)
+        a.text("Sincronizar: arraste a onda verde na linha do tempo até a batida bater, ou ajuste fino o ponto da música:", 12f, a.MUTED, parent = pMusic)
         val mr0 = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
-        ce.addView(mr0, a.lpMatch())
-        a.button("Música −5s", mr0, weight = true) { musicStart = maxOf(0, musicStart - 5000); musicLabel2(); scheduleSave() }
-        a.button("Música +5s", mr0, weight = true) { musicStart += 5000; music?.let { val d = VideoExport.durationMs(it); if (d > 0) musicStart = minOf(musicStart, maxOf(0, d - 5000)) }; musicLabel2(); scheduleSave() }
-        a.button("▶ Ouvir daí", mr0, weight = true) { music?.let { play(it); try { player?.seekTo(musicStart.toInt()) } catch (e: Exception) { } } ?: a.toast("Escolha uma música primeiro") }
+        pMusic.addView(mr0, a.lpMatch())
+        a.button("−0,5s", mr0, weight = true) { slip(-500) }
+        a.button("−0,1s", mr0, weight = true) { slip(-100) }
+        a.button("+0,1s", mr0, weight = true) { slip(100) }
+        a.button("+0,5s", mr0, weight = true) { slip(500) }
+        val mr1 = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        pMusic.addView(mr1, a.lpMatch())
+        a.button("✂ Música para no cursor", mr1, weight = true) { val o = cursorOut(); musicEnd = if (o >= outDur() - 150 || o < 500) 0 else o; afterEdit("music") }
+        a.button("Até o fim", mr1, weight = true) { musicEnd = 0; afterEdit("music") }
         updateMusicLabel()
 
         // legenda + exportar
-        a.text("Legenda do post", 12f, a.MUTED, parent = ce)
+        a.text("Legenda do post", 12f, a.MUTED, parent = pExport)
         etCap = EditText(a).apply {
             setTextColor(a.FG); setHintTextColor(a.MUTED); textSize = 15f; hint = "Legenda que vai no Instagram"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
@@ -360,29 +505,31 @@ class InstaEditor(private val a: MainActivity) {
             background = GradientDrawable().apply { setColor(a.BG); cornerRadius = a.dp(10).toFloat(); setStroke(a.dp(1), a.LINE) }
             setPadding(a.dp(12), a.dp(10), a.dp(12), a.dp(10))
         }
-        ce.addView(etCap, a.lpMatch())
+        pExport.addView(etCap, a.lpMatch())
         etCap.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, x: Int, y: Int, z: Int) {}
             override fun onTextChanged(s: CharSequence?, x: Int, y: Int, z: Int) {}
             override fun afterTextChanged(s: Editable?) { scheduleSave() }
         })
-        a.button("🎲 Legenda aleatória", ce) { etCap.setText(Captions.randomCaption(a)) }
-        a.text("Qualidade", 12f, a.MUTED, parent = ce)
-        redraws += a.chips(ce, listOf("1080p", "2K", "4K"), { quality() }) {
+        a.button("🎲 Legenda aleatória", pExport) { etCap.setText(Captions.randomCaption(a)) }
+        a.text("Qualidade", 12f, a.MUTED, parent = pExport)
+        redraws += a.chips(pExport, listOf("1080p", "2K", "4K"), { quality() }) {
             Store.prefs(a).edit().putString("quality", it).apply(); btnExport.text = "Exportar $it"; qNote()
         }
-        tvQ = a.text("", 12f, a.MUTED, parent = ce)
-        val gal = a.button("", ce) { }
+        tvQ = a.text("", 12f, a.MUTED, parent = pExport)
+        val gal = a.button("", pExport) { }
         fun galT() { gal.text = if (Store.prefs(a).getBoolean("save_gallery", false)) "Também salvar cópia na galeria: ligado" else "Também salvar cópia na galeria: desligado" }
         galT()
         gal.setOnClickListener { Store.prefs(a).edit().putBoolean("save_gallery", !Store.prefs(a).getBoolean("save_gallery", false)).apply(); galT() }
-        btnExport = a.button("Exportar ${quality()}", ce, primary = true) { export() }
+        btnExport = a.button("Exportar ${quality()}", pExport, primary = true) { export() }
         qNote()
-        tvProg = a.text("", 13f, a.OK, parent = ce)
+        tvProg = a.text("", 13f, a.OK, parent = pExport)
         afterBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
-        ce.addView(afterBox, a.lpMatch())
+        pExport.addView(afterBox, a.lpMatch())
         a.button("Postar no Instagram ↗", afterBox, primary = true) { lastExportId?.let { post(it, etCap.text.toString()) } }
         a.button("Voltar pra edição", afterBox) { val s0 = src; if (s0 != null && !isPhoto) showEditVideo(s0) else { showImagePreview(); drawPreview() } }
+
+        showPanel(Store.prefs(a).getInt("ed_panel", 0))
 
         // ---------- músicas
         val cm = a.card("Minhas músicas")
@@ -545,7 +692,8 @@ class InstaEditor(private val a: MainActivity) {
         val cs = p.optLong("cutStart"); val ce = p.optLong("cutEnd")
         val dur = if (photo) 0L else VideoExport.durationMs(f)
         val job = VideoExport.Job(Uri.fromFile(f), photo, secs, txt, st, mus, mt, q,
-            if (photo) 0 else cs, if (photo || ce <= 0 || ce >= dur) 0 else ce, ms)
+            if (photo) 0 else cs, if (photo || ce <= 0 || ce >= dur) 0 else ce, ms,
+            if (photo) 0 else p.optLong("textStart"), if (photo) 0 else p.optLong("textEnd"), if (photo || m != null) 0 else p.optLong("musicEnd"))
         tvMany.setTextColor(a.MUTED); tvMany.text = "Exportando ${i + 1} de ${ids.size}…"
         VideoExport.export(a, job, { pr -> tvMany.text = "Exportando ${i + 1} de ${ids.size}… $pr%" }) { out, _ ->
             if (out == null) { exportMany(ids, m, i + 1, ok); return@export }
@@ -573,6 +721,7 @@ class InstaEditor(private val a: MainActivity) {
                 .put("pos", style.pos).put("font", style.font).put("align", style.align))
             it.put("music", music?.path ?: ""); it.put("mute", mute); it.put("updated", System.currentTimeMillis())
             it.put("cutStart", cutStart); it.put("cutEnd", cutEnd); it.put("musicStart", musicStart)
+            it.put("textStart", textStart); it.put("textEnd", textEnd); it.put("musicEnd", musicEnd)
         }
         base?.let { b -> Projects.saveThumb(a, id, VideoExport.preview(b, etText.text.toString(), style)) }
         ui.removeCallbacks(projRefresh); ui.postDelayed(projRefresh, 800)
@@ -583,6 +732,7 @@ class InstaEditor(private val a: MainActivity) {
         saveNow()
         projId = null; src = null; base = null; isPhoto = false; music = null; mute = false; lastExportId = null
         cutStart = 0; cutEnd = 0; durMs = 0; musicStart = 0; cutRow.visibility = View.GONE
+        textStart = 0; textEnd = 0; musicEnd = 0; timeline.thumbs = emptyList(); syncTimeline()
         etText.setText(""); etCap.setText(""); durRow.visibility = View.GONE
         tvSrc.setTextColor(a.MUTED); tvSrc.text = "Escolha um vídeo ou uma foto pra começar."
         updateMusicLabel(); showImagePreview(); drawPreview(); renderProjects()
@@ -604,6 +754,8 @@ class InstaEditor(private val a: MainActivity) {
         music = o.optString("music").takeIf { it.isNotEmpty() }?.let { File(it) }?.takeIf { it.exists() }
         mute = o.optBoolean("mute")
         cutStart = o.optLong("cutStart"); cutEnd = o.optLong("cutEnd"); musicStart = o.optLong("musicStart")
+        textStart = o.optLong("textStart"); textEnd = o.optLong("textEnd"); musicEnd = o.optLong("musicEnd")
+        timeline.thumbs = emptyList()
         seek.progress = style.size - 20
         redraws.forEach { it() }
         durRow.visibility = if (photo) View.VISIBLE else View.GONE
@@ -671,6 +823,7 @@ class InstaEditor(private val a: MainActivity) {
     private fun showImagePreview() {
         editMode = false; bgmStop(); ui.removeCallbacks(loopTick); mp = null
         if (::textLayer.isInitialized) { textLayer.visibility = View.GONE; playRow.visibility = View.GONE }
+        if (::timeline.isInitialized) { timeline.visibility = View.GONE; tlHint.visibility = View.GONE }
         video.stopPlayback(); video.visibility = View.GONE; preview.visibility = View.VISIBLE
         afterBox.visibility = View.GONE
     }
@@ -781,6 +934,7 @@ class InstaEditor(private val a: MainActivity) {
                     if (cutStart >= cutEnd) cutStart = 0
                     syncCut()
                     showEditVideo(s)
+                    loadThumbs(s, d)
                 } else drawPreview()
             }
         }.start()
@@ -869,11 +1023,13 @@ class InstaEditor(private val a: MainActivity) {
 
     private fun musicLabel2() {
         if (!::tvMusicStart.isInitialized) return
-        tvMusicStart.text = if (music != null) "A música começa em ${t(musicStart)}" else ""
+        tvMusicStart.text = if (music != null) "Toca a partir de ${t(musicStart)} da música" + (if (musicEnd > 0) " · para em ${t(musicEnd)} do vídeo" else " · até o fim do vídeo") else ""
+        if (::timeline.isInitialized) syncTimeline()
     }
 
     private fun updateMusicLabel() {
         musicLabel2(); applyVolume()
+        if (::timeline.isInitialized) refreshMusicMeta()
         tvMusic.text = when {
             music != null -> "♪ " + VideoExport.nice(music!!)
             mute -> "Sem som"
@@ -890,7 +1046,7 @@ class InstaEditor(private val a: MainActivity) {
                 0 -> { music = null; mute = false }
                 1 -> { music = null; mute = true }
                 2 -> open("audio/*", REQ_MUSIC)
-                else -> { music = list[i - 3]; mute = false; musicStart = 0 }
+                else -> { music = list[i - 3]; mute = false; musicStart = 0; musicEnd = 0 }
             }
             updateMusicLabel(); scheduleSave()
         }.show()
@@ -987,7 +1143,8 @@ class InstaEditor(private val a: MainActivity) {
         tvProg.setTextColor(a.MUTED); tvProg.text = "Exportando ${quality()}…"
         a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val job = VideoExport.Job(s, isPhoto, photoSecs, etText.text.toString(), style.copy(), music, mute, quality(),
-            if (isPhoto) 0 else cutStart, if (isPhoto || cutEnd >= durMs) 0 else cutEnd, musicStart)
+            if (isPhoto) 0 else cutStart, if (isPhoto || cutEnd >= durMs) 0 else cutEnd, musicStart,
+            if (isPhoto) 0 else textStart, if (isPhoto) 0 else textEnd, if (isPhoto) 0 else musicEnd)
         val qn = quality()
         VideoExport.export(a, job, { p -> tvProg.text = "Exportando $qn… $p%" }) { f, err ->
             a.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
