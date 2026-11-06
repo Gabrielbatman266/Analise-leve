@@ -562,8 +562,20 @@ class MainActivity : Activity() {
             } + (if (usos > 1) " · ${usos}x" else "") + (if (o.optBoolean("nova")) " · nova do Flow" else "")
             text(label, 13f, if (st == "postada") OK else ACCENT, parent = side, bold = true)
             o.optString("aviso").takeIf { it.isNotEmpty() }?.let { text(it, 12f, MUTED, parent = side) }
+            if (st == "postada") {
+                text("Legenda: " + PostQueue.captionOf(o).ifEmpty { "(nenhuma)" }, 13f, FG, parent = side)
+                button("🎲 Postar de novo com legenda aleatória ↗", side) {
+                    val cur = o.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
+                    val cap = Captions.randomCaption(this, listOf(PostQueue.captionOf(o)))
+                    PostQueue.update(this, id) { it2 ->
+                        val n = org.json.JSONArray().put(cap); cur.filter { it != cap }.forEach { n.put(it) }
+                        it2.put("legendas", n); it2.put("escolhida", cap)
+                    }
+                    startActivity(Intent(this, PostActivity::class.java).putExtra("id", id).putExtra("caption", cap))
+                }
+            }
             if (st != "gerando") {
-                val post = button(if (st == "postada") "Postar de novo ↗" else "Postar ↗", side, primary = true) { }
+                val post = button(if (st == "postada") "Postar de novo (mesma legenda) ↗" else "Postar ↗", side, primary = true) { }
                 post.setOnClickListener {
                     val cap = PostQueue.captionOf(o)
                     startActivity(Intent(this, PostActivity::class.java).putExtra("id", id).putExtra("caption", cap))
@@ -576,7 +588,7 @@ class MainActivity : Activity() {
                 PostQueue.update(this, id) { it.put("status", "gerando") }
                 LeveService.send(this, LeveService.ACT_ANALYZE); refresh()
             }
-            if (st != "postada") button("🎲 Aleatória", row, weight = true) {
+            button("🎲 Aleatória", row, weight = true) {
                 val cur = o.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
                 val cap = Captions.randomCaption(this, cur)
                 PostQueue.update(this, id) { it2 ->
