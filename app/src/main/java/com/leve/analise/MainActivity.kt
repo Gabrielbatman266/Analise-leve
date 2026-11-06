@@ -616,6 +616,7 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 23 && ::insta.isInitialized && FolderScan.hasVideoPerm(this)) { insta.flowPicker(false); return }
         if (requestCode == 21) {
             if (FolderScan.hasPerm(this)) askFolder()
             else toast("Sem permissão de ver as fotos não dá pra vigiar a pasta")

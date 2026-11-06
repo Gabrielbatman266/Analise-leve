@@ -234,7 +234,7 @@ class InstaEditor(private val a: MainActivity) {
         editorCard = ce
         val pick = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
         ce.addView(pick, a.lpMatch())
-        a.button("🎬 Meu vídeo", pick, primary = true, weight = true) { open("video/*", REQ_VIDEO) }
+        a.button("🎬 Meu vídeo", pick, primary = true, weight = true) { chooseMyVideo() }
         a.button("🖼 Foto → vídeo", pick, weight = true) { open("image/*", REQ_PHOTO) }
         tvSrc = a.text("Escolha um vídeo ou uma foto pra começar.", 13f, a.MUTED, parent = ce)
         a.text("Modelos (toque pra aplicar, segure pra apagar)", 12f, a.MUTED, parent = ce)
@@ -735,20 +735,7 @@ class InstaEditor(private val a: MainActivity) {
         if (res != android.app.Activity.RESULT_OK) return true
         try { a.contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (e: Exception) { }
         when (req) {
-            REQ_VIDEO -> {
-                tvSrc.setTextColor(a.MUTED); tvSrc.text = "Salvando o vídeo no projeto…"
-                Thread {
-                    val pid = Projects.create(a, false)
-                    val f = Projects.srcFile(a, pid, false)
-                    val ok = try { a.contentResolver.openInputStream(u)?.use { i -> f.outputStream().use { i.copyTo(it) } }; f.length() > 0 } catch (e: Exception) { false }
-                    ui.post {
-                        if (!ok) { Projects.remove(a, pid); a.toast("Não consegui abrir esse vídeo"); return@post }
-                        projId = pid; isPhoto = false; src = Uri.fromFile(f); durRow.visibility = View.GONE
-                        cutStart = 0; cutEnd = 0
-                        loadBase("Vídeo salvo no projeto"); saveNow(); renderProjects()
-                    }
-                }.start()
-            }
+            REQ_VIDEO -> loadVideoUri(u)
             REQ_PHOTO -> {
                 tvSrc.text = "Preparando a foto…"
                 Thread {
@@ -797,6 +784,85 @@ class InstaEditor(private val a: MainActivity) {
                 } else drawPreview()
             }
         }.start()
+    }
+
+    /** Copia o vídeo escolhido pro app e abre como esboço novo no editor. */
+    private fun loadVideoUri(u: Uri) {
+        tvSrc.setTextColor(a.MUTED); tvSrc.text = "Salvando o vídeo no projeto…"
+        Thread {
+            val pid = Projects.create(a, false)
+            val f = Projects.srcFile(a, pid, false)
+            val ok = try { a.contentResolver.openInputStream(u)?.use { i -> f.outputStream().use { i.copyTo(it) } }; f.length() > 0 } catch (e: Exception) { false }
+            if (ok) VideoExport.baseFrame(a, Uri.fromFile(f), false)?.let { Projects.saveThumb(a, pid, it) }
+            ui.post {
+                if (!ok) { Projects.remove(a, pid); a.toast("Não consegui abrir esse vídeo"); return@post }
+                projId = pid; isPhoto = false; src = Uri.fromFile(f); durRow.visibility = View.GONE
+                cutStart = 0; cutEnd = 0
+                loadBase("Vídeo salvo no projeto"); saveNow(); renderProjects()
+            }
+        }.start()
+    }
+
+    // ------------------------------------------------------------------ vídeos do Flow
+
+    /** "Meu vídeo": Vídeos do Flow (lista com miniaturas), Galeria ou Arquivos. */
+    private fun chooseMyVideo() {
+        AlertDialog.Builder(a).setTitle("Escolher vídeo")
+            .setItems(arrayOf("✨  Vídeos do Flow", "🖼  Galeria", "📁  Arquivos e pastas")) { _, i ->
+                when (i) {
+                    0 -> flowPicker(false)
+                    1 -> openGallery("video/*", REQ_VIDEO, false)
+                    else -> openFiles("video/*", REQ_VIDEO, false)
+                }
+            }.show()
+    }
+
+    fun flowPicker(all: Boolean) {
+        if (!FolderScan.hasVideoPerm(a)) {
+            a.toast("Permita ver os vídeos e toque de novo")
+            a.requestPermissions(FolderScan.perms, 23); return
+        }
+        val dlg = AlertDialog.Builder(a).setTitle(if (all) "Todos os vídeos" else "Vídeos do Flow").setMessage("Carregando…").show()
+        Thread {
+            val list = FolderScan.flowVideos(a, all)
+            val thumbs = list.take(60).map { v ->
+                try {
+                    if (android.os.Build.VERSION.SDK_INT >= 29) a.contentResolver.loadThumbnail(v.uri, android.util.Size(180, 320), null) else null
+                } catch (e: Exception) { null }
+            }
+            ui.post {
+                try { dlg.dismiss() } catch (e: Exception) { }
+                showFlowList(list.take(60), thumbs, all)
+            }
+        }.start()
+    }
+
+    private fun showFlowList(list: List<FolderScan.Vid>, thumbs: List<Bitmap?>, all: Boolean) {
+        val scroll = android.widget.ScrollView(a)
+        val box = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(a.dp(12), a.dp(8), a.dp(12), a.dp(8)) }
+        scroll.addView(box)
+        var dialog: AlertDialog? = null
+        if (list.isEmpty()) a.text(if (all) "Nenhum vídeo no celular." else "Não achei vídeos do Flow na pasta ${FolderScan.bucket(a) ?: "Download"}.", 14f, a.FG, parent = box)
+        val fmt = java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale("pt", "BR"))
+        list.forEachIndexed { i, v ->
+            val row = LinearLayout(a).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(a.dp(6), a.dp(6), a.dp(6), a.dp(6))
+                background = GradientDrawable().apply { setColor(a.CARD); cornerRadius = a.dp(10).toFloat(); setStroke(a.dp(1), a.LINE) }
+                setOnClickListener { dialog?.dismiss(); loadVideoUri(v.uri) }
+            }
+            box.addView(row, a.lpMatch().apply { topMargin = a.dp(6) })
+            row.addView(ImageView(a).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF000000.toInt()); thumbs.getOrNull(i)?.let { setImageBitmap(it) } },
+                LinearLayout.LayoutParams(a.dp(54), a.dp(96)).apply { rightMargin = a.dp(10) })
+            val side = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+            row.addView(side, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val big = maxOf(v.w, v.h)
+            val q = when { big >= 3000 -> "4K"; big >= 1800 -> "2K"; big >= 1200 -> "1080p"; big > 0 -> "${minOf(v.w, v.h)}p"; else -> "" }
+            a.text(fmt.format(java.util.Date(v.added * 1000)) + "  ·  " + t(v.durMs) + (if (q.isNotEmpty()) "  ·  $q" else ""), 13f, a.FG, parent = side, bold = true)
+            a.text(v.name, 11f, a.MUTED, parent = side)
+        }
+        val b = AlertDialog.Builder(a).setView(scroll).setNegativeButton("Fechar", null)
+        if (!all) b.setNeutralButton("Ver todos os vídeos") { _, _ -> flowPicker(true) }
+        dialog = b.show()
     }
 
     // ------------------------------------------------------------------ música

@@ -45,6 +45,30 @@ object FolderScan {
     fun setVideosOn(c: Context, on: Boolean) = p(c).edit().putBoolean("watch_videos", on).apply()
     private val FLOW_VID = Regex("^(\\d{5,}_\\d{12,}|.*flow.*)\\.(mp4|mov|webm|m4v)$", RegexOption.IGNORE_CASE)
 
+    data class Vid(val uri: Uri, val name: String, val added: Long, val durMs: Long, val w: Int, val h: Int)
+
+    /** Vídeos do Flow no celular (pasta vigiada, ou Download), mais novos primeiro. */
+    fun flowVideos(c: Context, all: Boolean = false): List<Vid> {
+        if (!hasVideoPerm(c) || Build.VERSION.SDK_INT < 29) return emptyList()
+        val b = bucket(c) ?: "Download"
+        val out = ArrayList<Vid>()
+        try {
+            c.contentResolver.query(MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Video.Media._ID, MediaStore.Video.Media.DISPLAY_NAME, MediaStore.Video.Media.DATE_ADDED,
+                    MediaStore.Video.Media.DURATION, MediaStore.Video.Media.WIDTH, MediaStore.Video.Media.HEIGHT),
+                if (all) null else MediaStore.Video.Media.BUCKET_DISPLAY_NAME + "=?", if (all) null else arrayOf(b),
+                MediaStore.Video.Media.DATE_ADDED + " DESC")?.use { cur ->
+                while (cur.moveToNext() && out.size < 200) {
+                    val name = cur.getString(1) ?: ""
+                    if (!all && !FLOW_VID.matches(name)) continue
+                    out.add(Vid(ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, cur.getLong(0)), name,
+                        cur.getLong(2), cur.getLong(3), cur.getInt(4), cur.getInt(5)))
+                }
+            }
+        } catch (e: Exception) { }
+        return out
+    }
+
     /** Vídeos novos do Flow viram esboços (projetos) no editor do Instagram. Retorna quantos. */
     @Synchronized
     fun scanVideos(c: Context, all: Boolean = false): Int {
