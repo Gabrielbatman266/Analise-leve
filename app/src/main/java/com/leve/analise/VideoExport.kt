@@ -67,6 +67,19 @@ data class TextStyle(
     }
 }
 
+/** Grava o MP4 sem localização, data de criação nem outros dados do original (só mantém a rotação). */
+class CleanMuxerFactory(private val d: androidx.media3.transformer.Muxer.Factory = androidx.media3.transformer.DefaultMuxer.Factory()) :
+    androidx.media3.transformer.Muxer.Factory by d {
+    override fun create(path: String): androidx.media3.transformer.Muxer {
+        val m = d.create(path)
+        return object : androidx.media3.transformer.Muxer by m {
+            override fun addMetadataEntry(metadataEntry: androidx.media3.common.Metadata.Entry) {
+                if (metadataEntry.javaClass.simpleName.contains("Orientation")) m.addMetadataEntry(metadataEntry)
+            }
+        }
+    }
+}
+
 /** Edição e exportação dos SEUS vídeos e fotos: 1080x1920, texto, música de fundo, biblioteca. */
 object VideoExport {
     const val INSTAGRAM = "com.instagram.android"
@@ -220,6 +233,7 @@ object VideoExport {
             val t = Transformer.Builder(c)
                 .setVideoMimeType(qq.mime).setAudioMimeType(MimeTypes.AUDIO_AAC)
                 .setEncoderFactory(enc)
+                .setMuxerFactory(CleanMuxerFactory())
                 .addListener(object : Transformer.Listener {
                     override fun onCompleted(composition: Composition, exportResult: ExportResult) { current = null; onDone(out, null) }
                     override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
@@ -230,6 +244,51 @@ object VideoExport {
             t.start(comp, out.path)
             pollProgress(onProgress)
         } catch (e: Exception) { onDone(null, e.message) }
+    }
+
+    /** Cópia nova de um vídeo já pronto: mesma imagem e som (sem reprocessar), sem os dados do original. */
+    fun cleanCopy(c: Context, src: Uri, onProgress: (Int) -> Unit, onDone: (File?, String?) -> Unit) {
+        val out = File(c.cacheDir, "imp_${System.currentTimeMillis()}.mp4")
+        try {
+            val t = Transformer.Builder(c)
+                .setMuxerFactory(CleanMuxerFactory())
+                .addListener(object : Transformer.Listener {
+                    override fun onCompleted(composition: Composition, exportResult: ExportResult) { current = null; onDone(out, null) }
+                    override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
+                        current = null; out.delete(); onDone(null, exportException.message ?: "Erro ao importar")
+                    }
+                }).build()
+            current = t
+            t.start(EditedMediaItem.Builder(MediaItem.fromUri(src)).build(), out.path)
+            pollProgress(onProgress)
+        } catch (e: Exception) { onDone(null, e.message) }
+    }
+
+    // ---------- rodada aleatória: cada vídeo sai uma vez; quando todos saem, recomeça
+    private fun cycleSet(c: Context): MutableSet<String> = HashSet(Store.prefs(c).getStringSet("vid_cycle", emptySet()) ?: emptySet())
+
+    fun cycleNext(c: Context): String? {
+        val ids = library(c).map { it.optString("id") }.filter { File(videoDir(c), "$it.mp4").exists() }
+        if (ids.isEmpty()) return null
+        var pool = ids.filter { it !in cycleSet(c) }
+        if (pool.isEmpty()) { Store.prefs(c).edit().remove("vid_cycle").apply(); pool = ids }
+        val last = Store.prefs(c).getString("vid_last", "")
+        return (pool.filter { it != last }.ifEmpty { pool }).random()
+    }
+
+    fun markPosted(c: Context, id: String) {
+        val ids = library(c).map { it.optString("id") }.toSet()
+        val s = cycleSet(c); s.add(id); s.retainAll(ids)
+        val e = Store.prefs(c).edit().putString("vid_last", id)
+        if (ids.isNotEmpty() && s.containsAll(ids)) { e.remove("vid_cycle"); e.putInt("vid_rounds", Store.prefs(c).getInt("vid_rounds", 0) + 1) }
+        else e.putStringSet("vid_cycle", s)
+        e.apply()
+    }
+
+    /** (postados nesta rodada, total, rodadas completas) */
+    fun cycleStatus(c: Context): Triple<Int, Int, Int> {
+        val ids = library(c).map { it.optString("id") }.toSet()
+        return Triple(cycleSet(c).count { it in ids }, ids.size, Store.prefs(c).getInt("vid_rounds", 0))
     }
 
     /** Só o áudio de um vídeo seu, guardado na biblioteca de músicas. */
@@ -301,7 +360,7 @@ object VideoExport {
     private fun saveLib(c: Context, l: List<JSONObject>) { val a = JSONArray(); l.forEach { a.put(it) }; libFile(c).writeText(a.toString()) }
 
     /** Guarda o vídeo pronto no app (com miniatura e legenda) e uma cópia na galeria. */
-    fun addToLibrary(c: Context, tmp: File, caption: String): String {
+    fun addToLibrary(c: Context, tmp: File, caption: String, imported: Boolean = false): String {
         val id = "v" + System.currentTimeMillis().toString(36)
         val f = File(videoDir(c), "$id.mp4")
         tmp.copyTo(f, true); tmp.delete()
@@ -315,7 +374,7 @@ object VideoExport {
         } catch (e: Exception) { }
         if (Store.prefs(c).getBoolean("save_gallery", false)) saveToGallery(c, f, false)
         val l = library(c)
-        l.add(0, JSONObject().put("id", id).put("legenda", caption).put("at", System.currentTimeMillis()).put("posts", 0))
+        l.add(0, JSONObject().put("id", id).put("legenda", caption).put("at", System.currentTimeMillis()).put("posts", 0).put("importado", imported))
         saveLib(c, l)
         return id
     }

@@ -32,6 +32,7 @@ class InstaEditor(private val a: MainActivity) {
         const val REQ_PHOTO = 32
         const val REQ_MUSIC = 33
         const val REQ_MULTI = 34
+        const val REQ_IMPORT = 35
     }
 
     private var src: Uri? = null
@@ -169,6 +170,39 @@ class InstaEditor(private val a: MainActivity) {
     }
     private lateinit var tvQ: TextView
     private lateinit var modelBox: LinearLayout
+    private lateinit var tvCycle: TextView
+    private lateinit var tvImport: TextView
+
+    private fun updateCycle() {
+        if (!::tvCycle.isInitialized) return
+        val (done, total, rounds) = VideoExport.cycleStatus(a)
+        tvCycle.text = if (total == 0) "" else "Rodada: $done de $total postados" + (if (rounds > 0) " · $rounds rodada(s) completa(s)" else "") + ". Quando todos saírem, recomeça sozinho."
+    }
+
+    /** Sorteia um vídeo que ainda não saiu nesta rodada e uma legenda do banco. */
+    private fun postRandomVideo() {
+        val id = VideoExport.cycleNext(a) ?: run { a.toast("Nenhum vídeo pronto ainda. Exporte ou importe alguns."); return }
+        val old = VideoExport.library(a).firstOrNull { it.optString("id") == id }?.optString("legenda").orEmpty()
+        post(id, Captions.randomCaption(a, listOf(old)))
+    }
+
+    /** Importa vários vídeos prontos, um depois do outro, cada um vira arquivo novo sem metadados. */
+    private fun importMany(list: List<Uri>, i: Int = 0, ok: Int = 0) {
+        if (i >= list.size) {
+            a.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            tvImport.setTextColor(a.OK); tvImport.text = "$ok de ${list.size} vídeos importados, sem metadados."
+            renderLibrary(); return
+        }
+        if (i == 0) a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        tvImport.setTextColor(a.MUTED); tvImport.text = "Importando ${i + 1} de ${list.size}…"
+        VideoExport.cleanCopy(a, list[i], { p -> tvImport.text = "Importando ${i + 1} de ${list.size}… $p%" }) { f, _ ->
+            if (f == null) { importMany(list, i + 1, ok); return@cleanCopy }
+            Thread {
+                VideoExport.addToLibrary(a, f, "", true)
+                ui.post { renderLibrary(); importMany(list, i + 1, ok + 1) }
+            }.start()
+        }
+    }
     private lateinit var tvMany: TextView
     private fun quality() = Store.prefs(a).getString("quality", "1080p") ?: "1080p"
     private fun qNote() {
@@ -399,6 +433,14 @@ class InstaEditor(private val a: MainActivity) {
         // ---------- biblioteca
         val cl = a.card("Vídeos prontos")
         a.text("Todo vídeo exportado fica guardado aqui no app. Postar ↗ manda direto pro Instagram, sem baixar nada e sem encher a galeria.", 13f, a.MUTED, parent = cl)
+        a.button("🎲 Postar vídeo aleatório", cl, primary = true) { postRandomVideo() }
+        tvCycle = a.text("", 13f, a.OK, parent = cl)
+        a.button("＋ Importar vídeos que já tenho (sem metadados)", cl) {
+            val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { type = "video/*"; addCategory(Intent.CATEGORY_OPENABLE); putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true) }
+            @Suppress("DEPRECATION")
+            a.startActivityForResult(i, REQ_IMPORT)
+        }
+        tvImport = a.text("", 13f, a.OK, parent = cl)
         libBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         cl.addView(libBox, a.lpMatch())
         renderLibrary()
@@ -647,7 +689,16 @@ class InstaEditor(private val a: MainActivity) {
 
     /** Devolve true se o resultado era deste editor. */
     fun onResult(req: Int, res: Int, data: Intent?): Boolean {
-        if (req != REQ_VIDEO && req != REQ_PHOTO && req != REQ_MUSIC && req != REQ_MULTI) return false
+        if (req != REQ_VIDEO && req != REQ_PHOTO && req != REQ_MUSIC && req != REQ_MULTI && req != REQ_IMPORT) return false
+        if (req == REQ_IMPORT) {
+            if (res != android.app.Activity.RESULT_OK || data == null) return true
+            val uris = ArrayList<Uri>()
+            data.clipData?.let { cd -> for (k in 0 until cd.itemCount) uris.add(cd.getItemAt(k).uri) }
+            if (uris.isEmpty()) data.data?.let { uris.add(it) }
+            if (VideoExport.busy()) { a.toast("Espere terminar o que está rodando"); return true }
+            if (uris.isNotEmpty()) importMany(uris)
+            return true
+        }
         if (req == REQ_MULTI) {
             if (res != android.app.Activity.RESULT_OK || data == null) return true
             val uris = ArrayList<Uri>()
@@ -883,6 +934,7 @@ class InstaEditor(private val a: MainActivity) {
         val f = File(VideoExport.videoDir(a), "$id.mp4")
         if (!f.exists()) { a.toast("Esse vídeo não está mais no app"); return }
         VideoExport.updateLib(a, id) { it.put("legenda", cap); it.put("posts", it.optInt("posts") + 1); it.put("lastPost", System.currentTimeMillis()) }
+        VideoExport.markPosted(a, id)
         CaptionDB.used(a, cap)
         renderLibrary()
         a.toast(if (cap.isEmpty()) "Abrindo o Instagram" else "Legenda copiada: no Instagram é só colar e postar")
@@ -890,9 +942,10 @@ class InstaEditor(private val a: MainActivity) {
     }
 
     private fun renderLibrary() {
+        updateCycle()
         libBox.removeAllViews()
         val l = VideoExport.library(a)
-        if (l.isEmpty()) { a.text("Nenhum vídeo exportado ainda.", 12f, a.MUTED, parent = libBox); return }
+        if (l.isEmpty()) { a.text("Nenhum vídeo pronto ainda. Exporte um esboço ou importe os que você já tem.", 12f, a.MUTED, parent = libBox); return }
         l.take(30).forEach { o ->
             val id = o.optString("id")
             val box = LinearLayout(a).apply {
