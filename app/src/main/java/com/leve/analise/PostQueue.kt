@@ -74,8 +74,28 @@ object PostQueue {
     }
 
     fun remove(c: Context, id: String) = synchronized(lock) {
+        val o = load(c).firstOrNull { it.optString("id") == id }
+        o?.optString("pasta")?.takeIf { it.isNotEmpty() }?.let { try { c.contentResolver.delete(Uri.parse(it), null, null) } catch (e: Exception) { } }
         save(c, load(c).filter { it.optString("id") != id })
         imageFile(c, id).delete()
+    }
+
+    /** Cópia visível na galeria, numa pasta só das fotos do Flow (Pictures/PostLeve Flow). */
+    fun copyToFolder(c: Context, id: String) {
+        if (Build.VERSION.SDK_INT < 29) return
+        try {
+            val cr = c.contentResolver
+            val cv = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, "flow_$id.jpg")
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/PostLeve Flow")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+            val uri = cr.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: return
+            cr.openOutputStream(uri)?.use { out -> imageFile(c, id).inputStream().use { it.copyTo(out) } }
+            cr.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
+            update(c, id) { it.put("pasta", uri.toString()) }
+        } catch (e: Exception) { }
     }
 
     fun get(c: Context, id: String) = load(c).firstOrNull { it.optString("id") == id }

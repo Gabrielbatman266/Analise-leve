@@ -35,6 +35,7 @@ class MainActivity : Activity() {
     private val REQ_PROJ = 11
     private val REQ_GALLERY = 12
     private val REQ_POSTS = 13
+    private val REQ_DEL = 14
 
     // paleta AMOLED
     private val BG = 0xFF000000.toInt()
@@ -63,6 +64,8 @@ class MainActivity : Activity() {
     private lateinit var btnFolder: Button
     private lateinit var btn2k: Button
     private lateinit var btnExisting: Button
+    private lateinit var btnFlowNames: Button
+    private lateinit var btnCleanDl: Button
     private val thumbs = HashMap<String, Bitmap>()
     private lateinit var btnBubble: Button
     private lateinit var btnClaude: Button
@@ -184,8 +187,10 @@ class MainActivity : Activity() {
         text("Pasta automática (ex.: Flow)", 12f, MUTED, parent = cp)
         btnFolder = button("", cp) { askFolder() }
         btn2k = button("", cp) { FolderScan.setOnly2k(this, !FolderScan.only2k(this)); updateFolderUi() }
+        btnFlowNames = button("", cp) { FolderScan.setFlowNames(this, !FolderScan.flowNames(this)); updateFolderUi() }
         btnExisting = button("", cp) { importExisting() }
-        text("Toda imagem nova que cair nessa pasta entra sozinha na fila, sem metadados, e ganha legendas. Com \"Só 2K\" ligado, ele ignora a versão menor e pega só a do upscale.", 12f, MUTED, parent = cp)
+        btnCleanDl = button("", cp) { cleanDownloads() }
+        text("Escolha a pasta Download. Cada foto do Flow que cair lá entra sozinha na fila, sem metadados, e vai pra pasta \"PostLeve Flow\" da galeria. Depois você apaga as do Download com um toque. Foto que não era pra estar: toque em Apagar nela, que some da fila e da pasta.", 12f, MUTED, parent = cp)
         updateFolderUi()
 
         postList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -433,12 +438,34 @@ class MainActivity : Activity() {
         btnFolder.text = if (b == null) "Escolher pasta pra vigiar" else "Vigiando: $b (trocar)"
         btn2k.text = if (FolderScan.only2k(this)) "Só as em 2K (upscale): ligado" else "Só as em 2K (upscale): desligado"
         btn2k.visibility = if (b == null) View.GONE else View.VISIBLE
+        btnFlowNames.text = if (FolderScan.flowNames(this)) "Só fotos do Flow (nome com números): ligado" else "Só fotos do Flow (nome com números): desligado"
+        btnFlowNames.visibility = if (b == null) View.GONE else View.VISIBLE
         btnExisting.visibility = View.GONE
+        btnCleanDl.visibility = View.GONE
+        if (Build.VERSION.SDK_INT >= 30) Thread {
+            val n = FolderScan.originals(this).size
+            ui.post { btnCleanDl.text = "Apagar do Download as $n já importadas"; btnCleanDl.visibility = if (n > 0) View.VISIBLE else View.GONE }
+        }.start()
         if (b != null && FolderScan.hasPerm(this)) Thread {
             val n = FolderScan.countExisting(this)
             ui.post {
                 btnExisting.text = "Importar as $n que já estão na pasta"
                 btnExisting.visibility = if (n > 0) View.VISIBLE else View.GONE
+            }
+        }.start()
+    }
+
+    private fun cleanDownloads() {
+        if (Build.VERSION.SDK_INT < 30) return
+        Thread {
+            val l = FolderScan.originals(this)
+            ui.post {
+                if (l.isEmpty()) { FolderScan.clearOriginals(this); updateFolderUi(); return@post }
+                try {
+                    val pi = android.provider.MediaStore.createDeleteRequest(contentResolver, l)
+                    @Suppress("DEPRECATION")
+                    startIntentSenderForResult(pi.intentSender, REQ_DEL, null, 0, 0, 0)
+                } catch (e: Exception) { toast("Não consegui pedir pra apagar: ${e.message}") }
             }
         }.start()
     }
@@ -532,7 +559,7 @@ class MainActivity : Activity() {
                 "gerando" -> "Gerando legendas…"
                 "postada" -> "✓ Postada " + android.text.format.DateFormat.format("dd/MM HH:mm", o.optLong("postedAt"))
                 else -> if (id == next) "Próxima" else "Pronta"
-            } + if (usos > 1) " · ${usos}x" else ""
+            } + (if (usos > 1) " · ${usos}x" else "") + (if (o.optBoolean("nova")) " · nova do Flow" else "")
             text(label, 13f, if (st == "postada") OK else ACCENT, parent = side, bold = true)
             o.optString("aviso").takeIf { it.isNotEmpty() }?.let { text(it, 12f, MUTED, parent = side) }
             if (st != "gerando") {
@@ -649,6 +676,10 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_DEL) {
+            if (resultCode == RESULT_OK) { FolderScan.clearOriginals(this); toast("Apagadas do Download") }
+            updateFolderUi(); return
+        }
         if (resultCode != RESULT_OK || data == null) return
         when (requestCode) {
             REQ_PROJ -> {

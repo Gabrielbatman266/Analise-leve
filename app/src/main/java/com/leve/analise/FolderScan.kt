@@ -30,7 +30,11 @@ object FolderScan {
 
     private fun p(c: Context) = Store.prefs(c)
     fun bucket(c: Context): String? = p(c).getString("watch_bucket", null)
-    fun only2k(c: Context) = p(c).getBoolean("watch_2k", true)
+    fun only2k(c: Context) = p(c).getBoolean("watch_2k", false)
+    /** O Flow baixa com nome tipo 247151599_1793933003076088.jpg */
+    private val FLOW_NAME = Regex("^\\d{5,}_\\d{12,}\\.(jpe?g|png|webp)$", RegexOption.IGNORE_CASE)
+    fun flowNames(c: Context) = p(c).getBoolean("watch_flow_names", true)
+    fun setFlowNames(c: Context, on: Boolean) = p(c).edit().putBoolean("watch_flow_names", on).apply()
     fun setOnly2k(c: Context, on: Boolean) = p(c).edit().putBoolean("watch_2k", on).apply()
 
     val perm: String get() = if (Build.VERSION.SDK_INT >= 33) "android.permission.READ_MEDIA_IMAGES" else "android.permission.READ_EXTERNAL_STORAGE"
@@ -45,7 +49,7 @@ object FolderScan {
                 MediaStore.Images.Media.DATE_ADDED + " DESC")?.use { cur ->
                 while (cur.moveToNext()) {
                     val b = cur.getString(0) ?: continue
-                    if (b == "PostLeve") continue
+                    if (b == "PostLeve" || b == "PostLeve Flow") continue
                     counts[b] = (counts[b] ?: 0) + 1
                 }
             }
@@ -65,7 +69,7 @@ object FolderScan {
         c.getSystemService(JobScheduler::class.java).cancel(JOB_ID)
     }
 
-    private data class Img(val id: Long, val added: Long, val w: Int, val h: Int)
+    private data class Img(val id: Long, val added: Long, val w: Int, val h: Int, val name: String)
 
     private fun list(c: Context, sinceSec: Long): List<Img> {
         val b = bucket(c) ?: return emptyList()
@@ -73,11 +77,16 @@ object FolderScan {
         try {
             c.contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DATE_ADDED,
-                    MediaStore.Images.Media.WIDTH, MediaStore.Images.Media.HEIGHT),
+                    MediaStore.Images.Media.WIDTH, MediaStore.Images.Media.HEIGHT, MediaStore.Images.Media.DISPLAY_NAME),
                 MediaStore.Images.Media.BUCKET_DISPLAY_NAME + "=? AND " + MediaStore.Images.Media.DATE_ADDED + ">?",
                 arrayOf(b, sinceSec.toString()),
                 MediaStore.Images.Media.DATE_ADDED + " ASC")?.use { cur ->
-                while (cur.moveToNext()) out.add(Img(cur.getLong(0), cur.getLong(1), cur.getInt(2), cur.getInt(3)))
+                val flow = flowNames(c)
+                while (cur.moveToNext()) {
+                    val name = cur.getString(4) ?: ""
+                    if (flow && !FLOW_NAME.matches(name)) continue
+                    out.add(Img(cur.getLong(0), cur.getLong(1), cur.getInt(2), cur.getInt(3), name))
+                }
             }
         } catch (e: Exception) { }
         return out
@@ -119,8 +128,11 @@ object FolderScan {
             if (only2k(c) && !isBig(c, img, uri)) continue
             try {
                 val bmp = decode(c, uri) ?: continue
-                PostQueue.add(c, bmp)
+                val qid = PostQueue.add(c, bmp)
+                PostQueue.update(c, qid) { it.put("nova", true) }
+                PostQueue.copyToFolder(c, qid)
                 s.add(key); n++
+                addOriginal(c, img.id)
             } catch (e: Exception) { }
         }
         val keep = if (s.size > 600) s.toList().takeLast(600).toSet() else s
@@ -147,6 +159,16 @@ object FolderScan {
         } catch (e: Exception) { 0f }
         return if (deg == 0f) b else Bitmap.createBitmap(b, 0, 0, b.width, b.height, Matrix().apply { postRotate(deg) }, true)
     }
+
+    // ---------- originais que ficaram no Download ----------
+    private fun addOriginal(c: Context, id: Long) {
+        val set = HashSet(p(c).getStringSet("orig_pending", emptySet()) ?: emptySet())
+        set.add(id.toString()); p(c).edit().putStringSet("orig_pending", set).apply()
+    }
+    fun originals(c: Context): List<Uri> = (p(c).getStringSet("orig_pending", emptySet()) ?: emptySet())
+        .mapNotNull { it.toLongOrNull() }.map { ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, it) }
+        .filter { u -> try { c.contentResolver.query(u, arrayOf(MediaStore.Images.Media._ID), null, null, null)?.use { it.count > 0 } ?: false } catch (e: Exception) { false } }
+    fun clearOriginals(c: Context) = p(c).edit().remove("orig_pending").apply()
 
     /** Pede pro Android acordar o app quando aparecer imagem nova na galeria. */
     fun schedule(c: Context) {
