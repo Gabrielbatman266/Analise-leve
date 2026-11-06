@@ -55,6 +55,10 @@ class InstaEditor(private val a: MainActivity) {
     private lateinit var musicBox: LinearLayout
     private lateinit var libBox: LinearLayout
     private var player: MediaPlayer? = null
+    private val redraws = ArrayList<() -> Unit>()
+    private lateinit var seek: SeekBar
+    private lateinit var projBox: LinearLayout
+    private var projId: String? = null
 
     private val ui get() = a.ui
 
@@ -92,35 +96,36 @@ class InstaEditor(private val a: MainActivity) {
             addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, x: Int, y: Int, z: Int) {}
                 override fun onTextChanged(s: CharSequence?, x: Int, y: Int, z: Int) {}
-                override fun afterTextChanged(s: Editable?) { schedulePreview() }
+                override fun afterTextChanged(s: Editable?) { schedulePreview(); scheduleSave() }
             })
         }
         ce.addView(etText, a.lpMatch())
 
         a.text("Tamanho", 12f, a.MUTED, parent = ce)
-        ce.addView(SeekBar(a).apply {
+        seek = SeekBar(a)
+        ce.addView(seek.apply {
             max = 80; progress = style.size - 20
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) { style.size = p + 20; schedulePreview() }
                 override fun onStartTrackingTouch(sb: SeekBar?) {}
-                override fun onStopTrackingTouch(sb: SeekBar?) { style.save(a) }
+                override fun onStopTrackingTouch(sb: SeekBar?) { style.save(a); scheduleSave() }
             })
         }, a.lpMatch())
         a.text("Cor", 12f, a.MUTED, parent = ce)
-        a.chips(ce, TextStyle.COLORS.keys.toList(), { style.color }) { style.color = it; changed() }
+        redraws += a.chips(ce, TextStyle.COLORS.keys.toList(), { style.color }) { style.color = it; changed() }
         a.text("Fundo do texto", 12f, a.MUTED, parent = ce)
-        a.chips(ce, TextStyle.BGS, { style.bg }) { style.bg = it; changed() }
+        redraws += a.chips(ce, TextStyle.BGS, { style.bg }) { style.bg = it; changed() }
         a.text("Fonte", 12f, a.MUTED, parent = ce)
-        a.chips(ce, TextStyle.FONTS, { style.font }) { style.font = it; changed() }
+        redraws += a.chips(ce, TextStyle.FONTS, { style.font }) { style.font = it; changed() }
         a.text("Posição e alinhamento", 12f, a.MUTED, parent = ce)
-        a.chips(ce, TextStyle.POS, { style.pos }) { style.pos = it; changed() }
-        a.chips(ce, TextStyle.ALIGNS, { style.align }) { style.align = it; changed() }
+        redraws += a.chips(ce, TextStyle.POS, { style.pos }) { style.pos = it; changed() }
+        redraws += a.chips(ce, TextStyle.ALIGNS, { style.align }) { style.align = it; changed() }
 
         // duração (foto)
         durRow = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         ce.addView(durRow, a.lpMatch())
         a.text("Duração da foto em vídeo", 12f, a.MUTED, parent = durRow)
-        a.chips(durRow, listOf("5s", "8s", "12s", "15s"), { "${photoSecs}s" }) { photoSecs = it.removeSuffix("s").toInt() }
+        redraws += a.chips(durRow, listOf("5s", "8s", "12s", "15s"), { "${photoSecs}s" }) { photoSecs = it.removeSuffix("s").toInt(); scheduleSave() }
 
         // música
         a.text("Música de fundo", 12f, a.MUTED, parent = ce)
@@ -138,6 +143,11 @@ class InstaEditor(private val a: MainActivity) {
             setPadding(a.dp(12), a.dp(10), a.dp(12), a.dp(10))
         }
         ce.addView(etCap, a.lpMatch())
+        etCap.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, x: Int, y: Int, z: Int) {}
+            override fun onTextChanged(s: CharSequence?, x: Int, y: Int, z: Int) {}
+            override fun afterTextChanged(s: Editable?) { scheduleSave() }
+        })
         a.button("🎲 Legenda aleatória", ce) { etCap.setText(Captions.randomCaption(a)) }
         btnExport = a.button("Exportar 1080p", ce, primary = true) { export() }
         tvProg = a.text("", 13f, a.OK, parent = ce)
@@ -145,6 +155,14 @@ class InstaEditor(private val a: MainActivity) {
         ce.addView(afterBox, a.lpMatch())
         a.button("Postar no Instagram ↗", afterBox, primary = true) { lastExportId?.let { post(it, etCap.text.toString()) } }
         a.button("Voltar pra prévia", afterBox) { showImagePreview() }
+
+        // ---------- projetos
+        val cp = a.card("Projetos salvos")
+        a.text("Todo vídeo ou foto que você abre vira um projeto, salvo sozinho a cada mudança. Abra de novo pra trocar só o texto e exportar outra versão.", 13f, a.MUTED, parent = cp)
+        a.button("＋ Novo projeto (limpar editor)", cp) { newProject() }
+        projBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        cp.addView(projBox, a.lpMatch())
+        renderProjects()
 
         // ---------- músicas
         val cm = a.card("Minhas músicas")
@@ -166,9 +184,91 @@ class InstaEditor(private val a: MainActivity) {
         renderLibrary()
     }
 
+    // ------------------------------------------------------------------ projetos
+
+    private val saveTask = Runnable { saveNow() }
+    private fun scheduleSave() { if (projId == null) return; ui.removeCallbacks(saveTask); ui.postDelayed(saveTask, 600) }
+
+    private fun saveNow() {
+        val id = projId ?: return
+        Projects.update(a, id) {
+            it.put("photo", isPhoto); it.put("secs", photoSecs)
+            it.put("text", etText.text.toString()); it.put("caption", etCap.text.toString())
+            it.put("style", org.json.JSONObject().put("size", style.size).put("color", style.color).put("bg", style.bg)
+                .put("pos", style.pos).put("font", style.font).put("align", style.align))
+            it.put("music", music?.path ?: ""); it.put("mute", mute); it.put("updated", System.currentTimeMillis())
+        }
+        base?.let { b -> Projects.saveThumb(a, id, VideoExport.preview(b, etText.text.toString(), style)) }
+        ui.removeCallbacks(projRefresh); ui.postDelayed(projRefresh, 800)
+    }
+    private val projRefresh = Runnable { renderProjects() }
+
+    private fun newProject() {
+        saveNow()
+        projId = null; src = null; base = null; isPhoto = false; music = null; mute = false; lastExportId = null
+        etText.setText(""); etCap.setText(""); durRow.visibility = View.GONE
+        tvSrc.setTextColor(a.MUTED); tvSrc.text = "Escolha um vídeo ou uma foto pra começar."
+        updateMusicLabel(); showImagePreview(); drawPreview(); renderProjects()
+    }
+
+    private fun openProject(id: String) {
+        saveNow()
+        val o = Projects.get(a, id) ?: return
+        val photo = o.optBoolean("photo")
+        val f = Projects.srcFile(a, id, photo)
+        if (!f.exists()) { a.toast("O arquivo desse projeto sumiu"); return }
+        projId = null // evita salvar enquanto carrega
+        isPhoto = photo; src = Uri.fromFile(f); photoSecs = o.optInt("secs", 8)
+        o.optJSONObject("style")?.let { st ->
+            style = TextStyle(st.optInt("size", 52), st.optString("color", "Branco"), st.optString("bg", "Faixa escura"),
+                st.optString("pos", "Baixo"), st.optString("font", "Negrito"), st.optString("align", "Centro"))
+        }
+        etText.setText(o.optString("text")); etCap.setText(o.optString("caption"))
+        music = o.optString("music").takeIf { it.isNotEmpty() }?.let { File(it) }?.takeIf { it.exists() }
+        mute = o.optBoolean("mute")
+        seek.progress = style.size - 20
+        redraws.forEach { it() }
+        durRow.visibility = if (photo) View.VISIBLE else View.GONE
+        updateMusicLabel()
+        projId = id
+        loadBase(if (photo) "Projeto de foto aberto" else "Projeto de vídeo aberto")
+        a.toast("Projeto aberto: mude o texto e exporte de novo")
+    }
+
+    private fun renderProjects() {
+        if (!::projBox.isInitialized) return
+        projBox.removeAllViews()
+        val l = Projects.list(a)
+        if (l.isEmpty()) { a.text("Nenhum projeto ainda.", 12f, a.MUTED, parent = projBox); return }
+        l.take(30).forEach { o ->
+            val id = o.optString("id")
+            val box = LinearLayout(a).apply {
+                orientation = LinearLayout.HORIZONTAL; setPadding(a.dp(8), a.dp(8), a.dp(8), a.dp(8)); gravity = Gravity.CENTER_VERTICAL
+                background = GradientDrawable().apply { setColor(a.BG); cornerRadius = a.dp(12).toFloat()
+                    setStroke(a.dp(if (id == projId) 2 else 1), if (id == projId) a.ACCENT else a.LINE) }
+            }
+            projBox.addView(box, a.lpMatch().apply { topMargin = a.dp(8) })
+            val th = Projects.thumb(a, id)
+            box.addView(ImageView(a).apply { scaleType = ImageView.ScaleType.CENTER_CROP; if (th.exists()) setImageBitmap(BitmapFactory.decodeFile(th.path)) },
+                LinearLayout.LayoutParams(a.dp(54), a.dp(96)).apply { rightMargin = a.dp(10) })
+            val side = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+            box.addView(side, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val t = o.optString("text").replace('\n', ' ').take(60).ifEmpty { "(sem texto)" }
+            a.text((if (o.optBoolean("photo")) "🖼 " else "🎬 ") + t, 13f, a.FG, parent = side)
+            val r = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+            side.addView(r, a.lpMatch())
+            a.button(if (id == projId) "Aberto" else "Abrir", r, primary = id != projId, weight = true) { if (id != projId) openProject(id) }
+            val del = a.button("Apagar", r, weight = true) { }
+            del.setOnClickListener {
+                if (del.tag != "armed") { del.tag = "armed"; del.text = "De novo"; ui.postDelayed({ del.tag = null; del.text = "Apagar" }, 2500) }
+                else { if (projId == id) newProject(); Projects.remove(a, id); renderProjects() }
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ prévia
 
-    private fun changed() { style.save(a); schedulePreview() }
+    private fun changed() { style.save(a); schedulePreview(); scheduleSave() }
 
     private val previewTask = Runnable { drawPreview() }
     private fun schedulePreview() { ui.removeCallbacks(previewTask); ui.postDelayed(previewTask, 120) }
@@ -205,12 +305,25 @@ class InstaEditor(private val a: MainActivity) {
         if (res != android.app.Activity.RESULT_OK) return true
         try { a.contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (e: Exception) { }
         when (req) {
-            REQ_VIDEO -> { isPhoto = false; src = u; durRow.visibility = View.GONE; loadBase("Vídeo escolhido") }
+            REQ_VIDEO -> {
+                tvSrc.setTextColor(a.MUTED); tvSrc.text = "Salvando o vídeo no projeto…"
+                Thread {
+                    val pid = Projects.create(a, false)
+                    val f = Projects.srcFile(a, pid, false)
+                    val ok = try { a.contentResolver.openInputStream(u)?.use { i -> f.outputStream().use { i.copyTo(it) } }; f.length() > 0 } catch (e: Exception) { false }
+                    ui.post {
+                        if (!ok) { Projects.remove(a, pid); a.toast("Não consegui abrir esse vídeo"); return@post }
+                        projId = pid; isPhoto = false; src = Uri.fromFile(f); durRow.visibility = View.GONE
+                        loadBase("Vídeo salvo no projeto"); saveNow(); renderProjects()
+                    }
+                }.start()
+            }
             REQ_PHOTO -> {
                 tvSrc.text = "Preparando a foto…"
                 Thread {
                     // foto vira um JPEG novo (sem metadados), já na posição certa
-                    val f = File(a.cacheDir, "foto_video.jpg")
+                    val pid = Projects.create(a, true)
+                    val f = Projects.srcFile(a, pid, true)
                     val ok = try {
                         val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                         a.contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it, null, o) }
@@ -219,16 +332,16 @@ class InstaEditor(private val a: MainActivity) {
                         if (b == null) false else { val r = a.rotateByExif(u, b); f.outputStream().use { r.compress(Bitmap.CompressFormat.JPEG, 95, it) }; true }
                     } catch (e: Exception) { false }
                     ui.post {
-                        if (!ok) { a.toast("Não abriu essa foto"); return@post }
-                        isPhoto = true; src = Uri.fromFile(f); durRow.visibility = View.VISIBLE
-                        loadBase("Foto escolhida: vira um vídeo de ${photoSecs}s")
+                        if (!ok) { Projects.remove(a, pid); a.toast("Não abriu essa foto"); return@post }
+                        projId = pid; isPhoto = true; src = Uri.fromFile(f); durRow.visibility = View.VISIBLE
+                        loadBase("Foto salva no projeto: vira um vídeo de ${photoSecs}s"); saveNow(); renderProjects()
                     }
                 }.start()
             }
             REQ_MUSIC -> Thread {
                 val f = VideoExport.importMusic(a, u)
                 ui.post {
-                    if (f == null) a.toast("Não consegui importar") else { music = f; mute = false; updateMusicLabel(); renderMusics(); a.toast("Música salva e escolhida") }
+                    if (f == null) a.toast("Não consegui importar") else { music = f; mute = false; updateMusicLabel(); renderMusics(); scheduleSave(); a.toast("Música salva e escolhida") }
                 }
             }.start()
         }
@@ -266,7 +379,7 @@ class InstaEditor(private val a: MainActivity) {
                 2 -> open("audio/*", REQ_MUSIC)
                 else -> { music = list[i - 3]; mute = false }
             }
-            updateMusicLabel()
+            updateMusicLabel(); scheduleSave()
         }.show()
     }
 
@@ -280,7 +393,7 @@ class InstaEditor(private val a: MainActivity) {
             row.addView(TextView(a).apply { text = "♪ " + VideoExport.nice(f); textSize = 14f; setTextColor(a.FG) },
                 LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             small(row, "▶") { play(f) }
-            small(row, "Usar") { music = f; mute = false; updateMusicLabel(); a.toast("Música escolhida pro vídeo") }
+            small(row, "Usar") { music = f; mute = false; updateMusicLabel(); scheduleSave(); a.toast("Música escolhida pro vídeo") }
             small(row, "✕") { stopPlay(); f.delete(); if (music == f) { music = null; updateMusicLabel() }; renderMusics() }
         }
     }

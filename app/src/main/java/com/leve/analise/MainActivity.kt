@@ -304,7 +304,7 @@ class MainActivity : Activity() {
 
     // ------------------------------------------------------------------ aba Legendas
 
-    internal fun chips(parent: LinearLayout, options: List<String>, current: () -> String, pick: (String) -> Unit) {
+    internal fun chips(parent: LinearLayout, options: List<String>, current: () -> String, pick: (String) -> Unit): () -> Unit {
         val wrap = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         parent.addView(wrap, lpMatch())
         fun draw() {
@@ -323,6 +323,7 @@ class MainActivity : Activity() {
             }
         }
         draw()
+        return { draw() }
     }
 
     private fun buildCaptionsTab() {
