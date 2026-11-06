@@ -31,6 +31,7 @@ class InstaEditor(private val a: MainActivity) {
         const val REQ_VIDEO = 31
         const val REQ_PHOTO = 32
         const val REQ_MUSIC = 33
+        const val REQ_MULTI = 34
     }
 
     private var src: Uri? = null
@@ -55,6 +56,13 @@ class InstaEditor(private val a: MainActivity) {
     private lateinit var musicBox: LinearLayout
     private lateinit var libBox: LinearLayout
     private var player: MediaPlayer? = null
+    private var playing: File? = null
+    private lateinit var playerBar: LinearLayout
+    private lateinit var tvNow: TextView
+    private lateinit var tvTime: TextView
+    private lateinit var playSeek: SeekBar
+    private lateinit var btnPlay: Button
+    private lateinit var tvBatch: TextView
     private val redraws = ArrayList<() -> Unit>()
     private lateinit var seek: SeekBar
     private lateinit var projBox: LinearLayout
@@ -170,7 +178,41 @@ class InstaEditor(private val a: MainActivity) {
         val mr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
         cm.addView(mr, a.lpMatch())
         a.button("Importar do celular", mr, weight = true) { open("audio/*", REQ_MUSIC) }
-        a.button("Extrair do meu vídeo", mr, weight = true) { extract() }
+        a.button("Extrair do vídeo aberto", mr, weight = true) { extract() }
+        a.button("🎵 Extrair de vários vídeos de uma vez", cm, primary = true) {
+            val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { type = "video/*"; addCategory(Intent.CATEGORY_OPENABLE); putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true) }
+            @Suppress("DEPRECATION")
+            a.startActivityForResult(i, REQ_MULTI)
+        }
+        tvBatch = a.text("", 13f, a.OK, parent = cm)
+        // player
+        val pbar = LinearLayout(a).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(a.dp(10), a.dp(8), a.dp(10), a.dp(8)); visibility = View.GONE
+            background = GradientDrawable().apply { setColor(0xFF3A1824.toInt()); cornerRadius = a.dp(10).toFloat() }
+        }
+        playerBar = pbar
+        cm.addView(pbar, a.lpMatch().apply { topMargin = a.dp(8) })
+        tvNow = a.text("", 14f, a.FG, parent = pbar, bold = true)
+        playSeek = SeekBar(a).apply {
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) { if (fromUser) try { player?.seekTo(p) } catch (e: Exception) { } }
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+                override fun onStopTrackingTouch(sb: SeekBar?) {}
+            })
+        }
+        pbar.addView(playSeek, a.lpMatch())
+        val pr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        pbar.addView(pr, a.lpMatch())
+        tvTime = TextView(a).apply { setTextColor(a.MUTED); textSize = 12f }
+        pr.addView(tvTime, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        btnPlay = Button(a).apply {
+            text = "⏸"; textSize = 15f; setTextColor(a.FG)
+            background = GradientDrawable().apply { setColor(0xFF1C1C24.toInt()); cornerRadius = a.dp(8).toFloat() }
+            setOnClickListener { val p = player ?: return@setOnClickListener; if (p.isPlaying) { p.pause(); text = "▶" } else { p.start(); text = "⏸" } }
+        }
+        pr.addView(btnPlay, LinearLayout.LayoutParams(a.dp(56), a.dp(40)))
+        small(pr, "Usar no vídeo") { playing?.let { music = it; mute = false; updateMusicLabel(); scheduleSave(); a.toast("Música escolhida pro vídeo") } }
+        small(pr, "✕") { stopPlay() }
         musicBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         cm.addView(musicBox, a.lpMatch())
         a.text("Música de Reels dos outros: toque no nome do áudio › Salvar, e escolha em Áudios salvos na hora de postar. Assim ela vem licenciada.", 12f, a.MUTED, parent = cm)
@@ -300,7 +342,16 @@ class InstaEditor(private val a: MainActivity) {
 
     /** Devolve true se o resultado era deste editor. */
     fun onResult(req: Int, res: Int, data: Intent?): Boolean {
-        if (req != REQ_VIDEO && req != REQ_PHOTO && req != REQ_MUSIC) return false
+        if (req != REQ_VIDEO && req != REQ_PHOTO && req != REQ_MUSIC && req != REQ_MULTI) return false
+        if (req == REQ_MULTI) {
+            if (res != android.app.Activity.RESULT_OK || data == null) return true
+            val uris = ArrayList<Uri>()
+            data.clipData?.let { cd -> for (k in 0 until cd.itemCount) uris.add(cd.getItemAt(k).uri) }
+            if (uris.isEmpty()) data.data?.let { uris.add(it) }
+            if (VideoExport.busy()) { a.toast("Espere terminar o que está rodando"); return true }
+            if (uris.isNotEmpty()) extractMany(uris)
+            return true
+        }
         val u = data?.data ?: return true
         if (res != android.app.Activity.RESULT_OK) return true
         try { a.contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (e: Exception) { }
@@ -392,7 +443,7 @@ class InstaEditor(private val a: MainActivity) {
             musicBox.addView(row, a.lpMatch().apply { topMargin = a.dp(6) })
             row.addView(TextView(a).apply { text = "♪ " + VideoExport.nice(f); textSize = 14f; setTextColor(a.FG) },
                 LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            small(row, "▶") { play(f) }
+            small(row, if (playing == f) "♪" else "▶") { play(f) }
             small(row, "Usar") { music = f; mute = false; updateMusicLabel(); scheduleSave(); a.toast("Música escolhida pro vídeo") }
             small(row, "✕") { stopPlay(); f.delete(); if (music == f) { music = null; updateMusicLabel() }; renderMusics() }
         }
@@ -406,23 +457,61 @@ class InstaEditor(private val a: MainActivity) {
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, a.dp(40)).apply { leftMargin = a.dp(4) })
     }
 
-    private fun play(f: File) {
-        stopPlay()
-        player = try { MediaPlayer().apply { setDataSource(f.path); prepare(); start(); setOnCompletionListener { stopPlay() } } } catch (e: Exception) { null }
-        ui.postDelayed({ stopPlay() }, 15000) // amostra de 15s
+    private fun fmt(ms: Int) = "%d:%02d".format(ms / 60000, (ms / 1000) % 60)
+
+    private val ticker = object : Runnable {
+        override fun run() {
+            val p = player ?: return
+            try { playSeek.progress = p.currentPosition; tvTime.text = fmt(p.currentPosition) + " / " + fmt(p.duration) } catch (e: Exception) { }
+            ui.postDelayed(this, 300)
+        }
     }
 
-    fun stopPlay() { try { player?.stop(); player?.release() } catch (e: Exception) { }; player = null }
+    private fun play(f: File) {
+        stopPlay()
+        player = try { MediaPlayer().apply { setDataSource(f.path); prepare(); start(); setOnCompletionListener { btnPlay.text = "▶" } } } catch (e: Exception) { null }
+        val p = player ?: run { a.toast("Não consegui tocar"); return }
+        playing = f
+        tvNow.text = "♪ " + VideoExport.nice(f)
+        playSeek.max = p.duration
+        btnPlay.text = "⏸"
+        playerBar.visibility = View.VISIBLE
+        ui.post(ticker)
+    }
+
+    fun stopPlay() {
+        ui.removeCallbacks(ticker)
+        try { player?.stop(); player?.release() } catch (e: Exception) { }
+        player = null; playing = null
+        if (::playerBar.isInitialized) playerBar.visibility = View.GONE
+    }
+
+    /** Extrai o áudio de vários vídeos, um depois do outro, cada um com o nome do vídeo. */
+    private fun extractMany(list: List<Uri>, i: Int = 0, ok: Int = 0) {
+        if (i >= list.size) {
+            tvBatch.setTextColor(a.OK); tvBatch.text = "$ok de ${list.size} músicas extraídas e salvas"
+            a.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            renderMusics(); return
+        }
+        if (i == 0) a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val u = list[i]
+        val name = VideoExport.displayName(a, u)
+        tvBatch.setTextColor(a.MUTED); tvBatch.text = "Extraindo ${i + 1} de ${list.size}…"
+        VideoExport.extractAudio(a, u, { p -> tvBatch.text = "Extraindo ${i + 1} de ${list.size}… $p%" }, { f, _ ->
+            if (f != null) renderMusics()
+            extractMany(list, i + 1, if (f != null) ok + 1 else ok)
+        }, name)
+    }
 
     private fun extract() {
         val s = src ?: run { a.toast("Escolha um vídeo seu primeiro"); return }
         if (isPhoto) { a.toast("Foto não tem áudio. Escolha um vídeo."); return }
         if (VideoExport.busy()) { a.toast("Espere terminar o que está rodando"); return }
         tvProg.setTextColor(a.MUTED); tvProg.text = "Extraindo áudio…"
-        VideoExport.extractAudio(a, s, { p -> tvProg.text = "Extraindo áudio… $p%" }) { f, err ->
+        VideoExport.extractAudio(a, s, { p -> tvProg.text = "Extraindo áudio… $p%" }, { f, err ->
             if (f == null) { tvProg.setTextColor(a.ACCENT); tvProg.text = "Não deu: $err" }
             else { tvProg.setTextColor(a.OK); tvProg.text = "Áudio salvo em Minhas músicas"; renderMusics() }
-        }
+        }, "audio_" + (etText.text.toString().take(20).ifBlank { "video" }))
     }
 
     // ------------------------------------------------------------------ exportar e postar

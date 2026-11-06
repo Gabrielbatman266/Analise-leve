@@ -196,8 +196,11 @@ object VideoExport {
     }
 
     /** Só o áudio de um vídeo seu, guardado na biblioteca de músicas. */
-    fun extractAudio(c: Context, src: Uri, onProgress: (Int) -> Unit, onDone: (File?, String?) -> Unit) {
-        val out = File(musicDir(c), "audio_${System.currentTimeMillis()}.m4a")
+    fun extractAudio(c: Context, src: Uri, onProgress: (Int) -> Unit, onDone: (File?, String?) -> Unit, name: String? = null) {
+        val base = name?.replace(Regex("[^A-Za-z0-9._ -]"), "_")?.substringBeforeLast('.')?.take(50)?.ifBlank { null } ?: "audio_${System.currentTimeMillis()}"
+        var out = File(musicDir(c), "$base.m4a")
+        var n = 2
+        while (out.exists()) { out = File(musicDir(c), "$base ($n).m4a"); n++ }
         try {
             val t = Transformer.Builder(c).setAudioMimeType(MimeTypes.AUDIO_AAC)
                 .addListener(object : Transformer.Listener {
@@ -244,6 +247,10 @@ object VideoExport {
     } catch (e: Exception) { null }
 
     fun nice(f: File) = f.nameWithoutExtension.replace('_', ' ')
+
+    fun displayName(c: Context, u: Uri): String? = try {
+        c.contentResolver.query(u, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if (it.moveToFirst()) it.getString(0) else null }
+    } catch (e: Exception) { null }
 
     // ------------------------------------------------------------------ biblioteca de vídeos
 
