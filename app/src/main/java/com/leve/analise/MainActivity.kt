@@ -153,9 +153,21 @@ class MainActivity : Activity() {
         text("Lembrete pra postar: a notificação já vem com foto e legenda sorteadas. Toque em Postar e depois em Publicar no Threads.", 12f, MUTED, parent = cp)
         everyRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         cp.addView(everyRow, lpMatch())
-        listOf(0 to "Off", 15 to "15m", 20 to "20m", 30 to "30m", 60 to "1h").forEach { (m, t) ->
-            button(t, everyRow, weight = true) { Reminder.setEvery(this, m); styleEvery(); refresh()
-                toast(if (m == 0) "Lembrete desligado" else "Vou avisar a cada $t com a próxima foto") }.tag = m
+        listOf(Triple(0, 0, "Off"), Triple(30, 50, "30–50m"), Triple(60, 120, "1–2h"), Triple(120, 180, "2–3h")).forEach { (mn, mx, t) ->
+            button(t, everyRow, weight = true) { Reminder.setRange(this, mn, mx); styleEvery(); refresh()
+                toast(if (mn == 0) "Lembrete desligado" else "Vou avisar num horário diferente a cada vez, entre $t") }.tag = mn
+        }
+        val day = button("", cp) { }
+        fun dayText() { day.text = if (Reminder.dayOnly(this)) "Só entre 8h e 23h: ligado" else "Só entre 8h e 23h: desligado" }
+        dayText()
+        day.setOnClickListener { Store.prefs(this).edit().putBoolean("post_day_only", !Reminder.dayOnly(this)).apply(); Reminder.schedule(this); dayText(); refresh() }
+        button("Sortear horários de hoje pra agendar no Threads", cp) {
+            val plan = Reminder.planToday(this)
+            if (plan.isEmpty()) toast("Escolha uma faixa de lembrete primeiro (ou já passou das 23h)")
+            else AlertDialog.Builder(this).setTitle("Horários pra agendar hoje")
+                .setMessage(plan.joinToString("\n") { android.text.format.DateFormat.format("HH:mm", it).toString() } +
+                    "\n\nNo Threads: três pontinhos › Agendar, um post pra cada horário. Ele publica sozinho.")
+                .setPositiveButton("Ok", null).show()
         }
         val gal = button("", cp) { }
         fun galText() { gal.text = if (PostQueue.galleryOn(this)) "Foto em primeiro na galeria: ligado" else "Foto em primeiro na galeria: desligado" }
@@ -586,7 +598,7 @@ class MainActivity : Activity() {
         val ps = PostQueue.stamp(this)
         if (ps != postStamp && postList.findFocus() !is EditText) { postStamp = ps; renderPosts() }
         val ev = Reminder.every(this); val at = Reminder.nextAt(this)
-        tvPostInfo.text = if (ev > 0 && at > 0) "Próximo lembrete: " + android.text.format.DateFormat.format("HH:mm", at) else ""
+        tvPostInfo.text = if (ev > 0 && at > 0) "Próximo lembrete: " + android.text.format.DateFormat.format("HH:mm", at) + " (sorteado)" else ""
         val fila = Store.pending(this).size
         val list = Store.sorted(this)
         val lidos = Store.prefs(this).getInt("prints_lidos", 0)

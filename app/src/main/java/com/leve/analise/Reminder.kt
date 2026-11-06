@@ -20,25 +20,53 @@ object Reminder {
     private const val CH = "posts"
     private const val NID = 9
 
-    fun every(c: Context) = Store.prefs(c).getInt("post_every", 0)
+    /** Intervalo sorteado entre min e max minutos (0 = desligado). */
+    fun every(c: Context) = Store.prefs(c).getInt("post_min", 0)
+    fun range(c: Context) = Store.prefs(c).getInt("post_min", 0) to Store.prefs(c).getInt("post_max", 0)
     fun nextAt(c: Context) = Store.prefs(c).getLong("next_post_at", 0L)
+    fun dayOnly(c: Context) = Store.prefs(c).getBoolean("post_day_only", true)
 
     private fun alarmPi(c: Context) = PendingIntent.getBroadcast(c, 0, Intent(c, ReminderReceiver::class.java),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
-    fun setEvery(c: Context, min: Int) {
-        Store.prefs(c).edit().putInt("post_every", min).apply()
+    fun setRange(c: Context, min: Int, max: Int) {
+        Store.prefs(c).edit().putInt("post_min", min).putInt("post_max", max).apply()
         schedule(c)
+    }
+
+    /** Próximo horário: aleatório dentro da faixa, nunca redondo; de madrugada pula pra manhã. */
+    fun pickNext(c: Context, from: Long): Long {
+        val (mn, mx) = range(c)
+        var at = from + ((mn * 60L)..(maxOf(mn, mx) * 60L)).random() * 1000L
+        if (dayOnly(c)) {
+            val cal = java.util.Calendar.getInstance().apply { timeInMillis = at }
+            val h = cal.get(java.util.Calendar.HOUR_OF_DAY)
+            if (h >= 23 || h < 8) {
+                if (h >= 23) cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+                cal.set(java.util.Calendar.HOUR_OF_DAY, 8)
+                cal.set(java.util.Calendar.MINUTE, (5..55).random())
+                at = cal.timeInMillis
+            }
+        }
+        return at
     }
 
     fun schedule(c: Context) {
         val am = c.getSystemService(AlarmManager::class.java)
         am.cancel(alarmPi(c))
-        val m = every(c)
-        if (m <= 0) { Store.prefs(c).edit().putLong("next_post_at", 0L).apply(); return }
-        val at = System.currentTimeMillis() + m * 60_000L
+        if (every(c) <= 0) { Store.prefs(c).edit().putLong("next_post_at", 0L).apply(); return }
+        val at = pickNext(c, System.currentTimeMillis())
         Store.prefs(c).edit().putLong("next_post_at", at).apply()
         am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, alarmPi(c))
+    }
+
+    /** Horários sorteados do resto do dia, pra agendar no próprio Threads. */
+    fun planToday(c: Context, count: Int = 8): List<Long> {
+        val out = ArrayList<Long>()
+        var t = System.currentTimeMillis()
+        val end = java.util.Calendar.getInstance().apply { add(java.util.Calendar.DAY_OF_YEAR, 1); set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0) }.timeInMillis
+        repeat(count) { t = pickNext(c, t); if (t < end) out.add(t) }
+        return out
     }
 
     fun postIntent(c: Context, id: String, caption: String? = null): PendingIntent {
