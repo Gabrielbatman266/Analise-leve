@@ -17,25 +17,17 @@ object Captions {
     fun ctaMode(c: Context) = p(c).getString("cta_mode", "Variado") ?: "Variado"
     fun ctx(c: Context) = p(c).getString("ctx", "") ?: ""
 
-    fun refs(c: Context): List<String> = try {
-        val a = JSONArray(p(c).getString("refs", "[]"))
-        (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() }
-    } catch (e: Exception) { emptyList() }
+    fun refs(c: Context): List<String> = CaptionDB.texts(c, "viral")
 
-    private fun saveRefs(c: Context, l: List<String>) {
-        val a = JSONArray(); l.take(60).forEach { a.put(it) }
-        p(c).edit().putString("refs", a.toString()).apply()
-    }
-
-    fun addRef(c: Context, t: String) = saveRefs(c, listOf(t) + refs(c).filter { it != t })
-    fun removeRef(c: Context, t: String) = saveRefs(c, refs(c).filter { it != t })
+    fun addRef(c: Context, t: String) = CaptionDB.add(c, t, "viral")
+    fun removeRef(c: Context, t: String) = CaptionDB.remove(c, t)
 
     /** Leva as legendas que mais engajaram nos prints analisados pro banco viral. */
     fun pullFromAnalysis(c: Context): Int {
         val top = Store.sorted(c).map { it.optString("legenda").trim() }.filter { it.length >= 3 }.take(15)
         val cur = refs(c)
         val novos = top.filter { it !in cur }
-        saveRefs(c, novos + cur)
+        novos.forEach { CaptionDB.add(c, it, "viral") }
         return novos.size
     }
 
@@ -53,7 +45,8 @@ object Captions {
         val refs = refs(c).take(12)
         val top = Store.sorted(c).map { it.optString("legenda") }.filter { it.isNotBlank() && it !in refs }.take(6)
         val pats = Store.loadPatterns(c).let { a -> (0 until a.length()).map { a.optString(it) } }
-        val ex = refs + top
+        val best = CaptionDB.top(c, 10).filter { CaptionDB.mean(it) > 0.55 }.map { it.optString("t") }
+        val ex = (best + refs + top).distinct().take(20)
         return """Você escreve legendas para posts de foto no Threads, em português do Brasil, no estilo de perfis que viralizam.
 Vibe: ${vibe(c)}. Tamanho: ${size(c)}. Contexto: ${ctx(c).ifEmpty { "nenhum" }}.
 ${if (ex.isNotEmpty()) "Legendas de referência que viralizaram (copie o ritmo e o tom, nunca o texto):\n" + ex.joinToString("\n") { "- $it" } else ""}
@@ -71,17 +64,9 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         return ids.size
     }
     // ---------- minhas legendas (escritas na mão, reaproveitadas no sorteio) ----------
-    fun mine(c: Context): List<String> = try {
-        val a = JSONArray(p(c).getString("mine", "[]"))
-        (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() }
-    } catch (e: Exception) { emptyList() }
-
-    private fun saveMine(c: Context, l: List<String>) {
-        val a = JSONArray(); l.take(200).forEach { a.put(it) }
-        p(c).edit().putString("mine", a.toString()).apply()
-    }
-    fun addMine(c: Context, t: String) { if (t.isNotBlank()) saveMine(c, listOf(t.trim()) + mine(c).filter { it != t.trim() }) }
-    fun removeMine(c: Context, t: String) = saveMine(c, mine(c).filter { it != t })
+    fun mine(c: Context): List<String> = CaptionDB.texts(c, "minha")
+    fun addMine(c: Context, t: String) = CaptionDB.add(c, t, "minha")
+    fun removeMine(c: Context, t: String) = CaptionDB.remove(c, t)
 
     /**
      * Sorteio do post: uma foto aleatória (as ainda não postadas primeiro; se todas já foram, reusa)
@@ -94,13 +79,12 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         val o = (if (fresh.isNotEmpty()) fresh else all).random()
         val own = o.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
         val pool = (own + mine(c)).filter { it.isNotBlank() }.distinct()
-        val cap = pool.randomOrNull() ?: randomCaption(c)
+        val cap = (if (pool.isNotEmpty()) CaptionDB.pick(c, pool) else null) ?: randomCaption(c)
         return o.optString("id") to cap
     }
     /** Legenda sem IA: sorteia das suas (como estão) ou das prontas (com o final de interação). */
     fun randomCaption(c: Context, avoid: Collection<String> = emptyList()): String {
-        val mine = mine(c).filter { it !in avoid }
-        if (mine.isNotEmpty() && (Math.random() < 0.6)) return mine.random()
+        if (mine(c).isNotEmpty() && Math.random() < 0.7) CaptionDB.pick(c, null, avoid)?.let { return it }
         val base = Ai.OFFLINE.filter { o -> avoid.none { it.startsWith(o) } }.ifEmpty { Ai.OFFLINE }
         return withCta(c, listOf(base.random())).first()
     }

@@ -587,6 +587,7 @@ class InstaEditor(private val a: MainActivity) {
         val f = File(VideoExport.videoDir(a), "$id.mp4")
         if (!f.exists()) { a.toast("Esse vídeo não está mais no app"); return }
         VideoExport.updateLib(a, id) { it.put("legenda", cap); it.put("posts", it.optInt("posts") + 1); it.put("lastPost", System.currentTimeMillis()) }
+        CaptionDB.used(a, cap)
         renderLibrary()
         a.toast(if (cap.isEmpty()) "Abrindo o Instagram" else "Legenda copiada: no Instagram é só colar e postar")
         a.startActivity(VideoExport.shareToInstagram(a, PostQueue.uri(id).buildUpon().path("/$id.mp4").build(), "video/mp4"))
@@ -621,6 +622,17 @@ class InstaEditor(private val a: MainActivity) {
             val r1 = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
             side.addView(r1, a.lpMatch())
             a.button("🎲", r1, weight = true) { et.setText(Captions.randomCaption(a, listOf(et.text.toString()))) }
+            if (posts > 0) {
+                val nota = o.optString("nota")
+                val rr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+                side.addView(rr, a.lpMatch())
+                listOf("good" to "🔥", "meh" to "😐", "bad" to "👎").forEach { (k, e) ->
+                    a.button(e, rr, primary = nota == k, weight = true) {
+                        CaptionDB.rate(a, o.optString("legenda"), k); VideoExport.updateLib(a, id) { it.put("nota", k) }; renderLibrary()
+                        a.toast("Anotado: o app vai ${if (k == "good") "usar mais" else if (k == "bad") "evitar" else "manter"} legendas assim")
+                    }
+                }
+            }
             val pj = o.optString("proj")
             if (pj.isNotEmpty() && Projects.get(a, pj) != null) a.button("✏", r1, weight = true) { openProject(pj) }
             a.button("Postar ↗", r1, primary = true, weight = true) { post(id, et.text.toString()) }

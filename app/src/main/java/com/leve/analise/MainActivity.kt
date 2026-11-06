@@ -54,6 +54,7 @@ class MainActivity : Activity() {
     private lateinit var tabRow: LinearLayout
     private lateinit var refsBox: LinearLayout
     private lateinit var mineBox: LinearLayout
+    private lateinit var tvLearn: TextView
     private lateinit var insta: InstaEditor
     internal lateinit var scroller: ScrollView
 
@@ -280,6 +281,7 @@ class MainActivity : Activity() {
 
     private fun showTab(name: String) {
         Store.prefs(this).edit().putString("tab", name).apply()
+        if (name == "Legendas") { renderLearn(); renderMine(); renderRefs() }
         pages.forEach { (k, v) -> v.visibility = if (k == name) View.VISIBLE else View.GONE }
         for (i in 0 until tabRow.childCount) {
             val b = tabRow.getChildAt(i) as Button
@@ -317,6 +319,7 @@ class MainActivity : Activity() {
 
     private fun postPhotoIg(id: String, cap: String) {
         copyCaption(cap)
+        CaptionDB.used(this, cap)
         toast("Legenda copiada: no Instagram é só colar e postar")
         startActivity(VideoExport.shareToInstagram(this, PostQueue.uri(id), "image/jpeg"))
     }
@@ -362,6 +365,22 @@ class MainActivity : Activity() {
             refresh()
         }
 
+        val cs = card("O que está funcionando")
+        tvLearn = text("", 13f, FG, parent = cs)
+        text("Marque 🔥 / 😐 / 👎 nos posts já feitos (aba Postar e Vídeos prontos). O sorteio e a IA passam a preferir o que bombou, sem parar de testar legendas novas.", 12f, MUTED, parent = cs)
+        val br = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        cs.addView(br, lpMatch())
+        button("Copiar backup", br, weight = true) {
+            getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("banco", CaptionDB.export(this)))
+            toast("Banco copiado. Cole num lugar seguro (Notas, Drive…)")
+        }
+        val etImp = field("Colar backup aqui pra importar", "", cs) { }
+        button("Importar backup", br, weight = true) {
+            val n = CaptionDB.import(this, etImp.text.toString()); etImp.setText("")
+            toast(if (n > 0) "$n legendas entraram no banco" else "Cole o backup no campo primeiro"); renderLearn(); renderMine(); renderRefs()
+        }
+        renderLearn()
+
         val cm = card("Minhas legendas")
         text("Toda legenda que você escreve fica salva aqui e entra no sorteio, mesmo sem a IA.", 13f, MUTED, parent = cm)
         val etm = field("Escreva uma legenda sua", "", cm) { }
@@ -385,12 +404,28 @@ class MainActivity : Activity() {
         renderRefs()
     }
 
+    private fun renderLearn() {
+        if (!::tvLearn.isInitialized) return
+        val total = CaptionDB.size(this)
+        val top = CaptionDB.top(this, 5)
+        val words = CaptionDB.winningWords(this, 8)
+        tvLearn.text = buildString {
+            append("$total legendas no banco (limite ${CaptionDB.MAX})")
+            if (top.isNotEmpty()) {
+                append("\n\nMelhores até agora:")
+                top.forEach { append("\n• ").append(it.optString("t").replace('\n', ' ').take(60)).append("  (").append((CaptionDB.mean(it) * 100).toInt()).append("%)") }
+            } else append("\n\nAinda sem avaliações.")
+            if (words.isNotEmpty()) append("\n\nPalavras que puxam: ").append(words.joinToString(", "))
+        }
+    }
+
     private fun renderMine() {
         if (!::mineBox.isInitialized) return
         mineBox.removeAllViews()
         val l = Captions.mine(this)
         if (l.isEmpty()) { text("Nenhuma ainda.", 12f, MUTED, parent = mineBox); return }
-        l.forEach { r ->
+        if (l.size > 40) text("Mostrando as 40 mais recentes de ${l.size}.", 12f, MUTED, parent = mineBox)
+        l.take(40).forEach { r ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             mineBox.addView(row, lpMatch().apply { topMargin = dp(6) })
             row.addView(TextView(this).apply { text = r; textSize = 14f; setTextColor(FG) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -407,7 +442,8 @@ class MainActivity : Activity() {
         refsBox.removeAllViews()
         val refs = Captions.refs(this)
         if (refs.isEmpty()) { text("Banco vazio. Use também \"Levar as melhores pro banco\" na aba Analisar.", 12f, MUTED, parent = refsBox); return }
-        refs.forEach { r ->
+        if (refs.size > 40) text("Mostrando as 40 mais recentes de ${refs.size}.", 12f, MUTED, parent = refsBox)
+        refs.take(40).forEach { r ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             refsBox.addView(row, lpMatch().apply { topMargin = dp(6) })
             row.addView(TextView(this).apply { text = r; textSize = 14f; setTextColor(FG) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -626,6 +662,16 @@ class MainActivity : Activity() {
             o.optString("aviso").takeIf { it.isNotEmpty() }?.let { text(it, 12f, MUTED, parent = side) }
             if (st == "postada") {
                 text("Legenda: " + PostQueue.captionOf(o).ifEmpty { "(nenhuma)" }, 13f, FG, parent = side)
+                text("Como foi esse post?", 12f, MUTED, parent = side)
+                val rr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                side.addView(rr, lpMatch())
+                val nota = o.optString("nota")
+                listOf("good" to "🔥 Bombou", "meh" to "😐", "bad" to "👎").forEach { (k, e) ->
+                    button(e, rr, primary = nota == k, weight = true) {
+                        CaptionDB.rate(this, PostQueue.captionOf(o), k); PostQueue.update(this, id) { it.put("nota", k) }; refresh()
+                        toast(if (k == "good") "Anotado: vou usar mais legendas assim" else if (k == "bad") "Anotado: vou evitar legendas assim" else "Anotado")
+                    }
+                }
                 button("🎲 Postar de novo com legenda aleatória ↗", side) {
                     val cur = o.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
                     val cap = Captions.randomCaption(this, listOf(PostQueue.captionOf(o)))

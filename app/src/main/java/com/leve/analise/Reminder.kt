@@ -134,6 +134,7 @@ class PostActivity : Activity() {
         PostQueue.putInGallery(this, id) // fica em primeiro na galeria; a cópia anterior é apagada
         try {
             startActivity(PostQueue.shareIntent(this, id, cap))
+            CaptionDB.used(this, cap)
             PostQueue.update(this, id) {
                 it.put("status", "postada"); it.put("postedAt", System.currentTimeMillis())
                 it.put("escolhida", cap); it.put("usos", it.optInt("usos") + 1)
