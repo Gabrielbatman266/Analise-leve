@@ -184,6 +184,10 @@ class InstaEditor(private val a: MainActivity) {
             Store.prefs(a).edit().putString("quality", it).apply(); btnExport.text = "Exportar $it"; qNote()
         }
         tvQ = a.text("", 12f, a.MUTED, parent = ce)
+        val gal = a.button("", ce) { }
+        fun galT() { gal.text = if (Store.prefs(a).getBoolean("save_gallery", false)) "Também salvar cópia na galeria: ligado" else "Também salvar cópia na galeria: desligado" }
+        galT()
+        gal.setOnClickListener { Store.prefs(a).edit().putBoolean("save_gallery", !Store.prefs(a).getBoolean("save_gallery", false)).apply(); galT() }
         btnExport = a.button("Exportar ${quality()}", ce, primary = true) { export() }
         qNote()
         tvProg = a.text("", 13f, a.OK, parent = ce)
@@ -240,7 +244,7 @@ class InstaEditor(private val a: MainActivity) {
 
         // ---------- biblioteca
         val cl = a.card("Vídeos prontos")
-        a.text("Todo vídeo exportado fica aqui. Troque a legenda e poste de novo: cada vez sai um arquivo novo.", 13f, a.MUTED, parent = cl)
+        a.text("Todo vídeo exportado fica guardado aqui no app. Postar ↗ manda direto pro Instagram, sem baixar nada e sem encher a galeria.", 13f, a.MUTED, parent = cl)
         libBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         cl.addView(libBox, a.lpMatch())
         renderLibrary()
@@ -579,16 +583,13 @@ class InstaEditor(private val a: MainActivity) {
             try { a.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("legenda", cap)) } catch (e: Exception) { }
             Captions.addMine(a, cap)
         }
-        Thread {
-            val u = VideoExport.freshCopyForPost(a, id)
-            ui.post {
-                if (u == null) { a.toast("Não consegui preparar o vídeo"); return@post }
-                VideoExport.updateLib(a, id) { it.put("legenda", cap); it.put("posts", it.optInt("posts") + 1); it.put("lastPost", System.currentTimeMillis()) }
-                renderLibrary()
-                a.toast(if (cap.isEmpty()) "Abrindo o Instagram" else "Legenda copiada: no Instagram é só colar e postar")
-                a.startActivity(VideoExport.shareToInstagram(a, u, "video/mp4"))
-            }
-        }.start()
+        // posta direto do app: nada é baixado nem copiado pra galeria
+        val f = File(VideoExport.videoDir(a), "$id.mp4")
+        if (!f.exists()) { a.toast("Esse vídeo não está mais no app"); return }
+        VideoExport.updateLib(a, id) { it.put("legenda", cap); it.put("posts", it.optInt("posts") + 1); it.put("lastPost", System.currentTimeMillis()) }
+        renderLibrary()
+        a.toast(if (cap.isEmpty()) "Abrindo o Instagram" else "Legenda copiada: no Instagram é só colar e postar")
+        a.startActivity(VideoExport.shareToInstagram(a, PostQueue.uri(id).buildUpon().path("/$id.mp4").build(), "video/mp4"))
     }
 
     private fun renderLibrary() {

@@ -286,7 +286,7 @@ object VideoExport {
             }
             r.release()
         } catch (e: Exception) { }
-        saveToGallery(c, f, false)
+        if (Store.prefs(c).getBoolean("save_gallery", false)) saveToGallery(c, f, false)
         val l = library(c)
         l.add(0, JSONObject().put("id", id).put("legenda", caption).put("at", System.currentTimeMillis()).put("posts", 0))
         saveLib(c, l)

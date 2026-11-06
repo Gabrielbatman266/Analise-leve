@@ -16,13 +16,16 @@ class ImgProvider : ContentProvider() {
 
     private fun fileFor(uri: Uri): File {
         val name = uri.lastPathSegment ?: throw FileNotFoundException()
-        if (!Regex("[a-z0-9]+\\.jpg").matches(name)) throw FileNotFoundException()
-        val f = File(PostQueue.dir(context!!), name)
+        val f = when {
+            Regex("[a-z0-9]+\\.jpg").matches(name) -> File(PostQueue.dir(context!!), name)
+            Regex("[a-z0-9]+\\.mp4").matches(name) -> File(VideoExport.videoDir(context!!), name) // vídeos prontos, direto do app
+            else -> throw FileNotFoundException()
+        }
         if (!f.exists()) throw FileNotFoundException()
         return f
     }
 
-    override fun getType(uri: Uri) = "image/jpeg"
+    override fun getType(uri: Uri) = if (uri.lastPathSegment?.endsWith(".mp4") == true) "video/mp4" else "image/jpeg"
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor =
         ParcelFileDescriptor.open(fileFor(uri), ParcelFileDescriptor.MODE_READ_ONLY)
