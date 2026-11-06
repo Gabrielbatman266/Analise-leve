@@ -36,34 +36,25 @@ class MainActivity : Activity() {
     private val REQ_GALLERY = 12
     private val REQ_POSTS = 13
     private val REQ_DEL = 14
-    private val REQ_VIDEO = 15
     private val REQ_IGPHOTO = 16
 
     // paleta AMOLED
-    private val BG = 0xFF000000.toInt()
-    private val CARD = 0xFF121218.toInt()
-    private val LINE = 0xFF262630.toInt()
-    private val FG = 0xFFECEEF3.toInt()
-    private val MUTED = 0xFF9A9EAB.toInt()
-    private val ACCENT = 0xFFFF5C82.toInt()
-    private val OK = 0xFF4CC68E.toInt()
+    internal val BG = 0xFF000000.toInt()
+    internal val CARD = 0xFF121218.toInt()
+    internal val LINE = 0xFF262630.toInt()
+    internal val FG = 0xFFECEEF3.toInt()
+    internal val MUTED = 0xFF9A9EAB.toInt()
+    internal val ACCENT = 0xFFFF5C82.toInt()
+    internal val OK = 0xFF4CC68E.toInt()
 
-    private val ui = Handler(Looper.getMainLooper())
+    internal val ui = Handler(Looper.getMainLooper())
     private lateinit var root: LinearLayout
     private lateinit var page: LinearLayout
     private val pages = LinkedHashMap<String, LinearLayout>()
     private lateinit var tabRow: LinearLayout
     private lateinit var refsBox: LinearLayout
     private lateinit var mineBox: LinearLayout
-    private var videoUri: Uri? = null
-    private var exported: Uri? = null
-    private var exportedMime = "video/mp4"
-    private lateinit var tvVid: TextView
-    private lateinit var tvExp: TextView
-    private lateinit var etOverlay: EditText
-    private lateinit var etIgCap: EditText
-    private lateinit var btnIgPost: Button
-    private lateinit var tvAudios: TextView
+    private lateinit var insta: InstaEditor
     private lateinit var tvStatus: TextView
     private lateinit var tvErr: TextView
     private lateinit var tvTop: TextView
@@ -84,7 +75,7 @@ class MainActivity : Activity() {
     private lateinit var etModel: EditText
     private var clearArmed = false
 
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+    internal fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -116,6 +107,7 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         super.onPause()
+        if (::insta.isInitialized) insta.stopPlay()
         ui.removeCallbacks(refresher)
     }
 
@@ -281,72 +273,27 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------ aba Instagram
 
     private fun buildInstaTab() {
-        val cv = card("Vídeo pro Instagram")
-        text("Seu vídeo vira um arquivo novo em 1080x1920 (sem os dados do original), com um texto embaixo se quiser. Depois é só postar.", 13f, MUTED, parent = cv)
-        button("Escolher meu vídeo", cv, primary = true) { pick("video/*", REQ_VIDEO) }
-        tvVid = text("Nenhum vídeo escolhido.", 13f, MUTED, parent = cv)
-        etOverlay = field("Texto no vídeo (aparece embaixo, opcional)", "", cv) { }
-        etIgCap = field("Legenda do post", "", cv) { }
-        button("🎲 Legenda aleatória", cv) { etIgCap.setText(Captions.randomCaption(this)) }
-        button("Exportar 1080p", cv, primary = true) { runExport(false) }
-        tvExp = text("", 13f, OK, parent = cv)
-        btnIgPost = button("Postar no Instagram ↗", cv, primary = true) { postExported() }
-        btnIgPost.visibility = View.GONE
-
-        val ca = card("Músicas extraídas")
-        text("Tira só o áudio do vídeo escolhido acima e salva na pasta Music/PostLeve.", 13f, MUTED, parent = ca)
-        button("Extrair só o áudio", ca) { runExport(true) }
-        tvAudios = text("", 13f, FG, parent = ca)
-        renderAudios()
-        text("Música de outros perfis: no Reels que você gostou, toque no nome do áudio › Salvar. Na hora de postar, escolha em Áudios salvos. Assim a música vem licenciada e o vídeo não é bloqueado.", 12f, MUTED, parent = ca)
-
+        insta = InstaEditor(this)
+        insta.build()
         val cf = card("Foto pro Instagram")
-        button("Escolher foto (sai sem metadados)", cf) { pick("image/*", REQ_IGPHOTO) }
+        text("Foto direto no feed, sem metadados. A legenda vai copiada.", 13f, MUTED, parent = cf)
+        button("Escolher foto", cf) { pickIgPhoto() }
         button("🎲 Foto aleatória da fila", cf) {
             val pk = Captions.randomPick(this)
             if (pk == null) toast("A fila está vazia") else postPhotoIg(pk.first, pk.second)
         }
     }
 
-    private fun pick(mime: String, req: Int) {
-        val i = Intent(Intent.ACTION_GET_CONTENT).apply { type = mime; addCategory(Intent.CATEGORY_OPENABLE) }
+    private fun pickIgPhoto() {
+        val i = Intent(Intent.ACTION_GET_CONTENT).apply { type = "image/*"; addCategory(Intent.CATEGORY_OPENABLE) }
         @Suppress("DEPRECATION")
-        startActivityForResult(Intent.createChooser(i, "Escolher"), req)
-    }
-
-    private fun renderAudios() {
-        Thread {
-            val l = VideoExport.savedAudios(this)
-            ui.post { tvAudios.text = if (l.isEmpty()) "Nenhum áudio extraído ainda." else l.take(10).joinToString("\n") { "♪ $it" } }
-        }.start()
-    }
-
-    private fun runExport(audio: Boolean) {
-        val src = videoUri ?: run { toast("Escolha o vídeo primeiro"); return }
-        tvExp.setTextColor(MUTED); tvExp.text = if (audio) "Extraindo áudio…" else "Exportando 1080p…"
-        btnIgPost.visibility = View.GONE
-        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        VideoExport.export(this, src, if (audio) "" else etOverlay.text.toString(), audio,
-            { pct -> tvExp.text = (if (audio) "Extraindo áudio… " else "Exportando 1080p… ") + "$pct%" }) { uri, err ->
-            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            if (uri == null) { tvExp.setTextColor(ACCENT); tvExp.text = "Não deu: $err"; return@export }
-            tvExp.setTextColor(OK)
-            if (audio) { tvExp.text = "Áudio salvo em Music/PostLeve"; renderAudios() }
-            else { exported = uri; exportedMime = "video/mp4"; tvExp.text = "Vídeo pronto, salvo em Movies/PostLeve"; btnIgPost.visibility = View.VISIBLE }
-        }
+        startActivityForResult(Intent.createChooser(i, "Escolher"), REQ_IGPHOTO)
     }
 
     private fun copyCaption(t: String) {
         if (t.isBlank()) return
         try { getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("legenda", t)) } catch (e: Exception) { }
         Captions.addMine(this, t)
-    }
-
-    private fun postExported() {
-        val u = exported ?: return
-        copyCaption(etIgCap.text.toString().trim())
-        toast("Legenda copiada: no Instagram é só colar e postar")
-        startActivity(VideoExport.shareToInstagram(this, u, exportedMime))
     }
 
     private fun postPhotoIg(id: String, cap: String) {
@@ -357,7 +304,7 @@ class MainActivity : Activity() {
 
     // ------------------------------------------------------------------ aba Legendas
 
-    private fun chips(parent: LinearLayout, options: List<String>, current: () -> String, pick: (String) -> Unit) {
+    internal fun chips(parent: LinearLayout, options: List<String>, current: () -> String, pick: (String) -> Unit) {
         val wrap = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         parent.addView(wrap, lpMatch())
         fun draw() {
@@ -453,9 +400,9 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun lpMatch() = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+    internal fun lpMatch() = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
-    private fun card(title: String? = null): LinearLayout {
+    internal fun card(title: String? = null): LinearLayout {
         val c = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), dp(12), dp(14), dp(12))
@@ -466,7 +413,7 @@ class MainActivity : Activity() {
         return c
     }
 
-    private fun text(t: String, size: Float, color: Int, parent: LinearLayout = root, bold: Boolean = false): TextView {
+    internal fun text(t: String, size: Float, color: Int, parent: LinearLayout = root, bold: Boolean = false): TextView {
         val v = TextView(this).apply {
             text = t; textSize = size; setTextColor(color)
             if (bold) typeface = Typeface.DEFAULT_BOLD
@@ -477,7 +424,7 @@ class MainActivity : Activity() {
         return v
     }
 
-    private fun button(t: String, parent: LinearLayout, primary: Boolean = false, weight: Boolean = false, onClick: () -> Unit): Button {
+    internal fun button(t: String, parent: LinearLayout, primary: Boolean = false, weight: Boolean = false, onClick: () -> Unit): Button {
         val b = Button(this).apply {
             text = t; isAllCaps = false; textSize = 15f
             setTextColor(if (primary) 0xFF1A0A10.toInt() else FG)
@@ -493,7 +440,7 @@ class MainActivity : Activity() {
         return b
     }
 
-    private fun field(hint: String, value: String, parent: LinearLayout, password: Boolean = false, number: Boolean = false, onChange: (String) -> Unit): EditText {
+    internal fun field(hint: String, value: String, parent: LinearLayout, password: Boolean = false, number: Boolean = false, onChange: (String) -> Unit): EditText {
         text(hint, 12f, MUTED, parent = parent)
         val e = EditText(this).apply {
             setText(value); setTextColor(FG); setHintTextColor(MUTED); textSize = 15f
@@ -790,15 +737,12 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
+        if (::insta.isInitialized && insta.onResult(requestCode, resultCode, data)) return
         if (requestCode == REQ_DEL) {
             if (resultCode == RESULT_OK) { FolderScan.clearOriginals(this); toast("Apagadas do Download") }
             updateFolderUi(); return
         }
         if (resultCode != RESULT_OK || data == null) return
-        if (requestCode == REQ_VIDEO) {
-            videoUri = data.data; exported = null; btnIgPost.visibility = View.GONE; tvExp.text = ""
-            tvVid.text = "Vídeo escolhido. Agora coloque o texto e exporte."; tvVid.setTextColor(OK); return
-        }
         if (requestCode == REQ_IGPHOTO) {
             val u = data.data ?: return
             toast("Limpando a foto…")
@@ -813,7 +757,7 @@ class MainActivity : Activity() {
                 ui.post {
                     if (id == null) toast("Não abriu essa foto")
                     else { PostQueue.update(this, id) { it.put("status", "pronta"); it.put("legendas", org.json.JSONArray(Captions.randomCaptions(this, 4))) }
-                        postPhotoIg(id, etIgCap.text.toString().trim().ifEmpty { Captions.randomCaption(this) }) }
+                        postPhotoIg(id, Captions.randomCaption(this)) }
                 }
             }.start()
             return
@@ -883,7 +827,7 @@ class MainActivity : Activity() {
     }
 
     /** Vira a foto conforme a orientação original antes de descartar os metadados. */
-    private fun rotateByExif(u: Uri, b: Bitmap): Bitmap = try {
+    internal fun rotateByExif(u: Uri, b: Bitmap): Bitmap = try {
         val deg = contentResolver.openInputStream(u)?.use {
             when (android.media.ExifInterface(it).getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1)) {
                 6 -> 90f; 3 -> 180f; 8 -> 270f; else -> 0f
@@ -949,5 +893,5 @@ class MainActivity : Activity() {
         toast("Banco copiado ($n posts). Cole no Post Leve.")
     }
 
-    private fun toast(t: String) = Toast.makeText(this, t, Toast.LENGTH_LONG).show()
+    internal fun toast(t: String) = Toast.makeText(this, t, Toast.LENGTH_LONG).show()
 }
