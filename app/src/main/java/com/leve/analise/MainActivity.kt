@@ -105,6 +105,8 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        QuickPost.publishShortcut(this)
+        QuickPost.updateWidgets(this)
         Thread {
             PostQueue.cleanGallery(this, false)
             val n = FolderScan.scan(this)

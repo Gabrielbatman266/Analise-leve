@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="10dp"
+    android:background="@drawable/widget_bg">
+
+    <TextView
+        android:id="@+id/w_open"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Post Leve"
+        android:textColor="#ECEEF3"
+        android:textStyle="bold"
+        android:textSize="15sp" />
+
+    <TextView
+        android:id="@+id/w_count"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textColor="#9A9EAB"
+        android:textSize="12sp" />
+
+    <TextView
+        android:id="@+id/w_post"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="8dp"
+        android:gravity="center"
+        android:text="Postar próximo ↗"
+        android:textColor="#1A0A10"
+        android:textStyle="bold"
+        android:textSize="16sp"
+        android:background="@drawable/widget_btn" />
+</LinearLayout>

@@ -70,6 +70,28 @@ Responda só com JSON: {"padroes":["4 a 7 frases curtas e práticas em portuguê
     }
 
     /** Legendas pra uma foto da fila, no estilo do que mais engajou no banco. */
+    /** Várias fotos num pedido só: devolve as legendas de cada foto, na mesma ordem. */
+    fun captionsBatch(c: Context, imgs: List<File>): List<List<String>> {
+        if (imgs.size == 1) return listOf(captions(c, imgs[0]))
+        val base = Captions.prompt(c).substringBefore("Responda só com JSON")
+        val prompt = base + """
+São ${imgs.size} fotos anexadas, numeradas de 1 a ${imgs.size} na ordem. Faça 5 legendas diferentes pra CADA foto, específicas dela.
+Responda só com JSON: {"fotos":[{"n":1,"legendas":["...","...","...","...","..."]}]}"""
+        val b64 = imgs.map { Base64.encodeToString(shrink(it), Base64.NO_WRAP) }
+        val txt = ask(c, prompt, b64)
+        val arr = parseObj(txt).optJSONArray("fotos") ?: throw AiException(-2, "Resposta que não entendi: " + txt.take(120))
+        val out = MutableList(imgs.size) { emptyList<String>() }
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val n = o.optInt("n", i + 1) - 1
+            if (n !in out.indices) continue
+            val l = o.optJSONArray("legendas") ?: continue
+            out[n] = Captions.withCta(c, (0 until l.length()).map { l.optString(it) }.filter { it.isNotBlank() }.take(6))
+        }
+        if (out.all { it.isEmpty() }) throw AiException(-2, "Nenhuma legenda veio")
+        return out
+    }
+
     fun captions(c: Context, img: File): List<String> {
         val prompt = Captions.prompt(c)
         val b64 = Base64.encodeToString(shrink(img), Base64.NO_WRAP)

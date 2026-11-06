@@ -121,13 +121,19 @@ class ReminderReceiver : BroadcastReceiver() {
 class PostActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val id = intent.getStringExtra("id")
+        // "Postar próximo" (widget, atalho, barra): sorteia foto e legenda na hora
+        val pick = if (intent.getBooleanExtra("random", false)) Captions.randomPick(this) else null
+        if (intent.getBooleanExtra("random", false) && pick == null) {
+            Toast.makeText(this, "A fila está vazia. Adicione fotos no Post Leve.", Toast.LENGTH_LONG).show()
+            finish(); return
+        }
+        val id = pick?.first ?: intent.getStringExtra("id")
         val item = id?.let { PostQueue.get(this, it) }
         if (id == null || item == null || !PostQueue.imageFile(this, id).exists()) {
             Toast.makeText(this, "Essa foto não está mais na fila", Toast.LENGTH_SHORT).show()
             finish(); return
         }
-        val cap = intent.getStringExtra("caption") ?: PostQueue.captionOf(item)
+        val cap = pick?.second ?: intent.getStringExtra("caption") ?: PostQueue.captionOf(item)
         try {
             getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("legenda", cap))
         } catch (e: Exception) { }

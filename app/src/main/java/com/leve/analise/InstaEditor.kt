@@ -168,6 +168,8 @@ class InstaEditor(private val a: MainActivity) {
         }.start()
     }
     private lateinit var tvQ: TextView
+    private lateinit var modelBox: LinearLayout
+    private lateinit var tvMany: TextView
     private fun quality() = Store.prefs(a).getString("quality", "1080p") ?: "1080p"
     private fun qNote() {
         if (!::tvQ.isInitialized) return
@@ -186,6 +188,8 @@ class InstaEditor(private val a: MainActivity) {
         // ---------- projetos
         val cp = a.card("Esboços")
         a.text("Os originais ficam aqui, sem perder nada. Os vídeos novos do Flow entram sozinhos. Toque em Editar, mude texto e música, exporte e poste. Dá pra repetir com o mesmo original quantas vezes quiser.", 13f, a.MUTED, parent = cp)
+        a.button("⚡ Exportar vários de uma vez", cp, primary = true) { exportManyDialog() }
+        tvMany = a.text("", 13f, a.OK, parent = cp)
         a.button("＋ Novo esboço (limpar editor)", cp) { newProject() }
         projBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         cp.addView(projBox, a.lpMatch())
@@ -199,6 +203,11 @@ class InstaEditor(private val a: MainActivity) {
         a.button("🎬 Meu vídeo", pick, primary = true, weight = true) { open("video/*", REQ_VIDEO) }
         a.button("🖼 Foto → vídeo", pick, weight = true) { open("image/*", REQ_PHOTO) }
         tvSrc = a.text("Escolha um vídeo ou uma foto pra começar.", 13f, a.MUTED, parent = ce)
+        a.text("Modelos (toque pra aplicar, segure pra apagar)", 12f, a.MUTED, parent = ce)
+        modelBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        ce.addView(modelBox, a.lpMatch())
+        a.button("☆ Salvar como modelo", ce) { saveModelDialog() }
+        renderModels()
 
         // prévia 9:16
         val w = a.resources.displayMetrics.widthPixels - a.dp(64)
@@ -393,6 +402,123 @@ class InstaEditor(private val a: MainActivity) {
         libBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         cl.addView(libBox, a.lpMatch())
         renderLibrary()
+    }
+
+    // ------------------------------------------------------------------ modelos
+
+    private fun styleJson(st: TextStyle) = org.json.JSONObject().put("size", st.size).put("color", st.color).put("bg", st.bg)
+        .put("pos", st.pos).put("font", st.font).put("align", st.align)
+    private fun styleOf(st: org.json.JSONObject) = TextStyle(st.optInt("size", 52), st.optString("color", "Branco"), st.optString("bg", "Faixa escura"),
+        st.optString("pos", "Baixo"), st.optString("font", "Negrito"), st.optString("align", "Centro"))
+
+    private fun models(): MutableList<org.json.JSONObject> = try {
+        val a0 = org.json.JSONArray(Store.prefs(a).getString("modelos", "[]")); (0 until a0.length()).map { a0.getJSONObject(it) }.toMutableList()
+    } catch (e: Exception) { mutableListOf() }
+    private fun saveModels(l: List<org.json.JSONObject>) { val ar = org.json.JSONArray(); l.forEach { ar.put(it) }; Store.prefs(a).edit().putString("modelos", ar.toString()).apply() }
+
+    private fun saveModelDialog() {
+        val et = EditText(a).apply { hint = "Nome do modelo (ex.: Rosa embaixo)"; setSingleLine(true) }
+        AlertDialog.Builder(a).setTitle("Salvar como modelo").setView(et)
+            .setPositiveButton("Com o texto") { _, _ -> saveModel(et.text.toString(), true) }
+            .setNeutralButton("Sem o texto") { _, _ -> saveModel(et.text.toString(), false) }
+            .setNegativeButton("Cancelar", null).show()
+    }
+
+    private fun saveModel(name0: String, withText: Boolean) {
+        val name = name0.trim().ifEmpty { "Modelo ${models().size + 1}" }
+        val m = org.json.JSONObject().put("name", name).put("style", styleJson(style))
+            .put("music", music?.path ?: "").put("musicStart", musicStart).put("mute", mute)
+            .put("secs", photoSecs).put("quality", quality()).put("text", if (withText) etText.text.toString() else "")
+        saveModels(models().filter { it.optString("name") != name } + m)
+        renderModels(); a.toast("Modelo \"$name\" salvo")
+    }
+
+    private fun applyModel(m: org.json.JSONObject) {
+        style = styleOf(m.optJSONObject("style") ?: org.json.JSONObject()); style.save(a)
+        music = m.optString("music").takeIf { it.isNotEmpty() }?.let { File(it) }?.takeIf { it.exists() }
+        musicStart = m.optLong("musicStart"); mute = m.optBoolean("mute"); photoSecs = m.optInt("secs", 8)
+        Store.prefs(a).edit().putString("quality", m.optString("quality", "1080p")).apply()
+        btnExport.text = "Exportar ${quality()}"; qNote()
+        m.optString("text").takeIf { it.isNotEmpty() }?.let { etText.setText(it) }
+        seek.progress = style.size - 20
+        redraws.forEach { it() }
+        updateMusicLabel(); drawPreview(); scheduleSave()
+        a.toast("Modelo \"${m.optString("name")}\" aplicado")
+    }
+
+    private fun renderModels() {
+        if (!::modelBox.isInitialized) return
+        modelBox.removeAllViews()
+        val l = models()
+        if (l.isEmpty()) { a.text("Nenhum modelo ainda. Ajuste o vídeo do jeito que gosta e toque em Salvar como modelo.", 12f, a.MUTED, parent = modelBox); return }
+        l.chunked(2).forEach { pair ->
+            val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+            modelBox.addView(row, a.lpMatch())
+            pair.forEach { m ->
+                val b = a.button("★ " + m.optString("name"), row, weight = true) { applyModel(m) }
+                b.setOnLongClickListener {
+                    AlertDialog.Builder(a).setTitle("Apagar o modelo \"${m.optString("name")}\"?")
+                        .setPositiveButton("Apagar") { _, _ -> saveModels(models().filter { it.optString("name") != m.optString("name") }); renderModels() }
+                        .setNegativeButton("Cancelar", null).show(); true
+                }
+            }
+            if (pair.size == 1) row.addView(View(a), LinearLayout.LayoutParams(0, 1, 1f))
+        }
+    }
+
+    // ------------------------------------------------------------------ exportar vários
+
+    private fun exportManyDialog() {
+        if (VideoExport.busy()) { a.toast("Espere terminar o que está exportando"); return }
+        val l = models()
+        val names = listOf("Do jeito de cada esboço") + l.map { "★ " + it.optString("name") }
+        AlertDialog.Builder(a).setTitle("Qual modelo usar?").setItems(names.toTypedArray()) { _, i ->
+            val m = if (i == 0) null else l[i - 1]
+            val all = Projects.list(a)
+            val novos = all.filter { it.optInt("versoes") == 0 }
+            AlertDialog.Builder(a).setTitle("Exportar quais esboços?")
+                .setItems(arrayOf("Só os novos (${novos.size})", "Todos (${all.size})")) { _, j ->
+                    val alvo = if (j == 0) novos else all
+                    if (alvo.isEmpty()) a.toast("Nenhum esboço pra exportar") else { saveNow(); exportMany(alvo.map { it.optString("id") }, m) }
+                }.show()
+        }.show()
+    }
+
+    /** Exporta um esboço atrás do outro, cada um com legenda sorteada, direto pra Vídeos prontos. */
+    private fun exportMany(ids: List<String>, m: org.json.JSONObject?, i: Int = 0, ok: Int = 0) {
+        if (i >= ids.size) {
+            a.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            tvMany.setTextColor(a.OK); tvMany.text = "$ok de ${ids.size} vídeos prontos. Estão em Vídeos prontos, com legenda sorteada."
+            renderLibrary(); renderProjects(); return
+        }
+        if (i == 0) { stopPlay(); a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+        val p = Projects.get(a, ids[i])
+        if (p == null) { exportMany(ids, m, i + 1, ok); return }
+        val photo = p.optBoolean("photo")
+        val f = Projects.srcFile(a, ids[i], photo)
+        if (!f.exists()) { exportMany(ids, m, i + 1, ok); return }
+        val st = (m?.optJSONObject("style") ?: p.optJSONObject("style"))?.let { styleOf(it) } ?: TextStyle.load(a)
+        val txt = m?.optString("text")?.takeIf { it.isNotEmpty() } ?: p.optString("text")
+        val mus = (if (m != null) m.optString("music") else p.optString("music")).takeIf { it.isNotEmpty() }?.let { File(it) }?.takeIf { it.exists() }
+        val mt = if (m != null) m.optBoolean("mute") else p.optBoolean("mute")
+        val ms = if (m != null) m.optLong("musicStart") else p.optLong("musicStart")
+        val secs = if (m != null) m.optInt("secs", 8) else p.optInt("secs", 8)
+        val q = m?.optString("quality")?.ifEmpty { null } ?: quality()
+        val cs = p.optLong("cutStart"); val ce = p.optLong("cutEnd")
+        val dur = if (photo) 0L else VideoExport.durationMs(f)
+        val job = VideoExport.Job(Uri.fromFile(f), photo, secs, txt, st, mus, mt, q,
+            if (photo) 0 else cs, if (photo || ce <= 0 || ce >= dur) 0 else ce, ms)
+        tvMany.setTextColor(a.MUTED); tvMany.text = "Exportando ${i + 1} de ${ids.size}…"
+        VideoExport.export(a, job, { pr -> tvMany.text = "Exportando ${i + 1} de ${ids.size}… $pr%" }) { out, _ ->
+            if (out == null) { exportMany(ids, m, i + 1, ok); return@export }
+            val cap = p.optString("caption").ifBlank { Captions.randomCaption(a) }
+            Thread {
+                val vid = VideoExport.addToLibrary(a, out, cap)
+                VideoExport.updateLib(a, vid) { it.put("proj", ids[i]) }
+                Projects.update(a, ids[i]) { it.put("versoes", it.optInt("versoes") + 1) }
+                ui.post { renderLibrary(); exportMany(ids, m, i + 1, ok + 1) }
+            }.start()
+        }
     }
 
     // ------------------------------------------------------------------ projetos

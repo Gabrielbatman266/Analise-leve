@@ -40,6 +40,7 @@ object PostQueue {
     private fun save(c: Context, list: List<JSONObject>) = synchronized(lock) {
         val a = JSONArray(); list.forEach { a.put(it) }
         file(c).writeText(a.toString())
+        QuickPost.updateWidgets(c)
     }
 
     /** Salva a foto limpa (JPEG novo, sem EXIF/GPS) e coloca na fila esperando legendas. */
