@@ -51,7 +51,7 @@ object Reminder {
     fun notifyNow(c: Context) {
         val nm = c.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CH, "Hora de postar", NotificationManager.IMPORTANCE_HIGH))
-        val item = PostQueue.next(c)
+        val pick = Captions.randomPick(c)
         val open = PendingIntent.getActivity(c, 1, Intent(c, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val b = Notification.Builder(c, CH)
@@ -59,20 +59,21 @@ object Reminder {
             .setContentTitle("Hora de postar")
             .setAutoCancel(true)
             .setContentIntent(open)
-        if (item == null) {
-            b.setContentText("A fila está vazia. Adicione fotos no Análise Leve.")
+        if (pick == null) {
+            b.setContentText("A fila está vazia. Adicione fotos no Post Leve.")
         } else {
-            val id = item.optString("id")
-            val cap = PostQueue.captionOf(item)
-            b.setContentText(cap.ifEmpty { "Próxima foto pronta" })
+            val (id, cap) = pick
+            b.setContentText(cap)
             try {
-                val o = BitmapFactory.Options().apply { inSampleSize = 2 }
+                val o = BitmapFactory.Options().apply { inSampleSize = 4 }
                 val bmp = BitmapFactory.decodeFile(PostQueue.imageFile(c, id).path, o)
                 if (bmp != null) b.setLargeIcon(bmp).setStyle(Notification.BigPictureStyle().bigPicture(bmp).setSummaryText(cap))
             } catch (e: Exception) { }
-            b.setContentIntent(postIntent(c, id))
-            b.addAction(Notification.Action.Builder(null, "Postar agora", postIntent(c, id)).build())
-            b.addAction(Notification.Action.Builder(null, "Abrir fila", open).build())
+            b.setContentIntent(postIntent(c, id, cap))
+            b.addAction(Notification.Action.Builder(null, "Postar", postIntent(c, id, cap)).build())
+            b.addAction(Notification.Action.Builder(null, "Sortear outra", PendingIntent.getBroadcast(c, 5,
+                Intent(c, ReminderReceiver::class.java).setAction("com.leve.analise.REROLL"),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build())
         }
         try { nm.notify(NID, b.build()) } catch (e: SecurityException) { }
     }
@@ -81,6 +82,7 @@ object Reminder {
 class ReminderReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         if (i.action == Intent.ACTION_BOOT_COMPLETED) { Reminder.schedule(c); FolderScan.schedule(c); return }
+        if (i.action == "com.leve.analise.REROLL") { Reminder.notifyNow(c); return }
         PostQueue.cleanGallery(c, false)
         Reminder.notifyNow(c)
         Reminder.schedule(c)

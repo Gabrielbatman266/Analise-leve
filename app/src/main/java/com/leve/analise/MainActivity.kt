@@ -51,6 +51,7 @@ class MainActivity : Activity() {
     private val pages = LinkedHashMap<String, LinearLayout>()
     private lateinit var tabRow: LinearLayout
     private lateinit var refsBox: LinearLayout
+    private lateinit var mineBox: LinearLayout
     private lateinit var tvStatus: TextView
     private lateinit var tvErr: TextView
     private lateinit var tvTop: TextView
@@ -144,10 +145,15 @@ class MainActivity : Activity() {
         val cp = card("Fila de posts")
         text("Adicione fotos: cada uma sai sem metadados e ganha legendas. Toque em Postar e o Threads abre com a foto e a legenda juntas. É só publicar.", 13f, MUTED, parent = cp)
         button("＋ Adicionar fotos pra postar", cp, primary = true) { pickPosts() }
-        text("Lembrete pra postar", 12f, MUTED, parent = cp)
+        button("🎲 Postar uma aleatória agora", cp) {
+            val pk = Captions.randomPick(this)
+            if (pk == null) toast("A fila está vazia")
+            else startActivity(Intent(this, PostActivity::class.java).putExtra("id", pk.first).putExtra("caption", pk.second))
+        }
+        text("Lembrete pra postar: a notificação já vem com foto e legenda sorteadas. Toque em Postar e depois em Publicar no Threads.", 12f, MUTED, parent = cp)
         everyRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         cp.addView(everyRow, lpMatch())
-        listOf(0 to "Off", 15 to "15m", 30 to "30m", 60 to "1h", 120 to "2h").forEach { (m, t) ->
+        listOf(0 to "Off", 15 to "15m", 20 to "20m", 30 to "30m", 60 to "1h").forEach { (m, t) ->
             button(t, everyRow, weight = true) { Reminder.setEvery(this, m); styleEvery(); refresh()
                 toast(if (m == 0) "Lembrete desligado" else "Vou avisar a cada $t com a próxima foto") }.tag = m
         }
@@ -280,6 +286,17 @@ class MainActivity : Activity() {
             refresh()
         }
 
+        val cm = card("Minhas legendas")
+        text("Toda legenda que você escreve fica salva aqui e entra no sorteio, mesmo sem a IA.", 13f, MUTED, parent = cm)
+        val etm = field("Escreva uma legenda sua", "", cm) { }
+        button("Salvar", cm, primary = true) {
+            val t = etm.text.toString().trim()
+            if (t.isEmpty()) toast("Escreva a legenda primeiro") else { Captions.addMine(this, t); etm.setText(""); renderMine(); toast("Salva") }
+        }
+        mineBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        cm.addView(mineBox, lpMatch())
+        renderMine()
+
         val cb = card("Banco de legendas virais")
         text("Viu uma legenda bombando no Threads? Salve aqui. O gerador copia o ritmo e o tom delas, nunca o texto.", 13f, MUTED, parent = cb)
         val et = field("Cole uma legenda que viralizou", "", cb) { }
@@ -290,6 +307,23 @@ class MainActivity : Activity() {
         refsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         cb.addView(refsBox, lpMatch())
         renderRefs()
+    }
+
+    private fun renderMine() {
+        if (!::mineBox.isInitialized) return
+        mineBox.removeAllViews()
+        val l = Captions.mine(this)
+        if (l.isEmpty()) { text("Nenhuma ainda.", 12f, MUTED, parent = mineBox); return }
+        l.forEach { r ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            mineBox.addView(row, lpMatch().apply { topMargin = dp(6) })
+            row.addView(TextView(this).apply { text = r; textSize = 14f; setTextColor(FG) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(Button(this).apply {
+                text = "✕"; setTextColor(MUTED); textSize = 14f
+                background = GradientDrawable().apply { setColor(0xFF1C1C24.toInt()); cornerRadius = dp(8).toFloat() }
+                setOnClickListener { Captions.removeMine(this@MainActivity, r); renderMine() }
+            }, LinearLayout.LayoutParams(dp(44), dp(40)))
+        }
     }
 
     private fun renderRefs() {
@@ -521,12 +555,12 @@ class MainActivity : Activity() {
                 button("Usar minha legenda", mine, weight = true) {
                     val t = et.text.toString().trim()
                     if (t.isEmpty()) toast("Escreva a legenda primeiro")
-                    else { PostQueue.setManual(this, id, t); et.clearFocus(); toast("Legenda escolhida") ; refresh() }
+                    else { PostQueue.setManual(this, id, t); Captions.addMine(this, t); et.clearFocus(); toast("Legenda escolhida e salva em Minhas legendas") ; refresh() }
                 }
                 button("Postar com ela ↗", mine, weight = true) {
                     val t = et.text.toString().trim()
                     if (t.isEmpty()) toast("Escreva a legenda primeiro")
-                    else { PostQueue.setManual(this, id, t); startActivity(Intent(this, PostActivity::class.java).putExtra("id", id).putExtra("caption", t)) }
+                    else { PostQueue.setManual(this, id, t); Captions.addMine(this, t); startActivity(Intent(this, PostActivity::class.java).putExtra("id", id).putExtra("caption", t)) }
                 }
             }
             if (st == "pronta") {

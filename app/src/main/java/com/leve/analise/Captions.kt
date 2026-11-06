@@ -70,4 +70,31 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         ids.forEach { id -> PostQueue.update(c, id) { it.put("status", "gerando") } }
         return ids.size
     }
+    // ---------- minhas legendas (escritas na mão, reaproveitadas no sorteio) ----------
+    fun mine(c: Context): List<String> = try {
+        val a = JSONArray(p(c).getString("mine", "[]"))
+        (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() }
+    } catch (e: Exception) { emptyList() }
+
+    private fun saveMine(c: Context, l: List<String>) {
+        val a = JSONArray(); l.take(200).forEach { a.put(it) }
+        p(c).edit().putString("mine", a.toString()).apply()
+    }
+    fun addMine(c: Context, t: String) { if (t.isNotBlank()) saveMine(c, listOf(t.trim()) + mine(c).filter { it != t.trim() }) }
+    fun removeMine(c: Context, t: String) = saveMine(c, mine(c).filter { it != t })
+
+    /**
+     * Sorteio do post: uma foto aleatória (as ainda não postadas primeiro; se todas já foram, reusa)
+     * e uma legenda aleatória entre as dela e as que você escreveu.
+     */
+    fun randomPick(c: Context): Pair<String, String>? {
+        val all = PostQueue.load(c).filter { PostQueue.imageFile(c, it.optString("id")).exists() }
+        if (all.isEmpty()) return null
+        val fresh = all.filter { it.optString("status") != "postada" }
+        val o = (if (fresh.isNotEmpty()) fresh else all).random()
+        val own = o.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
+        val pool = (own + mine(c)).filter { it.isNotBlank() }.distinct()
+        val cap = pool.randomOrNull() ?: withCta(c, Ai.OFFLINE.shuffled().take(1)).first()
+        return o.optString("id") to cap
+    }
 }
