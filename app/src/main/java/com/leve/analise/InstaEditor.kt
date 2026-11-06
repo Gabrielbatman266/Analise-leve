@@ -93,9 +93,72 @@ class InstaEditor(private val a: MainActivity) {
         syncCut(); scheduleSave(); frameAtCut(start)
     }
 
+    private var mp: MediaPlayer? = null
+    private var bgm: MediaPlayer? = null
+    private var editMode = false
+    private lateinit var textLayer: ImageView
+    private lateinit var playRow: LinearLayout
+    private lateinit var btnTrecho: Button
+    private lateinit var tvPos: TextView
+
+    private fun applyVolume() { val v = if (mute || music != null) 0f else 1f; try { mp?.setVolume(v, v) } catch (e: Exception) { } }
+
+    private fun seekPrecise(ms: Long) {
+        val p = mp
+        if (p != null && android.os.Build.VERSION.SDK_INT >= 26) try { p.seekTo(ms, MediaPlayer.SEEK_CLOSEST); return } catch (e: Exception) { }
+        try { video.seekTo(ms.toInt()) } catch (e: Exception) { }
+    }
+
+    private fun bgmStart(offset: Long) {
+        bgmStop()
+        val f = music ?: return
+        bgm = try { MediaPlayer().apply { setDataSource(f.path); prepare(); seekTo((musicStart + offset).toInt()); start() } } catch (e: Exception) { null }
+    }
+    private fun bgmStop() { try { bgm?.stop(); bgm?.release() } catch (e: Exception) { }; bgm = null }
+
+    private fun pauseEdit() {
+        try { if (video.isPlaying) video.pause() } catch (e: Exception) { }
+        bgmStop()
+        if (::btnTrecho.isInitialized) btnTrecho.text = "▶ Ver trecho"
+    }
+
+    /** Toca só o trecho escolhido, em loop, com o texto e a música por cima. */
+    private fun togglePlay() {
+        if (!editMode) { if (video.isPlaying) video.pause() else video.start(); return }
+        if (video.isPlaying) { pauseEdit(); return }
+        var pos = try { video.currentPosition.toLong() } catch (e: Exception) { 0L }
+        if (pos < cutStart || pos >= cutEnd - 200) { seekPrecise(cutStart); pos = cutStart }
+        applyVolume(); video.start(); bgmStart(pos - cutStart)
+        btnTrecho.text = "⏸ Pausar"
+        ui.removeCallbacks(loopTick); ui.post(loopTick)
+    }
+
+    private val loopTick = object : Runnable {
+        override fun run() {
+            if (!editMode) return
+            val pos = try { video.currentPosition.toLong() } catch (e: Exception) { 0L }
+            tvPos.text = t(pos)
+            if (video.isPlaying && pos >= cutEnd) { seekPrecise(cutStart); bgmStart(0) }
+            ui.postDelayed(this, 50)
+        }
+    }
+
+    /** Prévia do vídeo de verdade: dá pra tocar o trecho e arrastar o corte vendo o quadro. */
+    private fun showEditVideo(s: Uri) {
+        editMode = true
+        afterBox.visibility = View.GONE
+        preview.visibility = View.GONE
+        video.visibility = View.VISIBLE; textLayer.visibility = View.VISIBLE; playRow.visibility = View.VISIBLE
+        btnTrecho.text = "▶ Ver trecho"
+        video.setVideoURI(s)
+        ui.removeCallbacks(loopTick); ui.post(loopTick)
+        drawPreview()
+    }
+
     private var frameJob = 0
     /** Mostra na prévia o quadro do ponto de corte. */
     private fun frameAtCut(start: Boolean) {
+        if (editMode) { pauseEdit(); seekPrecise(if (start) cutStart else maxOf(0, cutEnd - 100)); return }
         val s = src ?: return
         val ms = if (start) cutStart else maxOf(0, cutEnd - 100)
         val my = ++frameJob
@@ -148,8 +211,18 @@ class InstaEditor(private val a: MainActivity) {
         frame.addView(preview, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         video = VideoView(a).apply { visibility = View.GONE }
         frame.addView(video, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER))
-        video.setOnPreparedListener { it.isLooping = true }
-        video.setOnClickListener { if (video.isPlaying) video.pause() else video.start() }
+        video.setOnPreparedListener { p ->
+            mp = p; p.isLooping = !editMode; applyVolume()
+            if (editMode) seekPrecise(cutStart)
+        }
+        video.setOnClickListener { togglePlay() }
+        textLayer = ImageView(a).apply { scaleType = ImageView.ScaleType.FIT_CENTER; visibility = View.GONE }
+        frame.addView(textLayer, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        playRow = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; visibility = View.GONE }
+        ce.addView(playRow, a.lpMatch().apply { topMargin = a.dp(6) })
+        btnTrecho = a.button("▶ Ver trecho", playRow, primary = true, weight = true) { togglePlay() }
+        tvPos = TextView(a).apply { setTextColor(a.FG); textSize = 15f; gravity = Gravity.CENTER; text = "0:00,0" }
+        playRow.addView(tvPos, LinearLayout.LayoutParams(a.dp(90), ViewGroup.LayoutParams.WRAP_CONTENT))
 
         // texto
         a.text("Texto no vídeo (Enter = novo parágrafo)", 12f, a.MUTED, parent = ce)
@@ -266,7 +339,7 @@ class InstaEditor(private val a: MainActivity) {
         afterBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         ce.addView(afterBox, a.lpMatch())
         a.button("Postar no Instagram ↗", afterBox, primary = true) { lastExportId?.let { post(it, etCap.text.toString()) } }
-        a.button("Voltar pra prévia", afterBox) { showImagePreview() }
+        a.button("Voltar pra edição", afterBox) { val s0 = src; if (s0 != null && !isPhoto) showEditVideo(s0) else { showImagePreview(); drawPreview() } }
 
         // ---------- músicas
         val cm = a.card("Minhas músicas")
@@ -419,8 +492,9 @@ class InstaEditor(private val a: MainActivity) {
     private fun schedulePreview() { ui.removeCallbacks(previewTask); ui.postDelayed(previewTask, 120) }
 
     private fun drawPreview() {
-        val b = base
         val txt = etText.text.toString()
+        if (editMode) { textLayer.setImageBitmap(VideoExport.textBitmap(txt, style, 540, 960)); return }
+        val b = base
         if (b == null) {
             // sem mídia: mostra o texto num fundo escuro pra testar o estilo
             val blank = Bitmap.createBitmap(540, 960, Bitmap.Config.ARGB_8888).apply { eraseColor(0xFF1C1C24.toInt()) }
@@ -431,6 +505,8 @@ class InstaEditor(private val a: MainActivity) {
     }
 
     private fun showImagePreview() {
+        editMode = false; bgmStop(); ui.removeCallbacks(loopTick); mp = null
+        if (::textLayer.isInitialized) { textLayer.visibility = View.GONE; playRow.visibility = View.GONE }
         video.stopPlayback(); video.visibility = View.GONE; preview.visibility = View.VISIBLE
         afterBox.visibility = View.GONE
     }
@@ -517,7 +593,7 @@ class InstaEditor(private val a: MainActivity) {
                     if (cutEnd <= 0 || cutEnd > d) cutEnd = d
                     if (cutStart >= cutEnd) cutStart = 0
                     syncCut()
-                    if (cutStart > 0) frameAtCut(true) else drawPreview()
+                    showEditVideo(s)
                 } else drawPreview()
             }
         }.start()
@@ -531,7 +607,7 @@ class InstaEditor(private val a: MainActivity) {
     }
 
     private fun updateMusicLabel() {
-        musicLabel2()
+        musicLabel2(); applyVolume()
         tvMusic.text = when {
             music != null -> "♪ " + VideoExport.nice(music!!)
             mute -> "Sem som"
@@ -600,6 +676,7 @@ class InstaEditor(private val a: MainActivity) {
     }
 
     fun stopPlay() {
+        if (editMode) pauseEdit()
         ui.removeCallbacks(ticker)
         try { player?.stop(); player?.release() } catch (e: Exception) { }
         player = null; playing = null
