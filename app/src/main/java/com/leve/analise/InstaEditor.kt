@@ -103,6 +103,43 @@ class InstaEditor(private val a: MainActivity) {
         if (i == 1 && music == null && ::timeline.isInitialized && timeline.visibility == View.VISIBLE && pendingMusicAsk) { pendingMusicAsk = false; chooseMusic() }
         if (i == 2 && etText.text.isBlank() && pendingTextFocus) { pendingTextFocus = false; etText.requestFocus() }
     }
+    private val SEC_NAMES = listOf("✏ Editar", "📁 Esboços", "✅ Prontos", "🎵 Músicas")
+    private lateinit var navRow: LinearLayout
+    private val navBtns = ArrayList<Button>()
+    private var secs: List<LinearLayout> = emptyList()
+    private var curSec = 0
+    private lateinit var startBox: LinearLayout
+    private lateinit var work: LinearLayout
+
+    fun showSection(i: Int, scroll: Boolean = true) {
+        if (secs.isEmpty()) return
+        if (curSec == 0 && i != 0) stopPlay()
+        curSec = i
+        Store.prefs(a).edit().putInt("ig_sec", i).apply()
+        secs.forEachIndexed { k, v -> v.visibility = if (k == i) View.VISIBLE else View.GONE }
+        updateNav()
+        if (scroll) a.scrollTo(navRow)
+    }
+
+    private fun updateNav() {
+        if (navBtns.isEmpty()) return
+        val counts = listOf(-1, Projects.list(a).size, VideoExport.library(a).size, VideoExport.musics(a).size)
+        navBtns.forEachIndexed { k, b ->
+            val on = k == curSec
+            b.text = SEC_NAMES[k] + if (counts[k] > 0) " ${counts[k]}" else ""
+            b.textSize = 12.5f; b.setTextColor(if (on) 0xFF1A0A10.toInt() else a.FG)
+            b.background = GradientDrawable().apply { setColor(if (on) a.ACCENT else 0xFF1C1C24.toInt()); cornerRadius = a.dp(10).toFloat() }
+        }
+    }
+
+    /** Sem vídeo aberto: só as opções de começar. Com vídeo: a área de edição. */
+    private fun updateEmpty() {
+        if (!::startBox.isInitialized) return
+        val empty = src == null
+        startBox.visibility = if (empty) View.VISIBLE else View.GONE
+        work.visibility = if (empty) View.GONE else View.VISIBLE
+    }
+
     private var pendingMusicAsk = false
     private var postAfter = false
     private lateinit var btnExpPost: Button
@@ -355,28 +392,48 @@ class InstaEditor(private val a: MainActivity) {
     private val ui get() = a.ui
 
     fun build() {
+        // ---------- navegação: uma seção por vez
+        val host = a.page
+        navRow = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        host.addView(navRow, a.lpMatch().apply { topMargin = a.dp(12) })
+        SEC_NAMES.forEachIndexed { i, n -> navBtns += a.button(n, navRow, weight = true) { showSection(i) } }
+        secs = List(4) { LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }.also { v -> host.addView(v, a.lpMatch()) } }
+
         // ---------- projetos
+        a.page = secs[1]
         val cp = a.card("Esboços")
-        a.text("Os originais ficam aqui, sem perder nada. Os vídeos novos do Flow entram sozinhos. Toque em Editar, mude texto e música, exporte e poste. Dá pra repetir com o mesmo original quantas vezes quiser.", 13f, a.MUTED, parent = cp)
+        a.text("Seus vídeos originais, guardados. Os novos do Flow entram sozinhos. Toque em ✏ Editar pra mudar texto e música e exportar quantas versões quiser.", 13f, a.MUTED, parent = cp)
         a.button("⚡ Exportar vários de uma vez", cp, primary = true) { exportManyDialog() }
         tvMany = a.text("", 13f, a.OK, parent = cp)
-        a.button("＋ Novo esboço (limpar editor)", cp) { newProject() }
+        a.button("＋ Começar um novo", cp) { newProject(); showSection(0) }
         projBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         cp.addView(projBox, a.lpMatch())
         renderProjects()
 
         // ---------- editor
+        a.page = secs[0]
         val ce = a.card("Editor")
         editorCard = ce
+        startBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        ce.addView(startBox, a.lpMatch())
+        a.text("O que você quer editar?", 16f, a.FG, parent = startBox, bold = true)
+        a.button("✨  Vídeo do Flow", startBox, primary = true) { flowPicker(false) }
+        a.button("🖼  Vídeo da galeria", startBox) { openGallery("video/*", REQ_VIDEO, false) }
+        a.button("📷  Foto → vídeo", startBox) { open("image/*", REQ_PHOTO) }
+        a.button("📁  Abrir um esboço salvo", startBox) { showSection(1) }
+        a.text("Os vídeos novos do Flow já viram esboço sozinhos. É só abrir e editar.", 12f, a.MUTED, parent = startBox)
+        work = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        ce.addView(work, a.lpMatch())
         val pick = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
-        ce.addView(pick, a.lpMatch())
-        a.button("🎬 Meu vídeo", pick, primary = true, weight = true) { chooseMyVideo() }
-        a.button("🖼 Foto → vídeo", pick, weight = true) { open("image/*", REQ_PHOTO) }
-        tvSrc = a.text("Escolha um vídeo ou uma foto pra começar.", 13f, a.MUTED, parent = ce)
-        a.text("Modelos (toque pra aplicar, segure pra apagar)", 12f, a.MUTED, parent = ce)
+        work.addView(pick, a.lpMatch())
+        tvSrc = a.text("", 13f, a.MUTED, parent = pick)
+        (tvSrc.layoutParams as LinearLayout.LayoutParams).apply { width = 0; weight = 1f; gravity = Gravity.CENTER_VERTICAL }
+        a.button("Trocar", pick) { chooseMyVideo() }.layoutParams.width = ViewGroup.LayoutParams.WRAP_CONTENT
+        a.button("＋ Novo", pick) { newProject() }.layoutParams.width = ViewGroup.LayoutParams.WRAP_CONTENT
+        a.text("Modelos (toque pra aplicar, segure pra apagar)", 12f, a.MUTED, parent = work)
         modelBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
-        ce.addView(modelBox, a.lpMatch())
-        a.button("☆ Salvar como modelo", ce) { saveModelDialog() }
+        work.addView(modelBox, a.lpMatch())
+        a.button("☆ Salvar como modelo", work) { saveModelDialog() }
         renderModels()
 
         // prévia 9:16
@@ -385,7 +442,7 @@ class InstaEditor(private val a: MainActivity) {
         val frame = FrameLayout(a).apply {
             background = GradientDrawable().apply { setColor(0xFF000000.toInt()); cornerRadius = a.dp(12).toFloat(); setStroke(a.dp(1), a.LINE) }
         }
-        ce.addView(frame, LinearLayout.LayoutParams(pw, ph).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = a.dp(8) })
+        work.addView(frame, LinearLayout.LayoutParams(pw, ph).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = a.dp(8) })
         preview = ImageView(a).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
         frame.addView(preview, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         video = VideoView(a).apply { visibility = View.GONE }
@@ -398,15 +455,15 @@ class InstaEditor(private val a: MainActivity) {
         textLayer = ImageView(a).apply { scaleType = ImageView.ScaleType.FIT_CENTER; visibility = View.GONE }
         frame.addView(textLayer, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         playRow = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; visibility = View.GONE }
-        ce.addView(playRow, a.lpMatch().apply { topMargin = a.dp(6) })
+        work.addView(playRow, a.lpMatch().apply { topMargin = a.dp(6) })
         btnTrecho = a.button("▶ Ver trecho", playRow, primary = true, weight = true) { togglePlay() }
         tvPos = TextView(a).apply { setTextColor(a.FG); textSize = 15f; gravity = Gravity.CENTER; text = "0:00,0" }
         playRow.addView(tvPos, LinearLayout.LayoutParams(a.dp(90), ViewGroup.LayoutParams.WRAP_CONTENT))
 
         // ---------- linha do tempo (camadas) + ferramentas de cada camada
         timeline = TimelineView(a).apply { visibility = View.GONE }
-        ce.addView(timeline, a.lpMatch().apply { topMargin = a.dp(10) })
-        tlHint = a.text("Toque numa camada pra editar. Bordas cortam; arrastar a música sincroniza; o bloco do texto escolhe quando ele aparece.", 11f, a.MUTED, parent = ce)
+        work.addView(timeline, a.lpMatch().apply { topMargin = a.dp(10) })
+        tlHint = a.text("Toque numa camada pra editar. Bordas cortam; arrastar a música sincroniza; o bloco do texto escolhe quando ele aparece.", 11f, a.MUTED, parent = work)
         tlHint.visibility = View.GONE
         timeline.onSelect = { tk ->
             if (tk == 1 && music == null) pendingMusicAsk = true
@@ -415,11 +472,11 @@ class InstaEditor(private val a: MainActivity) {
         }
         timeline.onChange = { what, fin -> onTimeline(what, fin) }
         val tabs = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
-        ce.addView(tabs, a.lpMatch().apply { topMargin = a.dp(8) })
+        work.addView(tabs, a.lpMatch().apply { topMargin = a.dp(8) })
         listOf("🎬 Vídeo", "🎵 Música", "T Texto", "⬆ Exportar").forEachIndexed { i, n ->
             tabBtns += a.button(n, tabs, weight = true) { showPanel(i); if (i < 3) { timeline.selected = i; timeline.invalidate() } }
         }
-        pVideo = panel(ce); pMusic = panel(ce); pText = panel(ce); pExport = panel(ce)
+        pVideo = panel(work); pMusic = panel(work); pText = panel(work); pExport = panel(work)
 
         // texto
         a.text("Texto no vídeo (Enter = novo parágrafo)", 12f, a.MUTED, parent = pText)
@@ -525,19 +582,21 @@ class InstaEditor(private val a: MainActivity) {
         gal.setOnClickListener { Store.prefs(a).edit().putBoolean("save_gallery", !Store.prefs(a).getBoolean("save_gallery", false)).apply(); galT() }
         // exportar e postar ficam sempre visíveis, embaixo das abas
         val expRow = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
-        ce.addView(expRow, a.lpMatch().apply { topMargin = a.dp(10) })
+        work.addView(expRow, a.lpMatch().apply { topMargin = a.dp(10) })
         btnExport = a.button("Exportar ${quality()}", expRow, primary = true, weight = true) { postAfter = false; export() }
         btnExpPost = a.button("⬆ Exportar e postar", expRow, weight = true) { postAfter = true; export() }
         qNote()
-        tvProg = a.text("", 13f, a.OK, parent = ce)
+        tvProg = a.text("", 13f, a.OK, parent = work)
         afterBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
-        ce.addView(afterBox, a.lpMatch())
+        work.addView(afterBox, a.lpMatch())
         a.button("Postar no Instagram ↗", afterBox, primary = true) { lastExportId?.let { post(it, etCap.text.toString()) } }
         a.button("Voltar pra edição", afterBox) { val s0 = src; if (s0 != null && !isPhoto) showEditVideo(s0) else { showImagePreview(); drawPreview() } }
 
         showPanel(Store.prefs(a).getInt("ed_panel", 0))
+        updateEmpty()
 
         // ---------- músicas
+        a.page = secs[3]
         val cm = a.card("Minhas músicas")
         a.text("Ficam salvas no app pra usar em qualquer vídeo. Também vão pra pasta Music/PostLeve.", 13f, a.MUTED, parent = cm)
         val mr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
@@ -582,6 +641,7 @@ class InstaEditor(private val a: MainActivity) {
         renderMusics()
 
         // ---------- biblioteca
+        a.page = secs[2]
         val cl = a.card("Vídeos prontos")
         a.text("Todo vídeo exportado fica guardado aqui no app. Postar ↗ manda direto pro Instagram, sem baixar nada e sem encher a galeria.", 13f, a.MUTED, parent = cl)
         a.button("🎲 Postar vídeo aleatório", cl, primary = true) { postRandomVideo() }
@@ -593,6 +653,8 @@ class InstaEditor(private val a: MainActivity) {
         libBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         cl.addView(libBox, a.lpMatch())
         renderLibrary()
+        showSection(Store.prefs(a).getInt("ig_sec", 0), false)
+        // (a aba continua com a.page = Prontos: o cartão "Foto pro Instagram" entra ali)
     }
 
     // ------------------------------------------------------------------ modelos
@@ -679,8 +741,9 @@ class InstaEditor(private val a: MainActivity) {
     private fun exportMany(ids: List<String>, m: org.json.JSONObject?, i: Int = 0, ok: Int = 0) {
         if (i >= ids.size) {
             a.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            tvMany.setTextColor(a.OK); tvMany.text = "$ok de ${ids.size} vídeos prontos. Estão em Vídeos prontos, com legenda sorteada."
-            renderLibrary(); renderProjects(); return
+            tvMany.setTextColor(a.OK); tvMany.text = "$ok de ${ids.size} vídeos prontos, com legenda sorteada."
+            renderLibrary(); renderProjects(); showSection(2)
+            a.toast("$ok vídeos prontos pra postar"); return
         }
         if (i == 0) { stopPlay(); a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
         val p = Projects.get(a, ids[i])
@@ -741,7 +804,7 @@ class InstaEditor(private val a: MainActivity) {
         textStart = 0; textEnd = 0; musicEnd = 0; timeline.thumbs = emptyList(); syncTimeline()
         etText.setText(""); etCap.setText(""); durRow.visibility = View.GONE
         tvSrc.setTextColor(a.MUTED); tvSrc.text = "Escolha um vídeo ou uma foto pra começar."
-        updateMusicLabel(); showImagePreview(); drawPreview(); renderProjects()
+        updateMusicLabel(); showImagePreview(); drawPreview(); renderProjects(); updateEmpty()
     }
 
     private fun openProject(id: String) {
@@ -768,12 +831,13 @@ class InstaEditor(private val a: MainActivity) {
         updateMusicLabel()
         projId = id
         loadBase(if (photo) "Projeto de foto aberto" else "Projeto de vídeo aberto")
-        a.scrollTo(editorCard)
+        showSection(0)
         a.toast("Esboço aberto: mude texto e música e exporte")
     }
 
     private fun renderProjects() {
         if (!::projBox.isInitialized) return
+        updateNav()
         projBox.removeAllViews()
         val l = Projects.list(a)
         if (l.isEmpty()) { a.text("Nenhum projeto ainda.", 12f, a.MUTED, parent = projBox); return }
@@ -797,7 +861,7 @@ class InstaEditor(private val a: MainActivity) {
             a.text((if (ver > 0) "$ver versão(ões) exportada(s)" else "Nunca exportado") + tag, 11f, a.MUTED, parent = side)
             val r = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
             side.addView(r, a.lpMatch())
-            a.button(if (id == projId) "Aberto" else "✏ Editar", r, primary = id != projId, weight = true) { if (id != projId) openProject(id) else a.scrollTo(editorCard) }
+            a.button(if (id == projId) "Aberto" else "✏ Editar", r, primary = id != projId, weight = true) { if (id != projId) openProject(id) else showSection(0) }
             val del = a.button("Apagar", r, weight = true) { }
             del.setOnClickListener {
                 if (del.tag != "armed") { del.tag = "armed"; del.text = "De novo"; ui.postDelayed({ del.tag = null; del.text = "Apagar" }, 2500) }
@@ -927,6 +991,7 @@ class InstaEditor(private val a: MainActivity) {
 
     private fun loadBase(label: String) {
         val s = src ?: return
+        updateEmpty(); if (curSec != 0) showSection(0)
         showImagePreview()
         tvSrc.text = label; tvSrc.setTextColor(a.OK)
         cutRow.visibility = if (isPhoto) View.GONE else View.VISIBLE
@@ -1059,6 +1124,7 @@ class InstaEditor(private val a: MainActivity) {
     }
 
     private fun renderMusics() {
+        updateNav()
         musicBox.removeAllViews()
         val list = VideoExport.musics(a)
         if (list.isEmpty()) { a.text("Nenhuma música ainda.", 12f, a.MUTED, parent = musicBox); return }
@@ -1195,7 +1261,7 @@ class InstaEditor(private val a: MainActivity) {
     }
 
     private fun renderLibrary() {
-        updateCycle()
+        updateCycle(); updateNav()
         libBox.removeAllViews()
         val l = VideoExport.library(a)
         if (l.isEmpty()) { a.text("Nenhum vídeo pronto ainda. Exporte um esboço ou importe os que você já tem.", 12f, a.MUTED, parent = libBox); return }

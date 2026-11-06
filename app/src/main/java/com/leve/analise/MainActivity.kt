@@ -49,7 +49,7 @@ class MainActivity : Activity() {
 
     internal val ui = Handler(Looper.getMainLooper())
     private lateinit var root: LinearLayout
-    private lateinit var page: LinearLayout
+    internal lateinit var page: LinearLayout
     private val pages = LinkedHashMap<String, LinearLayout>()
     private lateinit var tabRow: LinearLayout
     private lateinit var refsBox: LinearLayout
