@@ -68,11 +68,11 @@ data class TextStyle(
 }
 
 /** Grava o MP4 sem localização, data de criação nem outros dados do original (só mantém a rotação). */
-class CleanMuxerFactory(private val d: androidx.media3.transformer.Muxer.Factory = androidx.media3.transformer.DefaultMuxer.Factory()) :
-    androidx.media3.transformer.Muxer.Factory by d {
-    override fun create(path: String): androidx.media3.transformer.Muxer {
+class CleanMuxerFactory(private val d: androidx.media3.muxer.Muxer.Factory = androidx.media3.transformer.DefaultMuxer.Factory()) :
+    androidx.media3.muxer.Muxer.Factory by d {
+    override fun create(path: String): androidx.media3.muxer.Muxer {
         val m = d.create(path)
-        return object : androidx.media3.transformer.Muxer by m {
+        return object : androidx.media3.muxer.Muxer by m {
             override fun addMetadataEntry(metadataEntry: androidx.media3.common.Metadata.Entry) {
                 if (metadataEntry.javaClass.simpleName.contains("Orientation")) m.addMetadataEntry(metadataEntry)
             }
