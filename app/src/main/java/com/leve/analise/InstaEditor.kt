@@ -68,6 +68,16 @@ class InstaEditor(private val a: MainActivity) {
     private lateinit var projBox: LinearLayout
     private var projId: String? = null
     private lateinit var editorCard: LinearLayout
+    private lateinit var tvQ: TextView
+    private fun quality() = Store.prefs(a).getString("quality", "1080p") ?: "1080p"
+    private fun qNote() {
+        if (!::tvQ.isInitialized) return
+        tvQ.text = when (quality()) {
+            "2K" -> "2K (1440x2560) em HEVC: mais nítido e o arquivo fica quase do tamanho do 1080p."
+            "4K" -> "4K (2160x3840) em HEVC: máximo de detalhe; demora mais pra exportar e o arquivo é maior."
+            else -> "1080p (1080x1920): o mais rápido e o padrão do Instagram."
+        }
+    }
 
     fun refreshLists() { renderProjects(); renderLibrary() }
 
@@ -169,7 +179,13 @@ class InstaEditor(private val a: MainActivity) {
             override fun afterTextChanged(s: Editable?) { scheduleSave() }
         })
         a.button("🎲 Legenda aleatória", ce) { etCap.setText(Captions.randomCaption(a)) }
-        btnExport = a.button("Exportar 1080p", ce, primary = true) { export() }
+        a.text("Qualidade", 12f, a.MUTED, parent = ce)
+        redraws += a.chips(ce, listOf("1080p", "2K", "4K"), { quality() }) {
+            Store.prefs(a).edit().putString("quality", it).apply(); btnExport.text = "Exportar $it"; qNote()
+        }
+        tvQ = a.text("", 12f, a.MUTED, parent = ce)
+        btnExport = a.button("Exportar ${quality()}", ce, primary = true) { export() }
+        qNote()
         tvProg = a.text("", 13f, a.OK, parent = ce)
         afterBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         ce.addView(afterBox, a.lpMatch())
@@ -529,10 +545,11 @@ class InstaEditor(private val a: MainActivity) {
         if (VideoExport.busy()) { a.toast("Já está exportando"); return }
         stopPlay(); showImagePreview()
         btnExport.isEnabled = false
-        tvProg.setTextColor(a.MUTED); tvProg.text = "Exportando 1080p…"
+        tvProg.setTextColor(a.MUTED); tvProg.text = "Exportando ${quality()}…"
         a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        val job = VideoExport.Job(s, isPhoto, photoSecs, etText.text.toString(), style.copy(), music, mute)
-        VideoExport.export(a, job, { p -> tvProg.text = "Exportando 1080p… $p%" }) { f, err ->
+        val job = VideoExport.Job(s, isPhoto, photoSecs, etText.text.toString(), style.copy(), music, mute, quality())
+        val qn = quality()
+        VideoExport.export(a, job, { p -> tvProg.text = "Exportando $qn… $p%" }) { f, err ->
             a.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             btnExport.isEnabled = true
             if (f == null) { tvProg.setTextColor(a.ACCENT); tvProg.text = "Não deu: $err"; return@export }

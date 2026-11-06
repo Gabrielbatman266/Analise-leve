@@ -152,7 +152,15 @@ object VideoExport {
     // ------------------------------------------------------------------ exportar
 
     class Job(val src: Uri, val isPhoto: Boolean, val photoSeconds: Int, val text: String, val style: TextStyle,
-              val music: File?, val mute: Boolean)
+              val music: File?, val mute: Boolean, val quality: String = "1080p")
+
+    /** Tamanho (9:16), bitrate e codec por qualidade. 2K/4K usam HEVC: mesma qualidade com arquivo bem menor. */
+    data class Q(val w: Int, val h: Int, val bitrate: Int, val mime: String)
+    fun q(name: String) = when (name) {
+        "2K" -> Q(1440, 2560, 22_000_000, MimeTypes.VIDEO_H265)
+        "4K" -> Q(2160, 3840, 40_000_000, MimeTypes.VIDEO_H265)
+        else -> Q(1080, 1920, 16_000_000, MimeTypes.VIDEO_H264)
+    }
 
     /**
      * Roda na thread principal (o Transformer precisa de Looper).
@@ -160,10 +168,11 @@ object VideoExport {
      */
     fun export(c: Context, job: Job, onProgress: (Int) -> Unit, onDone: (File?, String?) -> Unit) {
         val out = File(c.cacheDir, "exp_${System.currentTimeMillis()}.mp4")
+        val qq = q(job.quality)
         try {
             val fx = ArrayList<androidx.media3.common.Effect>()
-            fx.add(Presentation.createForWidthAndHeight(W, H, Presentation.LAYOUT_SCALE_TO_FIT))
-            if (job.text.isNotBlank()) fx.add(OverlayEffect(ImmutableList.of(BitmapOverlay.createStaticBitmapOverlay(textBitmap(job.text, job.style)))))
+            fx.add(Presentation.createForWidthAndHeight(qq.w, qq.h, Presentation.LAYOUT_SCALE_TO_FIT))
+            if (job.text.isNotBlank()) fx.add(OverlayEffect(ImmutableList.of(BitmapOverlay.createStaticBitmapOverlay(textBitmap(job.text, job.style, qq.w, qq.h)))))
             val media = if (job.isPhoto) MediaItem.Builder().setUri(job.src).setMimeType(MimeTypes.IMAGE_JPEG).build() else MediaItem.fromUri(job.src)
             val vb = EditedMediaItem.Builder(media).setEffects(Effects(emptyList(), fx))
             if (job.isPhoto) {
@@ -179,9 +188,10 @@ object VideoExport {
             }
             val comp = Composition.Builder(seqs).build()
             val enc = DefaultEncoderFactory.Builder(c)
-                .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(16_000_000).build()).build()
+                .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(qq.bitrate).build())
+                .setEnableFallback(true).build()
             val t = Transformer.Builder(c)
-                .setVideoMimeType(MimeTypes.VIDEO_H264).setAudioMimeType(MimeTypes.AUDIO_AAC)
+                .setVideoMimeType(qq.mime).setAudioMimeType(MimeTypes.AUDIO_AAC)
                 .setEncoderFactory(enc)
                 .addListener(object : Transformer.Listener {
                     override fun onCompleted(composition: Composition, exportResult: ExportResult) { current = null; onDone(out, null) }
