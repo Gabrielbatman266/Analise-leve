@@ -19,13 +19,18 @@ class ImgProvider : ContentProvider() {
         val f = when {
             Regex("[a-z0-9]+\\.jpg").matches(name) -> File(PostQueue.dir(context!!), name)
             Regex("[a-z0-9]+\\.mp4").matches(name) -> File(VideoExport.videoDir(context!!), name) // vídeos prontos, direto do app
+            name == Updater.FILE -> File(context!!.cacheDir, name) // APK da atualização, só pro instalador
             else -> throw FileNotFoundException()
         }
         if (!f.exists()) throw FileNotFoundException()
         return f
     }
 
-    override fun getType(uri: Uri) = if (uri.lastPathSegment?.endsWith(".mp4") == true) "video/mp4" else "image/jpeg"
+    override fun getType(uri: Uri) = when {
+        uri.lastPathSegment?.endsWith(".mp4") == true -> "video/mp4"
+        uri.lastPathSegment == Updater.FILE -> "application/vnd.android.package-archive"
+        else -> "image/jpeg"
+    }
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor =
         ParcelFileDescriptor.open(fileFor(uri), ParcelFileDescriptor.MODE_READ_ONLY)

@@ -95,16 +95,20 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1)
         if (savedInstanceState == null) handleShare(intent)
         intent.getStringExtra("tab")?.let { showTab(it) }
+        if (intent.getBooleanExtra("update", false)) { intent.removeExtra("update"); Updater.download(this) }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         intent.getStringExtra("tab")?.let { showTab(it) }
+        if (intent.getBooleanExtra("update", false)) { intent.removeExtra("update"); Updater.download(this) }
         handleShare(intent)
     }
 
     override fun onResume() {
         super.onResume()
+        Updater.schedule(this)
+        Updater.checkOnOpen(this)
         QuickPost.publishShortcut(this)
         QuickPost.updateWidgets(this)
         Thread {
@@ -253,6 +257,15 @@ class MainActivity : Activity() {
 
         // ===== Ajustes
         page = pages["Ajustes"]!!
+        val cu = card("Atualizações")
+        text("Versão instalada: ${Updater.mineName(this)}", 13f, FG, parent = cu)
+        val au = button("", cu) { }
+        fun auT() { au.text = if (Updater.autoOn(this)) "Atualização automática: ligada" else "Atualização automática: desligada" }
+        auT()
+        au.setOnClickListener { Updater.setAuto(this, !Updater.autoOn(this)); auT() }
+        button("Procurar atualização agora", cu, primary = true) { Updater.checkNow(this) }
+        text("Ligada, o app confere sozinho no GitHub e avisa quando sair versão nova. Um toque baixa e abre o instalador; o Android sempre pede a sua confirmação pra instalar.", 12f, MUTED, parent = cu)
+
         val c4 = card("Configurações da IA")
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         c4.addView(row, lpMatch())
