@@ -125,6 +125,7 @@ class MainActivity : Activity() {
         tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         root.addView(tabRow, lpMatch().apply { topMargin = dp(12) })
         for (name in listOf("Postar", "Legendas", "Analisar", "Ajustes")) {
+            if (name == "Analisar") { pages[name] = LinearLayout(this); continue } // desativada
             val pg = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             pages[name] = pg
             button(name, tabRow, weight = true) { showTab(name) }.tag = name
@@ -225,7 +226,7 @@ class MainActivity : Activity() {
             if (!clearArmed) { clearArmed = true; zero.text = "Toque de novo pra apagar tudo"; ui.postDelayed({ clearArmed = false; zero.text = "Zerar banco" }, 3000) }
             else { Store.clearAll(this); clearArmed = false; zero.text = "Zerar banco"; toast("Banco zerado"); refresh() }
         }
-        showTab(Store.prefs(this).getString("tab", "Postar") ?: "Postar")
+        showTab((Store.prefs(this).getString("tab", "Postar") ?: "Postar").let { if (it == "Analisar") "Postar" else it })
     }
 
     private fun showTab(name: String) {
@@ -555,8 +556,8 @@ class MainActivity : Activity() {
         val fila = Store.pending(this).size
         val list = Store.sorted(this)
         val lidos = Store.prefs(this).getInt("prints_lidos", 0)
-        tvStatus.text = "${list.size} posts no banco · $fila na fila · $lidos prints lidos" +
-            (if (LeveService.working) "\nAnalisando em segundo plano…" else if (fila > 0) "\nParado. Toque em Analisar fila agora." else "") +
+        val gerando = PostQueue.pendingCaptions(this).size
+        tvStatus.text = (if (gerando > 0) "Gerando legendas: $gerando foto(s)" else "Legendas em dia") +
             "\nIA: ${if (Ai.provider(this) == "gemini") "Gemini" else "Claude"} · ${Ai.model(this)}"
         val err = LeveService.lastError
         tvErr.text = if (err.isNotEmpty()) err else LeveService.lastBatchInfo

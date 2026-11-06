@@ -327,7 +327,9 @@ class LeveService : Service() {
         var addedRun = 0
         try {
             doCaptions()
-            while (!stopFlag) {
+            // análise de prints desativada: só legendas das fotos
+            Store.pending(this).forEach { it.delete() }
+            while (false) {
                 if (PostQueue.pendingCaptions(this).isNotEmpty()) doCaptions()
                 val batch = Store.pending(this).take(batchSize())
                 if (batch.isEmpty()) break
