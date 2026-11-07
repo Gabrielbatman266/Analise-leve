@@ -832,9 +832,15 @@ class InstaEditor(private val a: MainActivity) {
         val box = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(a.dp(20), a.dp(8), a.dp(20), 0) }
         val en = EditText(a).apply { hint = "Nome (ex.: Falando, Olhar, Academia)"; setSingleLine(true) }
         val ed = EditText(a).apply { hint = "Como são esses vídeos (ajuda a IA)" }
-        box.addView(en); box.addView(ed)
+        val cb = android.widget.CheckBox(a).apply { text = "🎬 Sem texto: o vídeo já está pronto, o app só edita"; setTextColor(a.FG) }
+        en.addTextChangedListener(object : android.text.TextWatcher {
+            override fun afterTextChanged(e: android.text.Editable?) { if (Contexts.isGeneric(e.toString())) cb.isChecked = true }
+            override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, af: Int) {}
+            override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
+        })
+        box.addView(en); box.addView(ed); box.addView(cb)
         AlertDialog.Builder(a).setTitle("Nova categoria").setView(box)
-            .setPositiveButton("Criar") { _, _ -> val n = Contexts.add(a, en.text.toString(), ed.text.toString().trim()); if (n.isNotEmpty()) done(n) }
+            .setPositiveButton("Criar") { _, _ -> val n = Contexts.add(a, en.text.toString(), ed.text.toString().trim(), cb.isChecked); if (n.isNotEmpty()) done(n) }
             .setNegativeButton("Cancelar", null).show()
     }
 

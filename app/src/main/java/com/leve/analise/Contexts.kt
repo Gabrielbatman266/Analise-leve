@@ -21,12 +21,14 @@ object Contexts {
 
     fun names(c: Context) = list(c).map { it.optString("name") }
 
-    fun add(c: Context, name0: String, desc: String = ""): String {
+    fun add(c: Context, name0: String, desc: String = "", semTexto: Boolean? = null): String {
         val name = name0.trim().replaceFirstChar { it.uppercase() }.take(24)
         if (name.isEmpty()) return GERAL
         val l = list(c)
         l.firstOrNull { it.optString("name").equals(name, true) }?.let { return it.optString("name") }
-        l.add(JSONObject().put("name", name).put("desc", desc).put("emoji", EMOJIS[l.size % EMOJIS.size]))
+        val o = JSONObject().put("name", name).put("desc", desc).put("emoji", if (isGeneric(name)) "🎬" else EMOJIS[l.size % EMOJIS.size])
+        if (semTexto != null) o.put("semtexto", semTexto)
+        l.add(o)
         save(c, l); return name
     }
 
@@ -40,7 +42,13 @@ object Contexts {
     }
 
     /** Categoria "sem texto": o vídeo já está pronto, o app só edita (cortes diferentes, modelo, sem metadados). */
-    fun noText(c: Context, name: String) = name.isNotEmpty() && list(c).firstOrNull { it.optString("name") == name }?.optBoolean("semtexto") == true
+    fun noText(c: Context, name: String): Boolean {
+        if (name.isEmpty()) return false
+        val o = list(c).firstOrNull { it.optString("name") == name } ?: return false
+        return if (o.has("semtexto")) o.optBoolean("semtexto") else isGeneric(name) // "Genérico" já nasce sem texto
+    }
+    fun isGeneric(name: String) = java.text.Normalizer.normalize(name.lowercase(), java.text.Normalizer.Form.NFD)
+        .replace(Regex("\\p{M}"), "").startsWith("generic")
     /** Post sem legenda nenhuma. */
     fun noCaption(c: Context, name: String) = name.isNotEmpty() && list(c).firstOrNull { it.optString("name") == name }?.optBoolean("semlegenda") == true
     /** Quantas versões (cortes diferentes) de cada vídeo cru numa categoria sem texto. */
