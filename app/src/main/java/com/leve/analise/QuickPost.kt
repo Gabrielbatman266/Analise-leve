@@ -129,7 +129,7 @@ object RateLater {
     }
 
     /** 💎 Viralizou vale como dois 🔥 em tudo que aprende; guarda também a contagem de 💎. */
-    fun bump(o: JSONObject, k: String, d: Int) {
+    fun bump(o: org.json.JSONObject, k: String, d: Int) {
         if (k == "top") { o.put("top", maxOf(0, o.optInt("top") + d)); o.put("good", maxOf(0, o.optInt("good") + 2 * d)) }
         else o.put(k, maxOf(0, o.optInt(k) + d))
     }
