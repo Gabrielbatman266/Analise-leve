@@ -99,6 +99,7 @@
 
         <receiver android:name=".PostConfirmReceiver" android:exported="false" />
         <receiver android:name=".RateReceiver" android:exported="false" />
+        <receiver android:name=".CleanReceiver" android:exported="false" />
 
         <activity
             android:name=".PostVideoActivity"

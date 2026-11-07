@@ -116,6 +116,7 @@ class MainActivity : Activity() {
         QuickPost.updateWidgets(this)
         Thread {
             PostQueue.cleanGallery(this, false)
+            GalleryClean.sweep(this)
             val n = FolderScan.scan(this)
             val nv = FolderScan.scanVideos(this)
             if (nv > 0) ui.post { toast("$nv vídeo(s) do Flow viraram esboço na aba Instagram"); if (::insta.isInitialized) insta.refreshLists() }
@@ -265,6 +266,20 @@ class MainActivity : Activity() {
 
         // ===== Ajustes
         page = pages["Ajustes"]!!
+        val cg = card("Celular limpo")
+        text("O Post Leve guarda tudo dentro dele. O que precisa ir pra galeria (foto pro Flow, foto do post) é temporário e some sozinho.", 13f, MUTED, parent = cg)
+        val fc = button("", cg) { }
+        fun fcT() { fc.text = if (Store.prefs(this).getBoolean("flow_copy", false)) "Copiar fotos do Flow pra galeria: ligado" else "Copiar fotos do Flow pra galeria: desligado" }
+        fcT()
+        fc.setOnClickListener { Store.prefs(this).edit().putBoolean("flow_copy", !Store.prefs(this).getBoolean("flow_copy", false)).apply(); fcT() }
+        val purge = button("🧹 Apagar da galeria as cópias antigas do app", cg) { }
+        purge.setOnClickListener {
+            if (purge.tag != "armed") { purge.tag = "armed"; purge.text = "Toque de novo pra apagar (nada some do app)"; ui.postDelayed({ purge.tag = null; purge.text = "🧹 Apagar da galeria as cópias antigas do app" }, 3000) }
+            else { purge.tag = null; purge.text = "Apagando…"
+                Thread { val n = GalleryClean.purgeAll(this); ui.post { purge.text = "🧹 Apagar da galeria as cópias antigas do app"; toast("$n cópia(s) apagada(s) da galeria. Tudo continua no app.") } }.start() }
+        }
+        text("Apaga só as cópias que o app criou (pastas PostLeve, PostLeve Ref, PostLeve Flow, músicas). Seus esboços, vídeos prontos, músicas e fotos de referência continuam no app.", 12f, MUTED, parent = cg)
+
         val cu = card("Atualizações")
         text("Versão instalada: ${Updater.mineName(this)}", 13f, FG, parent = cu)
         val au = button("", cu) { }

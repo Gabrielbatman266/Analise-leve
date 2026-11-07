@@ -321,7 +321,9 @@ object VideoExport {
             val t = Transformer.Builder(c).setAudioMimeType(MimeTypes.AUDIO_AAC)
                 .addListener(object : Transformer.Listener {
                     override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-                        current = null; saveToGallery(c, out, true); onDone(out, null)
+                        current = null
+                        if (Store.prefs(c).getBoolean("save_gallery", false)) saveToGallery(c, out, true)
+                        onDone(out, null)
                     }
                     override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
                         current = null; out.delete(); onDone(null, exportException.message ?: "Erro ao extrair")

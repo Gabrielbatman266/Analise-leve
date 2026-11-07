@@ -285,6 +285,7 @@ object FolderScan {
 class FolderJob : JobService() {
     override fun onStartJob(params: JobParameters): Boolean {
         Thread {
+            try { GalleryClean.sweep(this) } catch (e: Exception) { }
             val n = try { FolderScan.scan(this) } catch (e: Exception) { 0 }
             val nv = try { FolderScan.scanVideos(this) } catch (e: Exception) { 0 }
             if (nv > 0) FolderScan.notifyVideos(this, nv)

@@ -189,6 +189,7 @@ object Refs {
                 c.contentResolver.openOutputStream(u)?.use { o -> photoFile(c, id).inputStream().use { it.copyTo(o) } }
                 c.contentResolver.update(u, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
                 out.add(u.toString()); n++
+                GalleryClean.track(c, u, GalleryClean.flowTtl(c) * 60_000L)
                 updatePhoto(c, id) { it.put("usos", it.optInt("usos") + 1); it.put("lastUse", System.currentTimeMillis()) }
                 Thread.sleep(15)
             } catch (e: Exception) { }

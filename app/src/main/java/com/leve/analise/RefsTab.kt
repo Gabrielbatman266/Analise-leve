@@ -75,6 +75,12 @@ class RefsTab(private val a: MainActivity) {
         a.button("🚀 Mandar pro Flow", sr, primary = true, weight = true) { sendToFlow(selected.toList()) }
         a.button("Limpar seleção", sr, weight = true) { selected.clear(); renderPhotos() }
         a.text("Mandar pro Flow: as fotos marcadas vão pro topo da galeria (pasta PostLeve Ref), o prompt delas fica copiado e o Flow abre. Lá é só tocar em adicionar imagem e colar o prompt.", 12f, a.MUTED, parent = cp)
+        a.text("Apagar da galeria depois de", 12f, a.MUTED, parent = cp)
+        a.chips(cp, listOf("15 min", "30 min", "1 h", "3 h"), { GalleryClean.flowTtl(a).let { if (it >= 60) "${it / 60} h" else "$it min" } }) {
+            val m = if (it.endsWith("h")) it.removeSuffix(" h").toInt() * 60 else it.removeSuffix(" min").toInt()
+            Store.prefs(a).edit().putInt("flow_ttl", m).apply()
+        }
+        a.text("As fotos continuam no estoque do app. Só a cópia da galeria some.", 11f, a.MUTED, parent = cp)
         val cg = a.card(null)
         photoFilter = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         cg.addView(photoFilter, a.lpMatch())
@@ -336,7 +342,8 @@ class RefsTab(private val a: MainActivity) {
             val ps = Refs.photos(a).filter { it.optString("id") in ids }.map { it.optString("prompt") }.filter { it.isNotBlank() }
             ui.post {
                 if (ps.isNotEmpty()) copy(ps.joinToString("\n\n"))
-                a.toast("$n foto(s) no topo da galeria" + if (ps.isNotEmpty()) " e prompt copiado" else "")
+                val ttl = GalleryClean.flowTtl(a).let { if (it >= 60) "${it / 60} h" else "$it min" }
+                a.toast("$n foto(s) no topo da galeria por $ttl" + if (ps.isNotEmpty()) " e prompt copiado" else "")
                 selected.clear(); renderPhotos()
                 try { a.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(Refs.FLOW_URL)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) { }
             }

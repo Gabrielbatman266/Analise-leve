@@ -83,7 +83,7 @@ object PostQueue {
 
     /** Cópia visível na galeria, numa pasta só das fotos do Flow (Pictures/PostLeve Flow). */
     fun copyToFolder(c: Context, id: String) {
-        if (Build.VERSION.SDK_INT < 29) return
+        if (Build.VERSION.SDK_INT < 29 || !Store.prefs(c).getBoolean("flow_copy", false)) return
         try {
             val cr = c.contentResolver
             val cv = ContentValues().apply {
@@ -134,6 +134,7 @@ object PostQueue {
             cr.openOutputStream(uri)?.use { out -> imageFile(c, id).inputStream().use { it.copyTo(out) } }
             cr.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
             Store.prefs(c).edit().putString("gallery_uri", uri.toString()).putLong("gallery_at", System.currentTimeMillis()).apply()
+            GalleryClean.track(c, uri, 15 * 60_000L)
             uri
         } catch (e: Exception) { null }
     }
