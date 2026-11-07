@@ -576,12 +576,12 @@ class InstaEditor(private val a: MainActivity) {
         redraws += a.chips(cc, listOf("1x", "1.2x", "1.5x", "2x", "3x"), { listOf(1f, 1.2f, 1.5f, 2f, 3f).minBy { z -> Math.abs(z - crop.zoom) }.let { z -> if (z == 1f) "1x" else "${z}x".replace(".0x", "x") } }) {
             crop = crop.copy(zoom = it.removeSuffix("x").toFloat()); afterCrop()
         }
-        val pr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
-        cc.addView(pr, a.lpMatch())
+        val cropRow = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        cc.addView(cropRow, a.lpMatch())
         listOf("◀" to (-0.2f to 0f), "▲" to (0f to -0.2f), "▼" to (0f to 0.2f), "▶" to (0.2f to 0f)).forEach { (t, d) ->
-            a.button(t, pr, weight = true) { crop = crop.copy(px = (crop.px + d.first).coerceIn(-1f, 1f), py = (crop.py + d.second).coerceIn(-1f, 1f)); afterCrop() }
+            a.button(t, cropRow, weight = true) { crop = crop.copy(px = (crop.px + d.first).coerceIn(-1f, 1f), py = (crop.py + d.second).coerceIn(-1f, 1f)); afterCrop() }
         }
-        a.button("↺ Sem recorte", pr, weight = true) { crop = VideoExport.CropSpec(); afterCrop() }
+        a.button("↺ Sem recorte", cropRow, weight = true) { crop = VideoExport.CropSpec(); afterCrop() }
         tvCrop = a.text("", 11f, a.MUTED, parent = cc)
 
         // 🧽 remover objeto com IA (fotos)
