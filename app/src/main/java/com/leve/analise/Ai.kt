@@ -159,6 +159,39 @@ Responda só com JSON: {"regras":["...","..."]}"""
         return (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotBlank() }.take(10)
     }
 
+    fun imageModel(c: Context) = Store.prefs(c).getString("img_model", "gemini-2.5-flash-image")?.trim().orEmpty().ifEmpty { "gemini-2.5-flash-image" }
+
+    /** 🧽 Edita uma foto com o Gemini (remover objeto etc.). Devolve o JPG/PNG novo. */
+    fun editImage(c: Context, img: File, instruction: String): ByteArray {
+        if (provider(c) != "gemini") throw AiException(-4, "Remover objeto precisa da IA do Google (Gemini) nos Ajustes.")
+        val k = key(c); if (k.isEmpty()) throw AiException(401, "Coloque sua chave de API nas configurações")
+        val o = android.graphics.BitmapFactory.Options().apply { inSampleSize = 1 }
+        var bmp = android.graphics.BitmapFactory.decodeFile(img.path, o) ?: throw AiException(-2, "Não consegui abrir a foto")
+        if (maxOf(bmp.width, bmp.height) > 2048) { val sc = 2048f / maxOf(bmp.width, bmp.height); bmp = android.graphics.Bitmap.createScaledBitmap(bmp, (bmp.width * sc).toInt(), (bmp.height * sc).toInt(), true) }
+        val bo = java.io.ByteArrayOutputStream(); bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, bo)
+        val parts = JSONArray()
+            .put(JSONObject().put("inline_data", JSONObject().put("mime_type", "image/jpeg").put("data", Base64.encodeToString(bo.toByteArray(), Base64.NO_WRAP))))
+            .put(JSONObject().put("text", instruction))
+        val body = JSONObject()
+            .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", parts)))
+            .put("generationConfig", JSONObject().put("responseModalities", JSONArray().put("TEXT").put("IMAGE")))
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/" + URLEncoder.encode(imageModel(c), "UTF-8") + ":generateContent"
+        val res = post(url, body.toString(), mapOf("x-goog-api-key" to k))
+        val ps = JSONObject(res).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")
+            ?: throw AiException(-2, "A IA não devolveu imagem (talvez ela tenha recusado essa edição)")
+        for (i in 0 until ps.length()) {
+            val d = ps.getJSONObject(i).let { it.optJSONObject("inlineData") ?: it.optJSONObject("inline_data") } ?: continue
+            val data = d.optString("data"); if (data.isNotEmpty()) {
+                // regrava como JPG limpo (sem metadados)
+                val raw = Base64.decode(data, Base64.DEFAULT)
+                val b = android.graphics.BitmapFactory.decodeByteArray(raw, 0, raw.size) ?: return raw
+                val out = java.io.ByteArrayOutputStream(); b.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, out)
+                return out.toByteArray()
+            }
+        }
+        throw AiException(-2, "A IA não devolveu imagem (talvez ela tenha recusado essa edição)")
+    }
+
     /** 🧠 Vídeos: quadro de cada vídeo + o que tinha nele + como foi → regras. */
     fun learnVideos(c: Context, items: List<Triple<File, String, String>>, extra: String = ""): List<String> {
         val list = items.mapIndexed { i, (_, d, k) ->

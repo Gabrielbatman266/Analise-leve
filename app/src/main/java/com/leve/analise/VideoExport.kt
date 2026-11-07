@@ -25,6 +25,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.effect.BitmapOverlay
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.Presentation
+import androidx.media3.effect.Crop
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
@@ -198,7 +199,63 @@ object VideoExport {
     class Job(val src: Uri, val isPhoto: Boolean, val photoSeconds: Int, val text: String, val style: TextStyle,
               val music: File?, val mute: Boolean, val quality: String = "1080p",
               val startMs: Long = 0, val endMs: Long = 0, val musicStartMs: Long = 0,
-              val textStartMs: Long = 0, val textEndMs: Long = 0, val musicEndMs: Long = 0)
+              val textStartMs: Long = 0, val textEndMs: Long = 0, val musicEndMs: Long = 0,
+              val crop: CropSpec = CropSpec())
+
+    // ------------------------------------------------------------------ recorte / zoom
+    /** zoom ≥ 1; px/py de -1 a 1 (posição do recorte); fill = preenche 9:16 cortando as sobras (vídeo deitado). */
+    data class CropSpec(val zoom: Float = 1f, val px: Float = 0f, val py: Float = 0f, val fill: Boolean = false) {
+        val active get() = zoom > 1.01f || fill
+    }
+    fun cropOf(o: JSONObject?) = if (o == null) CropSpec() else
+        CropSpec(o.optDouble("cropZoom", 1.0).toFloat(), o.optDouble("cropX", 0.0).toFloat(), o.optDouble("cropY", 0.0).toFloat(), o.optBoolean("cropFill"))
+    fun putCrop(o: JSONObject, s: CropSpec) { o.put("cropZoom", s.zoom.toDouble()); o.put("cropX", s.px.toDouble()); o.put("cropY", s.py.toDouble()); o.put("cropFill", s.fill) }
+
+    /** Recorte em coordenadas -1..1: [esquerda, direita, baixo, cima]. */
+    fun cropNdc(w: Int, h: Int, s: CropSpec): FloatArray {
+        val ar = w.toFloat() / maxOf(1, h); val t = 9f / 16f
+        var hw = 1f; var hh = 1f
+        if (s.fill) { if (ar > t) hw = t / ar else hh = ar / t }
+        hw /= s.zoom; hh /= s.zoom
+        val cx = s.px.coerceIn(-1f, 1f) * (1f - hw); val cy = -s.py.coerceIn(-1f, 1f) * (1f - hh)
+        return floatArrayOf(cx - hw, cx + hw, cy - hh, cy + hh)
+    }
+
+    fun cropBitmap(b: Bitmap, s: CropSpec): Bitmap {
+        if (!s.active) return b
+        val n = cropNdc(b.width, b.height, s)
+        val l = ((n[0] + 1f) / 2f * b.width).toInt().coerceIn(0, b.width - 1)
+        val r = ((n[1] + 1f) / 2f * b.width).toInt().coerceIn(l + 1, b.width)
+        val top = ((1f - n[3]) / 2f * b.height).toInt().coerceIn(0, b.height - 1)
+        val bot = ((1f - n[2]) / 2f * b.height).toInt().coerceIn(top + 1, b.height)
+        return Bitmap.createBitmap(b, l, top, r - l, bot - top)
+    }
+
+    /** Põe a imagem numa tela 9:16 (igual ao vídeo exportado). */
+    fun fit916(b: Bitmap): Bitmap {
+        val out = Bitmap.createBitmap(540, 960, Bitmap.Config.ARGB_8888)
+        val cv = Canvas(out); cv.drawColor(0xFF000000.toInt())
+        val sc = minOf(540f / b.width, 960f / b.height)
+        val w = b.width * sc; val h = b.height * sc
+        cv.drawBitmap(b, null, android.graphics.RectF((540 - w) / 2, (960 - h) / 2, (540 + w) / 2, (960 + h) / 2), android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
+        return out
+    }
+
+    /** Tamanho como aparece na tela (vídeo girado troca largura/altura). */
+    fun displaySize(c: Context, src: Uri, photo: Boolean): Pair<Int, Int> = try {
+        if (photo) {
+            val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            c.contentResolver.openInputStream(src)?.use { android.graphics.BitmapFactory.decodeStream(it, null, o) }
+            o.outWidth to o.outHeight
+        } else {
+            val r = android.media.MediaMetadataRetriever(); r.setDataSource(c, src)
+            val w = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toInt() ?: 1080
+            val h = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toInt() ?: 1920
+            val rot = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toInt() ?: 0
+            r.release()
+            if (rot == 90 || rot == 270) h to w else w to h
+        }
+    } catch (e: Exception) { 1080 to 1920 }
 
     /** Tamanho (9:16), bitrate e codec por qualidade. 2K/4K usam HEVC: mesma qualidade com arquivo bem menor. */
     data class Q(val w: Int, val h: Int, val bitrate: Int, val mime: String)
@@ -217,6 +274,11 @@ object VideoExport {
         val qq = q(job.quality)
         try {
             val fx = ArrayList<androidx.media3.common.Effect>()
+            if (job.crop.active) {
+                val (sw, sh) = displaySize(c, job.src, job.isPhoto)
+                val n = cropNdc(sw, sh, job.crop)
+                fx.add(Crop(n[0], n[1], n[2], n[3]))
+            }
             fx.add(Presentation.createForWidthAndHeight(qq.w, qq.h, Presentation.LAYOUT_SCALE_TO_FIT))
             if (job.text.isNotBlank()) {
                 val tb = textBitmap(job.text, job.style, qq.w, qq.h)

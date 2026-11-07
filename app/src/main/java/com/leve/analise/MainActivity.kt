@@ -372,6 +372,7 @@ class MainActivity : Activity() {
         val p = Store.prefs(this)
         field("Chave da API", p.getString("key", "") ?: "", c4, password = true) { p.edit().putString("key", it.trim()).apply() }
         etModel = field("Modelo (vazio = padrão; vários separados por vírgula)", p.getString("model", "") ?: "", c4) { p.edit().putString("model", it.trim()).apply() }
+        field("Modelo de imagem (🧽 remover objeto; vazio = gemini-2.5-flash-image)", p.getString("img_model", "") ?: "", c4) { p.edit().putString("img_model", it.trim()).apply() }
         field("Prints por lote (1 a 8)", p.getInt("batch", 4).toString(), c4, number = true) {
             p.edit().putInt("batch", (it.toIntOrNull() ?: 4).coerceIn(1, 8)).apply()
         }

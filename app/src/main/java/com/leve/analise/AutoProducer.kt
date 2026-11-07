@@ -171,7 +171,7 @@ object AutoProducer {
         val secs = if (photo && target > 0) (target / 1000).toInt() else secs0
         val job = VideoExport.Job(Uri.fromFile(f), photo, secs, pl.text, st, mus, mt, q,
             if (photo) 0 else cs, if (photo || ce <= 0 || ce >= dur) 0 else ce, msStart,
-            if (photo) 0 else p.optLong("textStart"), if (photo) 0 else p.optLong("textEnd"), 0)
+            if (photo) 0 else p.optLong("textStart"), if (photo) 0 else p.optLong("textEnd"), 0, VideoExport.cropOf(p))
         val label = "Produzindo ${i + 1} de ${plans.size}"
         val info = (if (pl.text.isEmpty()) "\n🎬 sem texto" + (if (pl.version > 0) " · trecho ${pl.version + 1}" else "") else "\nT: ${pl.text.replace('\n', ' ').take(40)}") + (m?.let { "  ★ ${it.optString("name")}" } ?: "") + (mus?.let { "\n♪ " + VideoExport.nice(it) } ?: "")
         progress("$label…$info")

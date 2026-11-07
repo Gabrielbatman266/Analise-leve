@@ -39,6 +39,7 @@ class InstaEditor(private val a: MainActivity) {
     private var src: Uri? = null
     private var isPhoto = false
     private var photoSecs = 8
+    private var crop = VideoExport.CropSpec()
     private var music: File? = null
     private var mute = false
     private var style = TextStyle.load(a)
@@ -342,7 +343,7 @@ class InstaEditor(private val a: MainActivity) {
         val my = ++frameJob
         Thread {
             val b = VideoExport.frameAt(a, s, ms)
-            ui.post { if (my == frameJob && b != null) { if (start) base = b; preview.setImageBitmap(VideoExport.preview(b, etText.text.toString(), style)) } }
+            ui.post { if (my == frameJob && b != null) { if (start) base = b; preview.setImageBitmap(VideoExport.preview(pv(b), etText.text.toString(), style)) } }
         }.start()
     }
     private lateinit var tvQ: TextView
@@ -457,6 +458,22 @@ class InstaEditor(private val a: MainActivity) {
         work.addView(frame, LinearLayout.LayoutParams(pw, ph).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = a.dp(8) })
         preview = ImageView(a).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
         frame.addView(preview, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        run {
+            var lx = 0f; var ly = 0f
+            preview.setOnTouchListener { v, e ->
+                if (!crop.active || base == null) return@setOnTouchListener false
+                when (e.action) {
+                    android.view.MotionEvent.ACTION_DOWN -> { lx = e.x; ly = e.y; v.parent.requestDisallowInterceptTouchEvent(true) }
+                    android.view.MotionEvent.ACTION_MOVE -> {
+                        val k = 2f / maxOf(1f, crop.zoom - 0.9f)
+                        crop = crop.copy(px = (crop.px - (e.x - lx) / v.width * k).coerceIn(-1f, 1f), py = (crop.py - (e.y - ly) / v.height * k).coerceIn(-1f, 1f))
+                        lx = e.x; ly = e.y; drawPreview()
+                    }
+                    android.view.MotionEvent.ACTION_UP -> { updateCropUi(); scheduleSave() }
+                }
+                true
+            }
+        }
         video = VideoView(a).apply { visibility = View.GONE }
         frame.addView(video, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER))
         video.setOnPreparedListener { p ->
@@ -549,6 +566,33 @@ class InstaEditor(private val a: MainActivity) {
         pVideo.addView(durRow, a.lpMatch())
         a.text("Duração da foto em vídeo", 12f, a.MUTED, parent = durRow)
         redraws += a.chips(durRow, listOf("5s", "8s", "12s", "15s"), { "${photoSecs}s" }) { photoSecs = it.removeSuffix("s").toInt(); scheduleSave() }
+
+        // ⛶ recortar / zoom
+        val cc = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        pVideo.addView(cc, a.lpMatch().apply { topMargin = a.dp(10) })
+        a.text("⛶ Recortar / zoom", 14f, a.FG, parent = cc, bold = true)
+        a.text("Corta bordas, marca d'água no canto ou algo que você não quer. Com zoom, arraste a prévia parada pra escolher o pedaço.", 12f, a.MUTED, parent = cc)
+        redraws += a.chips(cc, listOf("Original", "Preencher 9:16"), { if (crop.fill) "Preencher 9:16" else "Original" }) { crop = crop.copy(fill = it != "Original"); afterCrop() }
+        redraws += a.chips(cc, listOf("1x", "1.2x", "1.5x", "2x", "3x"), { listOf(1f, 1.2f, 1.5f, 2f, 3f).minBy { z -> Math.abs(z - crop.zoom) }.let { z -> if (z == 1f) "1x" else "${z}x".replace(".0x", "x") } }) {
+            crop = crop.copy(zoom = it.removeSuffix("x").toFloat()); afterCrop()
+        }
+        val pr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        cc.addView(pr, a.lpMatch())
+        listOf("◀" to (-0.2f to 0f), "▲" to (0f to -0.2f), "▼" to (0f to 0.2f), "▶" to (0.2f to 0f)).forEach { (t, d) ->
+            a.button(t, pr, weight = true) { crop = crop.copy(px = (crop.px + d.first).coerceIn(-1f, 1f), py = (crop.py + d.second).coerceIn(-1f, 1f)); afterCrop() }
+        }
+        a.button("↺ Sem recorte", pr, weight = true) { crop = VideoExport.CropSpec(); afterCrop() }
+        tvCrop = a.text("", 11f, a.MUTED, parent = cc)
+
+        // 🧽 remover objeto com IA (fotos)
+        val rm = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        pVideo.addView(rm, a.lpMatch().apply { topMargin = a.dp(10) })
+        a.text("🧽 Remover objeto com IA", 14f, a.FG, parent = rm, bold = true)
+        tvRm = a.text("", 12f, a.MUTED, parent = rm)
+        val rr2 = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        rm.addView(rr2, a.lpMatch())
+        btnRm = a.button("🧽 O que remover?", rr2, primary = true, weight = true) { removeObjectDialog() }
+        btnUndoRm = a.button("↺ Voltar a original", rr2, weight = true) { undoRemove() }
 
         // camada Música
         tvMusic = a.text("", 14f, a.FG, parent = pMusic, bold = true)
@@ -1086,7 +1130,7 @@ class InstaEditor(private val a: MainActivity) {
         val dur = if (photo) 0L else VideoExport.durationMs(f)
         val job = VideoExport.Job(Uri.fromFile(f), photo, secs, txt, st, mus, mt, q,
             if (photo) 0 else cs, if (photo || ce <= 0 || ce >= dur) 0 else ce, ms,
-            if (photo) 0 else p.optLong("textStart"), if (photo) 0 else p.optLong("textEnd"), if (photo || m != null) 0 else p.optLong("musicEnd"))
+            if (photo) 0 else p.optLong("textStart"), if (photo) 0 else p.optLong("textEnd"), if (photo || m != null) 0 else p.optLong("musicEnd"), VideoExport.cropOf(p))
         tvMany.setTextColor(a.MUTED); tvMany.text = "Exportando ${i + 1} de ${ids.size}…"
         VideoExport.export(a, job, { pr -> tvMany.text = "Exportando ${i + 1} de ${ids.size}… $pr%" }) { out, _ ->
             if (out == null) { exportMany(ids, m, i + 1, ok); return@export }
@@ -1115,8 +1159,9 @@ class InstaEditor(private val a: MainActivity) {
             it.put("music", music?.path ?: ""); it.put("mute", mute); it.put("updated", System.currentTimeMillis())
             it.put("cutStart", cutStart); it.put("cutEnd", cutEnd); it.put("musicStart", musicStart)
             it.put("textStart", textStart); it.put("textEnd", textEnd); it.put("musicEnd", musicEnd)
+            VideoExport.putCrop(it, crop)
         }
-        base?.let { b -> Projects.saveThumb(a, id, VideoExport.preview(b, etText.text.toString(), style)) }
+        base?.let { b -> Projects.saveThumb(a, id, VideoExport.preview(pv(b), etText.text.toString(), style)) }
         ui.removeCallbacks(projRefresh); ui.postDelayed(projRefresh, 800)
     }
     private val projRefresh = Runnable { renderProjects() }
@@ -1124,7 +1169,7 @@ class InstaEditor(private val a: MainActivity) {
     private fun newProject() {
         saveNow()
         projId = null; src = null; base = null; isPhoto = false; music = null; mute = false; lastExportId = null; curModel = ""
-        cutStart = 0; cutEnd = 0; durMs = 0; musicStart = 0; cutRow.visibility = View.GONE
+        cutStart = 0; cutEnd = 0; durMs = 0; musicStart = 0; cutRow.visibility = View.GONE; crop = VideoExport.CropSpec()
         textStart = 0; textEnd = 0; musicEnd = 0; timeline.thumbs = emptyList(); syncTimeline()
         etText.setText(""); etCap.setText(""); durRow.visibility = View.GONE
         tvSrc.setTextColor(a.MUTED); tvSrc.text = "Escolha um vídeo ou uma foto pra começar."
@@ -1148,6 +1193,7 @@ class InstaEditor(private val a: MainActivity) {
         mute = o.optBoolean("mute")
         cutStart = o.optLong("cutStart"); cutEnd = o.optLong("cutEnd"); musicStart = o.optLong("musicStart")
         textStart = o.optLong("textStart"); textEnd = o.optLong("textEnd"); musicEnd = o.optLong("musicEnd")
+        crop = VideoExport.cropOf(o)
         timeline.thumbs = emptyList()
         seek.progress = style.size - 20
         redraws.forEach { it() }
@@ -1533,8 +1579,65 @@ class InstaEditor(private val a: MainActivity) {
             preview.setImageBitmap(VideoExport.preview(blank, txt.ifEmpty { "Seu texto aparece aqui" }, style))
             return
         }
-        preview.setImageBitmap(VideoExport.preview(b, txt, style))
+        preview.setImageBitmap(VideoExport.preview(pv(b), txt, style))
     }
+
+    private lateinit var tvCrop: TextView
+    private lateinit var tvRm: TextView
+    private lateinit var btnRm: Button
+    private lateinit var btnUndoRm: Button
+
+    private fun afterCrop() {
+        redraws.forEach { it() }
+        if (editMode) showImagePreview() else drawPreview()
+        updateCropUi(); scheduleSave()
+    }
+
+    private fun updateCropUi() {
+        if (!::tvCrop.isInitialized) return
+        tvCrop.text = if (!crop.active) "Sem recorte." else "Recorte ativo" + (if (crop.zoom > 1.01f) " · zoom ${"%.1f".format(crop.zoom)}x" else "") + (if (crop.fill) " · preenchendo 9:16" else "") +
+            ". A prévia parada mostra o resultado; tocando ▶ o vídeo aparece inteiro."
+        val orig = projId?.let { File(Projects.srcFile(a, it, true).path + ".orig") }
+        tvRm.text = if (isPhoto) "Escreva o que tirar da foto (ex.: \"a garrafa na mesa\", \"a pessoa no fundo\", \"o texto na parede\"). A IA apaga e preenche o fundo; o resto fica igual." +
+            (if (Ai.provider(a) != "gemini") "\n⚠ Precisa da IA do Google (Gemini) nos Ajustes: a do Claude não edita imagem." else "")
+            else "Em vídeo a IA não consegue apagar quadro a quadro aqui no celular. Use ⛶ Recortar pra tirar o que está na borda, ou refaça o vídeo no Flow pedindo sem o objeto. Em fotos funciona."
+        btnRm.isEnabled = isPhoto; btnUndoRm.visibility = if (isPhoto && orig?.exists() == true) View.VISIBLE else View.GONE
+    }
+
+    private fun removeObjectDialog() {
+        val id = projId ?: run { a.toast("Abra uma foto primeiro"); return }
+        if (!isPhoto) return
+        val et = EditText(a).apply { hint = "Ex.: a garrafa em cima da mesa" }
+        AlertDialog.Builder(a).setTitle("O que remover da foto?").setView(et)
+            .setPositiveButton("🧽 Remover") { _, _ ->
+                val what = et.text.toString().trim(); if (what.isEmpty()) return@setPositiveButton
+                val f = Projects.srcFile(a, id, true)
+                btnRm.isEnabled = false; tvRm.setTextColor(a.MUTED); tvRm.text = "A IA está removendo \"$what\"…"
+                Thread {
+                    val msg = try {
+                        val bytes = Ai.editImage(a, f, "Remove $what from this photo. Fill the area naturally so it looks like it was never there. Keep everything else exactly the same: the person, face, body, pose, clothes, lighting, colors, framing and resolution.")
+                        val orig = File(f.path + ".orig"); if (!orig.exists()) f.copyTo(orig)
+                        f.writeBytes(bytes); null
+                    } catch (e: Exception) { e.message ?: "erro" }
+                    ui.post {
+                        btnRm.isEnabled = true
+                        if (msg == null) { tvRm.setTextColor(a.OK); loadBase("Foto sem \"$what\""); ui.postDelayed({ updateCropUi(); tvRm.setTextColor(a.OK); tvRm.text = "✓ Removido. Não gostou? ↺ Voltar a original." }, 600) }
+                        else { tvRm.setTextColor(a.ACCENT); tvRm.text = "⚠ $msg" }
+                    }
+                }.start()
+            }.setNegativeButton("Cancelar", null).show()
+    }
+
+    private fun undoRemove() {
+        val id = projId ?: return
+        val f = Projects.srcFile(a, id, true); val orig = File(f.path + ".orig")
+        if (!orig.exists()) return
+        orig.copyTo(f, true); orig.delete()
+        loadBase("Foto original de volta"); ui.postDelayed({ updateCropUi() }, 300)
+    }
+
+    /** Quadro da prévia já com recorte/zoom, numa tela 9:16 igual ao exportado. */
+    private fun pv(b: Bitmap) = VideoExport.fit916(VideoExport.cropBitmap(b, crop))
 
     private fun showImagePreview() {
         editMode = false; bgmStop(); ui.removeCallbacks(loopTick); mp = null
@@ -1665,6 +1768,7 @@ class InstaEditor(private val a: MainActivity) {
             val d = if (isPhoto) 0L else VideoExport.durationMs(a, s)
             ui.post {
                 base = b; durMs = d
+                updateCropUi()
                 if (!isPhoto && d > 0) {
                     if (cutEnd <= 0 || cutEnd > d) cutEnd = d
                     if (cutStart >= cutEnd) cutStart = 0
@@ -1687,7 +1791,7 @@ class InstaEditor(private val a: MainActivity) {
             ui.post {
                 if (!ok) { Projects.remove(a, pid); a.toast("Não consegui abrir esse vídeo"); return@post }
                 projId = pid; isPhoto = false; src = Uri.fromFile(f); durRow.visibility = View.GONE
-                cutStart = 0; cutEnd = 0
+                cutStart = 0; cutEnd = 0; crop = VideoExport.CropSpec()
                 pendingCat?.let { cx -> Projects.update(a, pid) { it.put("ctx", cx) } }; pendingCat = null
                 loadBase("Vídeo salvo no projeto"); saveNow(); renderProjects()
             }
@@ -1916,7 +2020,7 @@ class InstaEditor(private val a: MainActivity) {
         a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val job = VideoExport.Job(s, isPhoto, photoSecs, etText.text.toString(), style.copy(), music, mute, quality(),
             if (isPhoto) 0 else cutStart, if (isPhoto || cutEnd >= durMs) 0 else cutEnd, musicStart,
-            if (isPhoto) 0 else textStart, if (isPhoto) 0 else textEnd, if (isPhoto) 0 else musicEnd)
+            if (isPhoto) 0 else textStart, if (isPhoto) 0 else textEnd, if (isPhoto) 0 else musicEnd, crop)
         val qn = quality()
         VideoExport.export(a, job, { p -> tvProg.text = "Exportando $qn… $p%" }) { f, err ->
             a.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
