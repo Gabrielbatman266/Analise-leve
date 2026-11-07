@@ -29,7 +29,10 @@ object AutoProducer {
     @Volatile var running = false
     private val main = Handler(Looper.getMainLooper())
 
-    data class Plan(val proj: String, val text: String, val tctx: String, val model: JSONObject?, val caption: String, val ctx: String, val version: Int = 0)
+    data class Plan(val proj: String, val text: String, val tctx: String, val model: JSONObject?, val caption: String, val ctx: String, val version: Int = 0, val music: String? = null)
+
+    /** Respostas do "Me perguntar" da música nesta produção (categoria → caminho / "" / "*"). */
+    @Volatile var asked: Map<String, String> = emptyMap()
 
     fun quality(c: Context) = Store.prefs(c).getString("quality", "1080p") ?: "1080p"
     fun styleOf(st: JSONObject) = TextStyle(st.optInt("size", 52), st.optString("color", "Branco"), st.optString("bg", "Faixa escura"),
@@ -107,7 +110,13 @@ object AutoProducer {
             usedCombo.add(pid + "|" + pick.first.trim().lowercase())
             out.add(Plan(pid, pick.first, pick.second, if (useModel) ModelScore.pick(ms) else null, cap, cx))
         }
-        return out
+        // música por categoria (variando: nunca a mesma em seguida)
+        val avoidM = ArrayList(MusicPick.recent(c))
+        return out.map { pl ->
+            val m = MusicPick.resolve(c, pl.ctx, avoidM.takeLast(2), asked)
+            if (!m.isNullOrEmpty()) avoidM.add(m)
+            pl.copy(music = m)
+        }
     }
 
     /** Chame na thread principal. progress/done também chegam na principal. */
@@ -119,22 +128,27 @@ object AutoProducer {
             ensureTexts(c, projs) { m -> main.post { progress(m) } }
             val plans = makePlans(c, n, only)
             main.post {
-                if (plans.isEmpty()) { running = false; done(0) } else step(c, plans, 0, 0, progress, done)
+                if (plans.isEmpty()) { running = false; asked = emptyMap(); done(0) } else step(c, plans, 0, 0, progress, done)
             }
         }.start()
     }
 
     private fun step(c: Context, plans: List<Plan>, i: Int, ok: Int, progress: (String) -> Unit, done: (Int) -> Unit) {
-        if (i >= plans.size) { running = false; done(ok); return }
+        if (i >= plans.size) { running = false; asked = emptyMap(); done(ok); return }
         val pl = plans[i]
         val p = Projects.get(c, pl.proj) ?: run { step(c, plans, i + 1, ok, progress, done); return }
         val photo = p.optBoolean("photo")
         val f = Projects.srcFile(c, pl.proj, photo)
         val m = pl.model
         val st = (m?.optJSONObject("style") ?: p.optJSONObject("style"))?.let { styleOf(it) } ?: TextStyle.load(c)
-        val mus = (if (m != null && m.optString("music").isNotEmpty()) m.optString("music") else p.optString("music")).takeIf { it.isNotEmpty() }?.let { File(it) }?.takeIf { it.exists() }
-        val mt = if (m != null) m.optBoolean("mute") else p.optBoolean("mute")
-        val msStart = if (m != null && m.optString("music").isNotEmpty()) m.optLong("musicStart") else p.optLong("musicStart")
+        var mus = (if (m != null && m.optString("music").isNotEmpty()) m.optString("music") else p.optString("music")).takeIf { it.isNotEmpty() }?.let { File(it) }?.takeIf { it.exists() }
+        var mt = if (m != null) m.optBoolean("mute") else p.optBoolean("mute")
+        var msStart = if (m != null && m.optString("music").isNotEmpty()) m.optLong("musicStart") else p.optLong("musicStart")
+        when {
+            pl.music == null -> {}
+            pl.music.isEmpty() -> { mus = null; mt = false; msStart = 0 }               // som original
+            else -> { mus = File(pl.music).takeIf { it.exists() } ?: mus; mt = false; msStart = 0 } // música da categoria
+        }
         val secs = if (m != null) m.optInt("secs", 8) else p.optInt("secs", 8)
         val q = m?.optString("quality")?.ifEmpty { null } ?: quality(c)
         var cs = p.optLong("cutStart"); var ce = p.optLong("cutEnd")
@@ -151,7 +165,7 @@ object AutoProducer {
             if (photo) 0 else cs, if (photo || ce <= 0 || ce >= dur) 0 else ce, msStart,
             if (photo) 0 else p.optLong("textStart"), if (photo) 0 else p.optLong("textEnd"), 0)
         val label = "Produzindo ${i + 1} de ${plans.size}"
-        val info = (if (pl.text.isEmpty()) "\n🎬 sem texto" + (if (pl.version > 0) " · corte ${pl.version + 1}" else "") else "\nT: ${pl.text.replace('\n', ' ').take(40)}") + (m?.let { "  ★ ${it.optString("name")}" } ?: "")
+        val info = (if (pl.text.isEmpty()) "\n🎬 sem texto" + (if (pl.version > 0) " · corte ${pl.version + 1}" else "") else "\nT: ${pl.text.replace('\n', ' ').take(40)}") + (m?.let { "  ★ ${it.optString("name")}" } ?: "") + (mus?.let { "\n♪ " + VideoExport.nice(it) } ?: "")
         progress("$label…$info")
         VideoExport.export(c, job, { pr -> progress("$label… $pr%$info") }) { out, _ ->
             if (out == null) { step(c, plans, i + 1, ok, progress, done); return@export }
@@ -161,9 +175,11 @@ object AutoProducer {
                     it.put("proj", pl.proj); it.put("texto", pl.text); it.put("tctx", pl.tctx); it.put("ctx", pl.ctx)
                     it.put("modelo", m?.optString("name") ?: ""); it.put("auto", true)
                     if (pl.caption.isEmpty() && Contexts.noCaption(c, pl.ctx)) it.put("semleg", true)
+                    it.put("musica", mus?.path ?: "")
                 }
                 Projects.update(c, pl.proj) { it.put("versoes", it.optInt("versoes") + 1) }
                 if (pl.text.isNotEmpty()) OverlayDB.used(c, pl.text, pl.tctx)
+                mus?.let { MusicPick.used(c, it.path) }
                 main.post { step(c, plans, i + 1, ok + 1, progress, done) }
             }.start()
         }

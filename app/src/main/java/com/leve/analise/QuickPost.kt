@@ -134,6 +134,7 @@ object RateLater {
         CaptionDB.rate(c, o.optString("legenda"), k)
         OverlayDB.rate(c, o.optString("texto"), k, o.optString("tctx").ifEmpty { o.optString("ctx") })
         ModelScore.rate(c, o.optString("modelo"), k)
+        MusicPick.rate(c, o.optString("musica"), k)
         VideoExport.updateLib(c, vid) { it.put("nota", k) }
     }
 }

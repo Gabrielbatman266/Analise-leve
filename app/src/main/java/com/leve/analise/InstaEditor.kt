@@ -107,6 +107,7 @@ class InstaEditor(private val a: MainActivity) {
     private val SEC_NAMES = listOf("✏ Editar", "🗂 Categorias", "🎬 Fila", "🎵 Músicas", "⚙ Auto")
     private val NAV_ORDER = listOf(2, 1, 0, 3, 4) // ordem dos botões no topo
     private lateinit var navRow: LinearLayout
+    private lateinit var tvBusy: TextView
     private val navBtns = ArrayList<Button>()
     private var secs: List<LinearLayout> = emptyList()
     private var curSec = 0
@@ -399,6 +400,10 @@ class InstaEditor(private val a: MainActivity) {
         navRow = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
         host.addView(navRow, a.lpMatch().apply { topMargin = a.dp(12) })
         NAV_ORDER.forEach { i -> navBtns += a.button(SEC_NAMES[i], navRow, weight = true) { showSection(i) } }
+        tvBusy = a.text("", 13f, a.MUTED, parent = host).apply {
+            visibility = View.GONE; setPadding(a.dp(12), a.dp(8), a.dp(12), a.dp(8))
+            background = GradientDrawable().apply { setColor(0xFF1C1C24.toInt()); cornerRadius = a.dp(10).toFloat() }
+        }
         secs = List(5) { LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }.also { v -> host.addView(v, a.lpMatch()) } }
 
         // ---------- 🗂 categorias: cada categoria = seus vídeos crus + seus textos
@@ -1004,17 +1009,27 @@ class InstaEditor(private val a: MainActivity) {
 
     private fun produceNow(n: Int, only0: String? = Store.prefs(a).getString("auto_ctx", null)) {
         if (VideoExport.busy() || AutoProducer.running) { a.toast("Já tem uma produção ou exportação rodando"); return }
-        if (Projects.list(a).isEmpty()) { a.toast("Primeiro tenha vídeos crus (aba Crus): os do Flow entram sozinhos"); showSection(1); return }
+        if (Projects.list(a).isEmpty()) { a.toast("Primeiro adicione vídeos crus em 🗂 Categorias (os do Flow entram sozinhos)"); showSection(1); return }
         val only = only0
         if (only != null && Projects.list(a).none { it.optString("ctx") == only }) { a.toast("Nenhum vídeo cru em ${Contexts.label(a, only)}"); return }
+        val cats = Projects.list(a).map { it.optString("ctx") }.distinct().filter { (only == null || it == only) && MusicPick.mode(a, it) == MusicPick.ASK }
+        askMusics(cats) { ans -> AutoProducer.asked = ans; produceGo(n, only) }
+    }
+
+    private fun busy(t: String, color: Int) {
+        tvAuto.setTextColor(color); tvAuto.text = t
+        tvBusy.setTextColor(color); tvBusy.text = t; tvBusy.visibility = if (t.isEmpty()) View.GONE else View.VISIBLE
+    }
+
+    private fun produceGo(n: Int, only: String?) {
         stopPlay(); btnAuto.isEnabled = false
         a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        tvAuto.setTextColor(a.MUTED); tvAuto.text = "Preparando…"
-        AutoProducer.run(a, n, only, { t -> tvAuto.setTextColor(a.MUTED); tvAuto.text = t }) { ok ->
+        busy("🤖 Preparando…", a.MUTED)
+        AutoProducer.run(a, n, only, { t -> busy("🤖 $t", a.MUTED) }) { ok ->
             a.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             btnAuto.isEnabled = true
-            tvAuto.setTextColor(a.OK)
-            tvAuto.text = if (ok < 0) "Já tinha uma produção rodando" else if (ok == 0) "Não consegui montar o plano" else "🤖 $ok vídeos prontos. Estão em ✅ Prontos."
+            busy(if (ok < 0) "Já tinha uma produção rodando" else if (ok == 0) "Nada pra produzir agora (tudo já editado, ou faltam textos)" else "✓ $ok vídeo(s) novo(s) na 🎬 Fila", a.OK)
+            ui.postDelayed({ if (!AutoProducer.running) { tvBusy.visibility = View.GONE } }, 8000)
             renderLibrary(); renderProjects(); renderOverlays()
             QuickPost.updateWidgets(a)
             if (ok > 0) { a.toast("🤖 $ok vídeos prontos"); showSection(2) }
@@ -1163,32 +1178,109 @@ class InstaEditor(private val a: MainActivity) {
         background = GradientDrawable().apply { setColor(a.CARD); cornerRadius = a.dp(14).toFloat(); setStroke(a.dp(1), a.LINE) }
     }.also { catBox.addView(it, a.lpMatch().apply { topMargin = a.dp(12) }) }
 
+    private val expanded = mutableSetOf<String>()
+
+    /** Quantos vídeos um "Produzir" desta categoria faz (sem texto: só o que falta editar). */
+    private fun catTodo(n: String): Int {
+        val crus = Projects.list(a).filter { it.optString("ctx") == n }
+        if (crus.isEmpty()) return 0
+        if (!Contexts.noText(a, n)) return Store.prefs(a).getInt("auto_n", 5)
+        val ids = crus.map { it.optString("id") }.toSet()
+        return maxOf(0, crus.size * Contexts.versions(a, n) - VideoExport.library(a).count { it.optString("proj") in ids })
+    }
+
+    private fun catSummary(n: String): String {
+        if (n.isEmpty()) return "Textos gerais servem pra qualquer vídeo"
+        val parts = ArrayList<String>()
+        parts += if (Contexts.noText(a, n)) "🎬 sem texto" else "T ${OverlayDB.count(a, n)} textos"
+        parts += "♪ " + MusicPick.label(MusicPick.mode(a, n)).substringAfter(' ').lowercase()
+        if (Contexts.noCaption(a, n)) parts += "sem legenda"
+        return parts.joinToString("  ·  ")
+    }
+
     private fun renderCatList() {
         val projs = Projects.list(a)
+        val lib = VideoExport.library(a)
+        // 👉 o que fazer agora
+        val todo = catCard()
+        a.text("👉 O que fazer agora", 15f, a.FG, parent = todo, bold = true)
+        var tips = 0
+        val loose = projs.count { it.optString("ctx").isEmpty() }
+        if (loose > 0 && Contexts.list(a).isNotEmpty()) {
+            tips++; a.text("📥 $loose vídeo(s) cru(s) sem categoria", 13f, a.FG, parent = todo)
+            val r = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }; todo.addView(r, a.lpMatch())
+            a.button("✨ Separar com IA", r, weight = true) { classifyRaw() }
+            a.button("Abrir e mover", r, weight = true) { openCat = ""; renderProjects() }
+        }
+        Contexts.names(a).forEach { n ->
+            val nc = projs.count { it.optString("ctx") == n }
+            if (nc == 0) return@forEach
+            if (Contexts.noText(a, n)) {
+                val left = catTodo(n)
+                if (left > 0) { tips++; a.text("${Contexts.label(a, n)}: $left vídeo(s) esperando edição", 13f, a.FG, parent = todo)
+                    a.button("🎬 Editar e pôr na fila", todo, primary = true) { produceNow(left, n) } }
+            } else if (OverlayDB.count(a, n) + OverlayDB.count(a, "") < 3) {
+                tips++; a.text("${Contexts.label(a, n)}: poucos textos (${OverlayDB.count(a, n)}). Escreva alguns do seu jeito.", 13f, a.FG, parent = todo)
+                a.button("Escrever textos", todo) { openCat = n; renderProjects() }
+            }
+        }
+        val waiting = lib.count { it.optInt("posts") == 0 }
+        val need = Daily.remaining(a) - waiting
+        if (need > 0 && projs.isNotEmpty()) {
+            tips++; a.text("🎯 Faltam $need vídeo(s) na fila pra meta de hoje", 13f, a.FG, parent = todo)
+            a.button("🤖 Produzir $need", todo) { produceNow(need, null) }
+        }
+        if (projs.isEmpty()) { tips++; a.text("Comece adicionando vídeos crus: toque em ＋＋ Adicionar vários vídeos crus.", 13f, a.FG, parent = todo) }
+        if (tips == 0) a.text("✓ Tudo em dia. A fila tem $waiting vídeo(s).", 13f, a.OK, parent = todo)
+
+        // categorias
         val names = Contexts.names(a) + listOf("")
         names.forEach { n ->
             val crus = projs.filter { it.optString("ctx") == n }
             if (n.isEmpty() && crus.isEmpty() && OverlayDB.count(a, "") == 0) return@forEach
+            val ids = crus.map { it.optString("id") }.toSet()
+            val inQueue = lib.count { it.optString("proj") in ids && it.optInt("posts") == 0 }
             val card = catCard()
             card.setOnClickListener { openCat = n; renderProjects(); a.scrollTo(catHead) }
-            a.text(if (n.isEmpty()) "📥  Sem categoria · textos gerais" else Contexts.label(a, n), 17f, a.FG, parent = card, bold = true)
-            val rated = OverlayDB.all(a, n).filter { OverlayDB.rated(it) > 0 }
-            val nota = if (rated.isEmpty()) "" else "  ·  🔥 ${(rated.map { OverlayDB.mean(it) }.average() * 100).toInt()}%"
-            a.text(if (Contexts.noText(a, n)) "${crus.size} vídeo(s) cru(s)  ·  🎬 sem texto, o app só edita" + (if (Contexts.noCaption(a, n)) " · sem legenda" else "")
-                else "${crus.size} vídeo(s) cru(s)  ·  ${OverlayDB.count(a, n)} texto(s)$nota", 13f, a.MUTED, parent = card)
-            if (n.isNotEmpty()) Contexts.desc(a, n).takeIf { it.isNotBlank() }?.let { a.text(it.take(90), 12f, a.MUTED, parent = card) }
+            a.text(if (n.isEmpty()) "📥  Sem categoria" else Contexts.label(a, n), 17f, a.FG, parent = card, bold = true)
+            a.text("${crus.size} cru(s)  ·  $inQueue na fila", 13f, a.FG, parent = card)
+            a.text(catSummary(n), 12f, a.MUTED, parent = card)
             if (crus.isNotEmpty()) {
                 val strip = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
                 card.addView(strip, a.lpMatch().apply { topMargin = a.dp(8) })
-                crus.take(5).forEach { p ->
+                crus.take(6).forEach { p ->
                     strip.addView(ImageView(a).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF1C1C24.toInt()); thumbOf(p.optString("id"))?.let { setImageBitmap(it) } },
-                        LinearLayout.LayoutParams(a.dp(44), a.dp(78)).apply { rightMargin = a.dp(4) })
+                        LinearLayout.LayoutParams(a.dp(40), a.dp(70)).apply { rightMargin = a.dp(4) })
                 }
-                if (crus.size > 5) strip.addView(TextView(a).apply { text = "+${crus.size - 5}"; setTextColor(a.MUTED); gravity = Gravity.CENTER }, LinearLayout.LayoutParams(a.dp(44), a.dp(78)))
+                if (crus.size > 6) strip.addView(TextView(a).apply { text = "+${crus.size - 6}"; setTextColor(a.MUTED); gravity = Gravity.CENTER }, LinearLayout.LayoutParams(a.dp(40), a.dp(70)))
             }
-            a.text("Abrir ›", 13f, a.ACCENT, parent = card, bold = true)
+            val r = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+            card.addView(r, a.lpMatch())
+            a.button("Abrir ›", r, weight = true) { openCat = n; renderProjects(); a.scrollTo(catHead) }
+            if (n.isNotEmpty() && crus.isNotEmpty()) {
+                val k = catTodo(n)
+                if (k > 0) a.button(if (Contexts.noText(a, n)) "🎬 Editar $k" else "🤖 Produzir $k", r, primary = true, weight = true) { produceNow(k, n) }
+            }
         }
-        if (Contexts.list(a).isEmpty()) a.text("Nenhuma categoria ainda. Toque em ＋ Nova categoria (ex.: \"Falando\", \"Olhar\") ou em ✨ Separar vídeos com IA.", 13f, a.MUTED, parent = catBox)
+        if (Contexts.list(a).isEmpty()) a.text("Nenhuma categoria ainda. Crie uma (ex.: \"Genérico\" pra vídeos sem texto, \"Falando\" pra vídeos com texto) ou toque em ✨ Separar vídeos com IA.", 13f, a.MUTED, parent = catBox)
+    }
+
+    /** Cartão de passo numerado: "② Música   ✓ Automático". */
+    private fun stepCard(num: String, title: String, status: String, ok: Boolean): LinearLayout {
+        val c = catCard()
+        val h = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        c.addView(h, a.lpMatch())
+        h.addView(TextView(a).apply { text = "$num  $title"; textSize = 16f; setTextColor(a.FG); typeface = android.graphics.Typeface.DEFAULT_BOLD },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        h.addView(TextView(a).apply { text = (if (ok) "✓ " else "• ") + status; textSize = 12f; setTextColor(if (ok) a.OK else a.ACCENT) })
+        return c
+    }
+
+    private fun moreBtn(parent: LinearLayout, key: String, total: Int, shown: Int) {
+        if (total <= shown && key !in expanded) return
+        a.button(if (key in expanded) "Mostrar menos" else "Ver todos ($total)", parent) {
+            if (!expanded.add(key)) expanded.remove(key); renderProjects()
+        }
     }
 
     private fun renderCatDetail(n: String) {
@@ -1205,62 +1297,55 @@ class InstaEditor(private val a: MainActivity) {
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         if (n.isNotEmpty()) {
             small(top, "✏") {
+                val box = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(a.dp(20), a.dp(8), a.dp(20), 0) }
+                val en = EditText(a).apply { setText(n); setSingleLine(true) }
                 val ed = EditText(a).apply { setText(Contexts.desc(a, n)); hint = "Como são esses vídeos (ajuda a IA)" }
-                AlertDialog.Builder(a).setTitle("Descrição de $n").setView(ed)
-                    .setPositiveButton("Salvar") { _, _ -> Contexts.update(a, n) { it.put("desc", ed.text.toString().trim()) }; renderProjects() }
-                    .setNegativeButton("Cancelar", null).show()
+                box.addView(en); box.addView(ed)
+                AlertDialog.Builder(a).setTitle("Editar categoria").setView(box)
+                    .setPositiveButton("Salvar") { _, _ ->
+                        Contexts.update(a, n) { it.put("desc", ed.text.toString().trim()) }
+                        val nn = en.text.toString().trim()
+                        if (nn.isNotEmpty() && nn != n) { Contexts.rename(a, n, nn)?.let { openCat = it } }
+                        renderProjects(); renderCtx()
+                    }.setNegativeButton("Cancelar", null).show()
             }
             small(top, "🗑") {
                 AlertDialog.Builder(a).setTitle("Apagar a categoria $n?").setMessage("Os vídeos e textos dela vão pra Sem categoria. Nada é apagado.")
                     .setPositiveButton("Apagar") { _, _ -> Contexts.remove(a, n); openCat = null; renderProjects(); renderCtx() }
                     .setNegativeButton("Cancelar", null).show()
             }
-        }
-        if (n.isNotEmpty()) a.text(Contexts.desc(a, n).ifBlank { "Sem descrição. Toque em ✏ e conte como são esses vídeos: a IA usa isso." }, 12f, a.MUTED, parent = catBox)
+            Contexts.desc(a, n).takeIf { it.isNotBlank() }?.let { a.text(it, 12f, a.MUTED, parent = catBox) }
+        } else a.text("Vídeos que ainda não estão em nenhuma categoria e os textos gerais (servem pra qualquer vídeo com texto).", 12f, a.MUTED, parent = catBox)
 
-        // 0) como o app produz esta categoria
         val noTxt = Contexts.noText(a, n)
-        if (n.isNotEmpty()) {
-            val cm = catCard()
-            a.text("Como o app produz esta categoria", 15f, a.FG, parent = cm, bold = true)
-            a.chips(cm, listOf("T Com texto no vídeo", "🎬 Sem texto (só edita)"), { if (Contexts.noText(a, n)) "🎬 Sem texto (só edita)" else "T Com texto no vídeo" }) { o ->
-                Contexts.update(a, n) { it.put("semtexto", o.startsWith("🎬")) }; renderProjects()
-            }
-            if (noTxt) {
-                a.text("O vídeo já está pronto: o app não gera texto nem gasta IA. Ele só edita sozinho: aplica um modelo de edição (música/qualidade), tira os metadados e, em cada versão, usa um trecho diferente do vídeo pra não sair igual.", 12f, a.MUTED, parent = cm)
-                a.text("Versões de cada vídeo cru", 12f, a.MUTED, parent = cm)
-                a.chips(cm, listOf("1", "2", "3", "5"), { Contexts.versions(a, n).toString() }) { v -> Contexts.update(a, n) { it.put("versoes", v.toInt()) } }
-            }
-            a.text("Legenda do post", 12f, a.MUTED, parent = cm)
-            a.chips(cm, listOf("Sorteada do banco", "Sem legenda"), { if (Contexts.noCaption(a, n)) "Sem legenda" else "Sorteada do banco" }) { o ->
-                Contexts.update(a, n) { it.put("semlegenda", o == "Sem legenda") }
-            }
-        }
-
-        // 1) vídeos crus
-        val cv = catCard()
         val crus = Projects.list(a).filter { it.optString("ctx") == n }
-        a.text("🎬 Vídeos crus (${crus.size})", 15f, a.FG, parent = cv, bold = true)
+
+        // ① vídeos crus
+        val cv = stepCard("①", "Vídeos crus", "${crus.size}", crus.isNotEmpty())
         val ar = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
         cv.addView(ar, a.lpMatch())
-        a.button("＋ 1 vídeo", ar, weight = true) { pendingCat = n; chooseMyVideo() }
         a.button("＋＋ Vários de uma vez", ar, primary = true, weight = true) { chooseRawMany(n) }
+        a.button("＋ 1 vídeo", ar, weight = true) { pendingCat = n; chooseMyVideo() }
         if (crus.isEmpty()) a.text("Nenhum vídeo aqui ainda.", 12f, a.MUTED, parent = cv)
-        crus.forEach { o ->
+        val ids = crus.map { it.optString("id") }
+        val libAll = VideoExport.library(a)
+        val showN = if ("crus:$n" in expanded) crus.size else 4
+        crus.take(showN).forEach { o ->
             val id = o.optString("id")
+            val made = libAll.count { it.optString("proj") == id }
             val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             cv.addView(row, a.lpMatch().apply { topMargin = a.dp(8) })
             row.addView(ImageView(a).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF1C1C24.toInt()); thumbOf(id)?.let { setImageBitmap(it) }; setOnClickListener { openProject(id) } },
-                LinearLayout.LayoutParams(a.dp(50), a.dp(88)).apply { rightMargin = a.dp(10) })
+                LinearLayout.LayoutParams(a.dp(46), a.dp(82)).apply { rightMargin = a.dp(10) })
             val side = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
             row.addView(side, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             val nt = OverlayDB.count(a, AutoProducer.vidKey(id))
-            a.text(o.optString("desc").ifBlank { "(vídeo sem descrição)" }.take(60), 13f, a.FG, parent = side)
-            a.text("${o.optInt("versoes")} versão(ões)" + (if (nt > 0) " · $nt texto(s) só dele" else "") + (if (o.optBoolean("flow")) " · do Flow" else ""), 11f, a.MUTED, parent = side)
+            a.text(o.optString("desc").ifBlank { if (o.optBoolean("flow")) "Vídeo do Flow" else "Vídeo cru" }.take(50), 13f, a.FG, parent = side)
+            a.text((if (made == 0) "ainda não editado" else "$made versão(ões) feitas") + (if (nt > 0) " · $nt texto(s) só dele" else ""), 11f, if (made == 0) a.ACCENT else a.MUTED, parent = side)
             val r = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
             side.addView(r, a.lpMatch())
             a.button("✏", r, weight = true) { openProject(id) }
-            a.button("T só dele", r, weight = true) { videoTexts(id) }
+            if (!noTxt) a.button("T", r, weight = true) { videoTexts(id) }
             a.button("⇄", r, weight = true) { chooseCtx(n) { nn -> Projects.update(a, id) { it.put("ctx", nn) }; renderProjects(); renderCtx() } }
             val del = a.button("🗑", r, weight = true) { }
             del.setOnClickListener {
@@ -1268,25 +1353,111 @@ class InstaEditor(private val a: MainActivity) {
                 else { if (projId == id) newProject(); Projects.remove(a, id); renderProjects() }
             }
         }
+        moreBtn(cv, "crus:$n", crus.size, 4)
 
-        // 2) textos da categoria (não aparece em categoria sem texto)
-        if (!noTxt) catTexts(n, key)
+        // ② texto no vídeo
+        val ct = stepCard("②", "Texto no vídeo", if (noTxt) "sem texto" else "${OverlayDB.count(a, key)} textos", noTxt || OverlayDB.count(a, key) + OverlayDB.count(a, "") >= 3)
+        if (n.isNotEmpty()) a.chips(ct, listOf("T Com texto", "🎬 Sem texto (só edita)"), { if (Contexts.noText(a, n)) "🎬 Sem texto (só edita)" else "T Com texto" }) { o ->
+            Contexts.update(a, n) { it.put("semtexto", o.startsWith("🎬")) }; renderProjects()
+        }
+        if (noTxt) a.text("O vídeo já está pronto: sem texto e sem gastar IA. O app só edita: música, qualidade, tira os metadados e, em cada versão, usa um trecho diferente.", 12f, a.MUTED, parent = ct)
+        else catTexts(ct, n, key)
 
-        // 3) produzir desta categoria
-        if (crus.isNotEmpty()) {
-            val cp2 = catCard()
-            val nn = if (noTxt) crus.size * Contexts.versions(a, n) - VideoExport.library(a).count { o -> crus.any { it.optString("id") == o.optString("proj") } } else Store.prefs(a).getInt("auto_n", 5)
-            if (noTxt && nn <= 0) a.text("✓ Todos os vídeos desta categoria já foram produzidos (${Contexts.versions(a, n)} versão(ões) cada). Aumente as versões ou adicione mais vídeos crus.", 12f, a.OK, parent = cp2)
+        if (n.isNotEmpty()) {
+            // ③ música
+            val mode = MusicPick.mode(a, n)
+            val all = VideoExport.musics(a)
+            val needsMusic = mode == MusicPick.AUTO || mode == MusicPick.ASK || mode == MusicPick.FIXED
+            val cmu = stepCard("③", "Música", MusicPick.label(mode).substringAfter(' '), !needsMusic || all.isNotEmpty())
+            a.chips(cmu, MusicPick.MODES.map { it.second }, { MusicPick.label(MusicPick.mode(a, n)) }) { o ->
+                val m = MusicPick.MODES.first { it.second == o }.first
+                Contexts.update(a, n) { it.put("musica_modo", m) }
+                if (m == MusicPick.FIXED && MusicPick.fixed(a, n) == null) pickFixedMusic(n) else renderProjects()
+            }
+            when (mode) {
+                MusicPick.AUTO -> {
+                    val ch = MusicPick.chosen(a, n)
+                    a.text("Sorteia uma por vídeo, sem repetir em seguida, e usa mais as que bombam (🔥 na fila). Entre: " +
+                        (if (ch.isEmpty()) "todas as suas músicas (${all.size})" else "${ch.size} escolhida(s)"), 12f, a.MUTED, parent = cmu)
+                    a.button("Escolher quais músicas…", cmu) { chooseMusics(n) }
+                    musicList(cmu, if (ch.isEmpty()) all.take(5) else ch.map { File(it) })
+                }
+                MusicPick.ASK -> a.text("Quando você tocar em Produzir, eu pergunto qual música usar (ou sorteio). Se o app produzir sozinho em segundo plano, ele sorteia.", 12f, a.MUTED, parent = cmu)
+                MusicPick.FIXED -> {
+                    val f = MusicPick.fixed(a, n)
+                    a.button("♪ " + (f?.let { VideoExport.nice(it) } ?: "Escolher a música…"), cmu) { pickFixedMusic(n) }
+                }
+                MusicPick.ORIG -> a.text("Usa o som do próprio vídeo.", 12f, a.MUTED, parent = cmu)
+                else -> a.text("Usa a música salva no modelo de edição sorteado (★ em Editar).", 12f, a.MUTED, parent = cmu)
+            }
+            if (needsMusic && all.isEmpty()) {
+                a.text("⚠ Você ainda não tem músicas salvas.", 12f, a.ACCENT, parent = cmu)
+                a.button("Ir pra 🎵 Músicas", cmu) { showSection(3) }
+            }
+
+            // ④ postagem
+            val cp = stepCard("④", "Postagem", if (Contexts.noCaption(a, n)) "sem legenda" else "legenda sorteada", true)
+            if (noTxt) {
+                a.text("Versões de cada vídeo cru (cada uma com um trecho diferente)", 12f, a.MUTED, parent = cp)
+                a.chips(cp, listOf("1", "2", "3", "5"), { Contexts.versions(a, n).toString() }) { v -> Contexts.update(a, n) { it.put("versoes", v.toInt()) }; renderProjects() }
+            }
+            a.text("Legenda do post", 12f, a.MUTED, parent = cp)
+            a.chips(cp, listOf("Sorteada do banco", "Sem legenda"), { if (Contexts.noCaption(a, n)) "Sem legenda" else "Sorteada do banco" }) { o ->
+                Contexts.update(a, n) { it.put("semlegenda", o == "Sem legenda") }; renderProjects()
+            }
+        }
+
+        // ⑤ produzir
+        if (n.isNotEmpty() && crus.isNotEmpty()) {
+            val k = catTodo(n)
+            val cpr = stepCard("⑤", "Produzir", "${libAll.count { it.optString("proj") in ids && it.optInt("posts") == 0 }} na fila", true)
+            if (k <= 0) a.text("✓ Todos os vídeos já foram editados (${Contexts.versions(a, n)} versão(ões) cada). Adicione mais crus ou aumente as versões.", 12f, a.OK, parent = cpr)
             else {
-                a.button(if (noTxt) "🎬 Editar e pôr na fila ($nn)" else "🤖 Produzir $nn vídeos desta categoria", cp2, primary = true) { produceNow(maxOf(1, nn), n) }
-                a.text("Os vídeos vão pra 🎬 Fila." + if (noTxt) "" else " Quantos: mude em ⚙ Auto.", 11f, a.MUTED, parent = cp2)
+                a.text("Vai fazer $k vídeo(s): " + catSummary(n), 12f, a.MUTED, parent = cpr)
+                a.button(if (noTxt) "🎬 Editar $k e pôr na fila" else "🤖 Produzir $k vídeos", cpr, primary = true) { produceNow(k, n) }
             }
         }
     }
 
-    private fun catTexts(n: String, key: String) {
-        val ct = catCard()
-        a.text(if (n.isEmpty()) "T Textos gerais (servem pra qualquer vídeo)" else "T Textos de $n (${OverlayDB.count(a, key)})", 15f, a.FG, parent = ct, bold = true)
+    private fun musicList(parent: LinearLayout, files: List<File>) {
+        files.forEach { f ->
+            val p = MusicPick.pct(a, f.path)
+            a.text("♪ " + VideoExport.nice(f) + (p?.let { "  ·  🔥 $it%" } ?: ""), 12f, a.FG, parent = parent)
+        }
+    }
+
+    private fun chooseMusics(n: String) {
+        val all = VideoExport.musics(a)
+        if (all.isEmpty()) { a.toast("Salve músicas em 🎵 Músicas primeiro"); showSection(3); return }
+        val cur = MusicPick.chosen(a, n).toSet()
+        val sel = BooleanArray(all.size) { all[it].path in cur }
+        AlertDialog.Builder(a).setTitle("Músicas de $n (nenhuma marcada = todas)")
+            .setMultiChoiceItems(all.map { f -> VideoExport.nice(f) + (MusicPick.pct(a, f.path)?.let { " · $it%" } ?: "") }.toTypedArray(), sel) { _, i, on -> sel[i] = on }
+            .setPositiveButton("Salvar") { _, _ -> MusicPick.setChosen(a, n, all.filterIndexed { i, _ -> sel[i] }.map { it.path }); renderProjects() }
+            .setNegativeButton("Cancelar", null).show()
+    }
+
+    private fun pickFixedMusic(n: String) {
+        val all = VideoExport.musics(a)
+        if (all.isEmpty()) { a.toast("Salve músicas em 🎵 Músicas primeiro"); renderProjects(); return }
+        AlertDialog.Builder(a).setTitle("Sempre esta música em $n").setItems(all.map { VideoExport.nice(it) }.toTypedArray()) { _, i ->
+            Contexts.update(a, n) { it.put("musica_fixa", all[i].path) }; renderProjects()
+        }.setOnCancelListener { renderProjects() }.show()
+    }
+
+    /** "Me perguntar": pergunta a música de cada categoria envolvida, depois produz. */
+    private fun askMusics(cats: List<String>, acc: Map<String, String> = emptyMap(), then: (Map<String, String>) -> Unit) {
+        if (cats.isEmpty()) { then(acc); return }
+        val n = cats.first()
+        val all = VideoExport.musics(a)
+        val labels = listOf("🎲 Sortear das minhas músicas", "🔊 Som original do vídeo") + all.map { f -> "♪ " + VideoExport.nice(f) + (MusicPick.pct(a, f.path)?.let { " · 🔥 $it%" } ?: "") }
+        AlertDialog.Builder(a).setTitle("Qual música pra ${Contexts.label(a, n)}?").setItems(labels.toTypedArray()) { _, i ->
+            val v = when (i) { 0 -> "*"; 1 -> ""; else -> all[i - 2].path }
+            askMusics(cats.drop(1), acc + (n to v), then)
+        }.setNegativeButton("Cancelar", null).show()
+    }
+
+    private fun catTexts(ct: LinearLayout, n: String, key: String) {
         a.text("Escreva do seu jeito: a IA aprende com os seus textos e gera parecidos. Enter = nova linha.", 12f, a.MUTED, parent = ct)
         val et = EditText(a).apply {
             hint = "Escreva um texto pro vídeo…"; setTextColor(a.FG); setHintTextColor(a.MUTED); textSize = 15f
@@ -1309,7 +1480,7 @@ class InstaEditor(private val a: MainActivity) {
         ct.addView(st)
         val l = OverlayDB.all(a, key).sortedWith(compareByDescending<org.json.JSONObject> { if (it.optString("src") == "meu") 1 else 0 }.thenByDescending { OverlayDB.mean(it) })
         if (l.isEmpty()) a.text("Nenhum texto ainda.", 12f, a.MUTED, parent = ct)
-        l.forEach { o ->
+        l.take(if ("txt:$key" in expanded) l.size else 6).forEach { o ->
             val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             ct.addView(row, a.lpMatch().apply { topMargin = a.dp(6) })
             val nr = OverlayDB.rated(o)
@@ -1321,7 +1492,8 @@ class InstaEditor(private val a: MainActivity) {
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             small(row, "✕") { OverlayDB.remove(a, o.optString("t")); renderProjects() }
         }
-
+        moreBtn(ct, "txt:$key", l.size, 6)
+        a.text("Segure um texto pra mudar de categoria.", 11f, a.MUTED, parent = ct)
     }
 
     // ------------------------------------------------------------------ prévia

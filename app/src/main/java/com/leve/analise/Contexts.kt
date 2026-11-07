@@ -19,6 +19,8 @@ object Contexts {
 
     private fun save(c: Context, l: List<JSONObject>) { val a = JSONArray(); l.forEach { a.put(it) }; Store.prefs(c).edit().putString("contextos", a.toString()).apply() }
 
+    fun get(c: Context, name: String): JSONObject? = if (name.isEmpty()) null else list(c).firstOrNull { it.optString("name") == name }
+
     fun names(c: Context) = list(c).map { it.optString("name") }
 
     fun add(c: Context, name0: String, desc: String = "", semTexto: Boolean? = null): String {
@@ -33,6 +35,18 @@ object Contexts {
     }
 
     fun update(c: Context, name: String, f: (JSONObject) -> Unit) { val l = list(c); l.firstOrNull { it.optString("name") == name }?.let(f); save(c, l) }
+
+    /** Renomeia: leva junto os vídeos crus, textos e vídeos prontos. */
+    fun rename(c: Context, old: String, new0: String): String? {
+        val nn = new0.trim().replaceFirstChar { it.uppercase() }.take(24)
+        if (nn.isEmpty() || names(c).any { it.equals(nn, true) }) return null
+        update(c, old) { it.put("name", nn) }
+        Projects.list(c).filter { it.optString("ctx") == old }.forEach { p -> Projects.update(c, p.optString("id")) { it.put("ctx", nn) } }
+        OverlayDB.moveCtx(c, old, nn)
+        VideoExport.library(c).filter { it.optString("ctx") == old }.forEach { o -> VideoExport.updateLib(c, o.optString("id")) { it.put("ctx", nn) } }
+        if (Store.prefs(c).getString("auto_ctx", null) == old) Store.prefs(c).edit().putString("auto_ctx", nn).apply()
+        return nn
+    }
 
     /** Apaga o contexto: crus e textos dele voltam pro Geral. */
     fun remove(c: Context, name: String) {
