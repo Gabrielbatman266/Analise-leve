@@ -366,10 +366,11 @@ class InstaEditor(private val a: MainActivity) {
     private fun importMany(list: List<Uri>, i: Int = 0, ok: Int = 0) {
         if (i >= list.size) {
             a.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            tvImport.setTextColor(a.OK); tvImport.text = "$ok de ${list.size} vídeos importados, sem metadados."
+            tvImport.setTextColor(a.OK); tvImport.text = "✓ $ok de ${list.size} vídeo(s) prontos na fila, sem metadados."
+            QuickPost.updateWidgets(a)
             renderLibrary(); return
         }
-        if (i == 0) a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (i == 0) { a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); showSection(2) }
         tvImport.setTextColor(a.MUTED); tvImport.text = "Importando ${i + 1} de ${list.size}…"
         VideoExport.cleanCopy(a, list[i], { p -> tvImport.text = "Importando ${i + 1} de ${list.size}… $p%" }) { f, _ ->
             if (f == null) { importMany(list, i + 1, ok); return@cleanCopy }
@@ -415,6 +416,7 @@ class InstaEditor(private val a: MainActivity) {
         a.button("＋ Nova categoria", rr0, primary = true, weight = true) { newCtxDialog { openCat = it; renderProjects() } }
         a.button("✨ Separar vídeos com IA", rr0, weight = true) { classifyRaw() }
         a.button("＋＋ Adicionar vários vídeos crus", catHead) { chooseRawMany(openCat) }
+        a.button("📥 Já tenho vídeos prontos (editados) › vão direto pra Fila", catHead) { importReady() }
         tvRaw = a.text("", 12f, a.OK, parent = catHead)
         catBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         a.page.addView(catBox, a.lpMatch())
@@ -696,15 +698,15 @@ class InstaEditor(private val a: MainActivity) {
         val cf0 = a.card("🎬 Hoje")
         tvFila = a.text("", 15f, a.FG, parent = cf0, bold = true)
         a.button("🎬 Postar um vídeo agora", cf0, primary = true) { postRandomVideo() }
-        a.button("🤖 Produzir mais ${Store.prefs(a).getInt("auto_n", 5)}", cf0) { produceNow(Store.prefs(a).getInt("auto_n", 5)) }
-        a.text("Meta diária, quantos produzir e IA: em ⚙ Auto.", 11f, a.MUTED, parent = cf0)
+        val fr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        cf0.addView(fr, a.lpMatch())
+        a.button("📥 Adicionar vídeos prontos", fr, weight = true) { importReady() }
+        a.button("🤖 Produzir mais ${Store.prefs(a).getInt("auto_n", 5)}", fr, weight = true) { produceNow(Store.prefs(a).getInt("auto_n", 5)) }
+        tvImport = a.text("", 13f, a.OK, parent = cf0)
+        a.text("📥 = vídeos que você já editou (no CapCut, no Flow…): entram direto na fila, sem metadados, pode marcar vários. Meta diária e IA: em ⚙ Auto.", 11f, a.MUTED, parent = cf0)
         val cl = a.card("Fila de vídeos prontos")
         a.text("Saem um de cada vez em ordem aleatória; quando todos saem, a rodada recomeça. Depois de postar, marque 🔥/😐/👎.", 12f, a.MUTED, parent = cl)
         tvCycle = a.text("", 13f, a.OK, parent = cl)
-        a.button("＋ Pôr na fila vídeos que já tenho prontos", cl) {
-            open("video/*", REQ_IMPORT, true)
-        }
-        tvImport = a.text("", 13f, a.OK, parent = cl)
         libBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         cl.addView(libBox, a.lpMatch())
         renderLibrary()
@@ -1545,6 +1547,15 @@ class InstaEditor(private val a: MainActivity) {
     // ------------------------------------------------------------------ escolher arquivos
 
     /** Pergunta onde procurar: Galeria (fotos e vídeos do celular) ou Arquivos (pastas). */
+    /** Vídeos já editados: Flow, galeria ou arquivos (vários) → direto na fila, sem metadados. */
+    private fun importReady() {
+        if (VideoExport.busy() || AutoProducer.running) { a.toast("Espere terminar o que está rodando"); return }
+        AlertDialog.Builder(a).setTitle("Adicionar vídeos prontos")
+            .setItems(arrayOf("🖼  Galeria (marque vários)", "📁  Arquivos (segure pra marcar vários)")) { _, i ->
+                if (i == 0) openGallery("video/*", REQ_IMPORT, true) else openFiles("video/*", REQ_IMPORT, true)
+            }.show()
+    }
+
     private fun open(mime: String, req: Int, multiple: Boolean = false) {
         if (mime.startsWith("audio")) { openFiles(mime, req, multiple); return }
         AlertDialog.Builder(a).setTitle("Procurar em")
