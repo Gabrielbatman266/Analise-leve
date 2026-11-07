@@ -128,6 +128,29 @@ object RateLater {
         am.set(android.app.AlarmManager.RTC, System.currentTimeMillis() + 18 * 60 * 60 * 1000L, pi)
     }
 
+    /** Foto do Threads: pergunta como foi 5 h depois do post. */
+    fun schedulePhoto(c: Context, id: String) {
+        val am = c.getSystemService(android.app.AlarmManager::class.java)
+        val pi = PendingIntent.getBroadcast(c, ("f" + id).hashCode(), Intent(c, RateReceiver::class.java).setAction("ask")
+            .putExtra("id", id).putExtra("foto", true).setData(android.net.Uri.parse("nota://foto/$id")),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        am.set(android.app.AlarmManager.RTC, System.currentTimeMillis() + 5 * 60 * 60 * 1000L, pi)
+    }
+
+    /** Nota de um post de foto: vale pra foto E pra legenda; acumula (a foto pode ser postada várias vezes). */
+    fun applyPhoto(c: Context, id: String, k: String) {
+        val o = PostQueue.get(c, id) ?: return
+        val at = o.optLong("postedAt")
+        if (o.optLong("notaAt") == at && o.optString("nota") == k) return
+        val prev = if (o.optLong("notaAt") == at) o.optString("nota") else ""
+        CaptionDB.rate(c, PostQueue.captionOf(o), k)
+        Captions.ratePair(c, id, PostQueue.captionOf(o), k, prev)
+        PostQueue.update(c, id) {
+            if (prev.isNotEmpty()) it.put(prev, maxOf(0, it.optInt(prev) - 1)) // trocou a nota deste post
+            it.put(k, it.optInt(k) + 1); it.put("nota", k); it.put("notaAt", at)
+        }
+    }
+
     /** Aplica a nota uma vez só (a mesma do botão em Prontos). */
     fun apply(c: Context, vid: String, k: String) {
         val o = VideoExport.library(c).firstOrNull { it.optString("id") == vid } ?: return
@@ -144,6 +167,7 @@ class RateReceiver : android.content.BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         val vid = i.getStringExtra("id") ?: return
         val nm = c.getSystemService(android.app.NotificationManager::class.java)
+        if (i.getBooleanExtra("foto", false)) { photo(c, i, vid, nm); return }
         val nid = ("n" + vid).hashCode()
         if (i.action == "ask") {
             val o = VideoExport.library(c).firstOrNull { it.optString("id") == vid } ?: return
@@ -165,6 +189,29 @@ class RateReceiver : android.content.BroadcastReceiver() {
         RateLater.apply(c, vid, i.action ?: return)
         nm.cancel(nid)
         android.widget.Toast.makeText(c, if (i.action == "good") "Anotado: mais vídeos assim" else if (i.action == "bad") "Anotado: menos vídeos assim" else "Anotado", android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    private fun photo(c: Context, i: Intent, id: String, nm: android.app.NotificationManager) {
+        val nid = ("nf" + id).hashCode()
+        if (i.action == "ask") {
+            val o = PostQueue.get(c, id) ?: return
+            if (o.optLong("notaAt") == o.optLong("postedAt") && o.optString("nota").isNotEmpty()) return
+            nm.createNotificationChannel(android.app.NotificationChannel("nota", "Como foi o post", android.app.NotificationManager.IMPORTANCE_DEFAULT))
+            fun act(k: String, label: String, req: Int) = android.app.Notification.Action.Builder(null, label,
+                PendingIntent.getBroadcast(c, req + nid, Intent(c, RateReceiver::class.java).setAction(k).putExtra("id", id).putExtra("foto", true)
+                    .setData(android.net.Uri.parse("nota://foto/$id/$k")), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build()
+            val b = android.app.Notification.Builder(c, "nota").setSmallIcon(android.R.drawable.star_on)
+                .setContentTitle("Como foi essa foto no Threads?")
+                .setContentText(PostQueue.captionOf(o).replace('\n', ' ').take(70))
+                .addAction(act("good", "🔥 Bombou", 1)).addAction(act("meh", "😐 Normal", 2)).addAction(act("bad", "👎 Flopou", 3))
+                .setAutoCancel(true)
+            try { android.graphics.BitmapFactory.decodeFile(PostQueue.imageFile(c, id).path, android.graphics.BitmapFactory.Options().apply { inSampleSize = 4 })?.let { b.setLargeIcon(it) } } catch (e: Exception) { }
+            try { nm.notify(nid, b.build()) } catch (e: SecurityException) { }
+            return
+        }
+        RateLater.applyPhoto(c, id, i.action ?: return)
+        nm.cancel(nid)
+        android.widget.Toast.makeText(c, if (i.action == "good") "Anotado: essa volta mais vezes" else if (i.action == "bad") "Anotado: vou evitar assim" else "Anotado", android.widget.Toast.LENGTH_SHORT).show()
     }
 }
 

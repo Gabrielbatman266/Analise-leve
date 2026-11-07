@@ -482,7 +482,30 @@ class MainActivity : Activity() {
 
         val cs = card("O que está funcionando")
         tvLearn = text("", 13f, FG, parent = cs)
-        text("Marque 🔥 / 😐 / 👎 nos posts já feitos (aba Postar e Vídeos prontos). O sorteio e a IA passam a preferir o que bombou, sem parar de testar legendas novas.", 12f, MUTED, parent = cs)
+        text("Marque 🔥 / 😐 / 👎 nos posts (o app também pergunta 5 h depois de cada post). O que bombou sai MUITO mais (foto, legenda e a combinação das duas), mas nunca logo em seguida.", 12f, MUTED, parent = cs)
+        val tvRules = text("", 13f, FG, parent = cs)
+        fun rulesT() {
+            val r = Captions.learned(this)
+            tvRules.text = if (r.isEmpty()) "🧠 A IA ainda não analisou as combinações." else "🧠 O que a IA aprendeu (foto + legenda):\n" + r.joinToString("\n") { "• $it" }
+        }
+        rulesT()
+        val tvLearnSt = TextView(this).apply { textSize = 12f; setTextColor(OK) }
+        button("🧠 Analisar fotos + legendas que bombaram (IA)", cs, primary = true) {
+            tvLearnSt.setTextColor(MUTED); tvLearnSt.text = "A IA está comparando as fotos e legendas…"
+            Thread {
+                val msg = try { val r = Captions.learnCombos(this); "✓ ${r.size} regras novas. Elas entram nas próximas legendas da IA." } catch (e: Exception) { "⚠ " + (e.message ?: "erro") }
+                ui.post { tvLearnSt.setTextColor(if (msg.startsWith("✓")) OK else ACCENT); tvLearnSt.text = msg; rulesT() }
+            }.start()
+        }
+        button("✨ Gerar 10 legendas parecidas com as que bombaram", cs) {
+            tvLearnSt.setTextColor(MUTED); tvLearnSt.text = "Gerando variações das vencedoras…"
+            Thread {
+                val msg = try { val n = Captions.variationsOfWinners(this, 10); if (n < 0) "⚠ Ainda não tem legenda com 🔥. Avalie alguns posts primeiro." else "✓ $n legendas novas no banco, no estilo das que bombaram." } catch (e: Exception) { "⚠ " + (e.message ?: "erro") }
+                ui.post { tvLearnSt.setTextColor(if (msg.startsWith("✓")) OK else ACCENT); tvLearnSt.text = msg }
+            }.start()
+        }
+        cs.addView(tvLearnSt)
+        text("Cada análise usa 1 pedido da IA (com até 10 fotos pequenas). Faça de vez em quando, depois de avaliar vários posts.", 11f, MUTED, parent = cs)
         val br = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         cs.addView(br, lpMatch())
         button("Copiar backup", br, weight = true) {
@@ -785,7 +808,7 @@ class MainActivity : Activity() {
                 val nota = o.optString("nota")
                 listOf("good" to "🔥 Bombou", "meh" to "😐", "bad" to "👎").forEach { (k, e) ->
                     button(e, rr, primary = nota == k, weight = true) {
-                        CaptionDB.rate(this, PostQueue.captionOf(o), k); PostQueue.update(this, id) { it.put("nota", k) }; refresh()
+                        RateLater.applyPhoto(this, id, k); refresh()
                         toast(if (k == "good") "Anotado: vou usar mais legendas assim" else if (k == "bad") "Anotado: vou evitar legendas assim" else "Anotado")
                     }
                 }

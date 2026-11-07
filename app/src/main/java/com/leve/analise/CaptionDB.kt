@@ -105,17 +105,23 @@ object CaptionDB {
     }
 
     /** Escolhe a melhor legenda do momento entre as candidatas (ou do banco todo). */
-    fun pick(c: Context, candidates: List<String>? = null, avoid: Collection<String> = emptyList()): String? {
+    fun pick(c: Context, candidates: List<String>? = null, avoid: Collection<String> = emptyList(), bonus: ((String) -> Double)? = null): String? {
         val av = avoid.map { norm(it) }.toSet()
         val pool = if (candidates != null) candidates.filter { norm(it) !in av }.map { find(c, it) ?: entry(it, "ia") }
                    else load(c).filter { it.optString("src") != "viral" && norm(it.optString("t")) !in av }
         if (pool.isEmpty()) return null
         // sorteio ponderado: legenda que bombou tem mais chance, mas todas podem sair
-        val w = pool.map { o -> val m = mean(o); (m * m + 0.08) / (1.0 + 0.15 * ln(1.0 + o.optInt("uses"))) }
+        // o que bombou vale muito mais: 1 🔥 ≈ 3x, 3 🔥 ≈ 6x; 👎 cai pra ~1/3
+        val w = pool.map { o -> Math.exp(6.0 * (mean(o) - 0.5)) / (1.0 + 0.1 * ln(1.0 + o.optInt("uses"))) * (bonus?.invoke(o.optString("t")) ?: 1.0) }
         var r = Math.random() * w.sum()
         for (i in pool.indices) { r -= w[i]; if (r <= 0) return pool[i].optString("t") }
         return pool.last().optString("t")
     }
+
+    /** Legendas que bombaram (nota boa). */
+    fun winners(c: Context, n: Int = 30) = load(c).filter { it.optInt("good") > 0 && mean(it) > 0.6 }.sortedByDescending { mean(it) * (1 + it.optInt("good")) }.take(n)
+    fun losers(c: Context, n: Int = 15) = load(c).filter { it.optInt("bad") > it.optInt("good") }.sortedByDescending { it.optInt("bad") }.take(n)
+    fun isWinner(c: Context, t: String) = find(c, t)?.let { it.optInt("good") > 0 && mean(it) > 0.6 } == true
 
     fun top(c: Context, n: Int) = load(c).filter { it.optInt("good") + it.optInt("meh") + it.optInt("bad") > 0 }
         .sortedByDescending { mean(it) }.take(n)

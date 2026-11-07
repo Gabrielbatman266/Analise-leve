@@ -50,6 +50,7 @@ object PostConfirm {
             "fila" -> {
                 PostQueue.update(c, id) { it.put("status", "postada"); it.put("postedAt", now); it.put("escolhida", cap); it.put("usos", it.optInt("usos") + 1) }
                 if (Reminder.every(c) > 0) Reminder.schedule(c)
+                RateLater.schedulePhoto(c, id)
             }
             "video" -> {
                 VideoExport.updateLib(c, id) { it.put("legenda", cap); it.put("posts", it.optInt("posts") + 1); it.put("lastPost", now) }

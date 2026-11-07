@@ -45,12 +45,19 @@ object Captions {
         val refs = refs(c).take(12)
         val top = Store.sorted(c).map { it.optString("legenda") }.filter { it.isNotBlank() && it !in refs }.take(6)
         val pats = Store.loadPatterns(c).let { a -> (0 until a.length()).map { a.optString(it) } }
-        val best = CaptionDB.top(c, 10).filter { CaptionDB.mean(it) > 0.55 }.map { it.optString("t") }
-        val ex = (best + refs + top).distinct().take(20)
+        val wins = CaptionDB.winners(c, 12)
+        val best = wins.map { it.optString("t") }
+        val flops = CaptionDB.losers(c, 8).map { it.optString("t") }
+        val words = CaptionDB.winningWords(c, 10)
+        val ex = (refs + top).filter { it !in best }.distinct().take(14)
         return """Você escreve legendas para posts de foto no Threads, em português do Brasil, no estilo de perfis que viralizam.
 Vibe: ${vibe(c)}. Tamanho: ${size(c)}. Contexto: ${ctx(c).ifEmpty { "nenhum" }}.
+${learnedText(c)}
+${if (wins.isNotEmpty()) "🔥 LEGENDAS QUE BOMBARAM NO MEU PERFIL (prioridade máxima): metade das suas legendas deve ser VARIAÇÃO delas — mesmo tema, mesma estrutura e o mesmo tipo de gancho, com outras palavras:\n" + wins.joinToString("\n") { "- ${it.optString("t").replace('\n', ' ')}  (🔥${it.optInt("good")})" } else ""}
+${if (flops.isNotEmpty()) "👎 FLOPARAM (evite esse tom e esse assunto):\n" + flops.joinToString("\n") { "- ${it.optString("t").replace('\n', ' ')}" } else ""}
+${if (words.isNotEmpty()) "Palavras que aparecem nas que bombam: " + words.joinToString(", ") else ""}
 ${if (mine(c).isNotEmpty()) "LEGENDAS QUE EU ESCREVI — escreva no mesmo estilo (tamanho, jeito de falar, gírias), sem copiar:\n" + mine(c).take(12).joinToString("\n") { "- $it" } else ""}
-${if (ex.isNotEmpty()) "Legendas de referência que viralizaram (copie o ritmo e o tom, nunca o texto):\n" + ex.joinToString("\n") { "- $it" } else ""}
+${if (ex.isNotEmpty()) "Outras legendas de referência que viralizaram (copie o ritmo e o tom, nunca o texto):\n" + ex.joinToString("\n") { "- $it" } else ""}
 ${if (pats.isNotEmpty()) "Padrões que mais funcionaram (siga):\n" + pats.joinToString("\n") { "- $it" } else ""}
 Use a foto anexada para deixar as legendas específicas.
 Não termine com pergunta ou chamada pra comentar: o app adiciona esse final depois.
@@ -83,6 +90,15 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         ids.forEach { id -> PostQueue.update(c, id) { it.put("status", "gerando") } }
         return ids.size
     }
+    /** ✨ IA: variações novas das legendas que bombaram (entram no banco e no sorteio). */
+    fun variationsOfWinners(c: Context, n: Int): Int {
+        val wins = CaptionDB.winners(c, 10).map { it.optString("t") }
+        if (wins.isEmpty()) return -1
+        val l = Ai.variations(c, wins, CaptionDB.losers(c, 8).map { it.optString("t") }, mine(c).take(10), n)
+        l.forEach { CaptionDB.add(c, it, "var") }
+        return l.size
+    }
+
     // ---------- minhas legendas (escritas na mão, reaproveitadas no sorteio) ----------
     fun mine(c: Context): List<String> = CaptionDB.texts(c, "minha")
     fun addMine(c: Context, t: String) = CaptionDB.add(c, t, "minha")
@@ -115,30 +131,102 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
      * - foto nova tem mais chance; a que bombou pode voltar, mas só depois de outras;
      * - legenda: nunca uma das últimas (até 12); a que bombou tem mais chance.
      */
+    // ---------- combinações foto + legenda
+    private fun pairKey(id: String, cap: String) = id + "|" + cap.trim().lowercase().hashCode()
+    private fun pairs(c: Context): org.json.JSONObject = try { org.json.JSONObject(p(c).getString("pares", "{}")) } catch (e: Exception) { org.json.JSONObject() }
+
+    /** Nota da combinação (esta foto COM esta legenda). */
+    fun ratePair(c: Context, id: String, cap: String, k: String, undo: String = "") {
+        if (cap.isBlank()) return
+        val all = pairs(c); val key = pairKey(id, cap)
+        val e = all.optJSONObject(key) ?: org.json.JSONObject()
+        if (undo.isNotEmpty()) e.put(undo, maxOf(0, e.optInt(undo) - 1))
+        e.put(k, e.optInt(k) + 1); all.put(key, e)
+        p(c).edit().putString("pares", all.toString()).apply()
+    }
+
+    /** Multiplicador: combinação que bombou ≈ 4x; que flopou ≈ 0,25x; nunca testada = 1. */
+    fun pairBonus(c: Context, id: String): (String) -> Double {
+        val all = pairs(c)
+        return { cap ->
+            val e = all.optJSONObject(pairKey(id, cap))
+            if (e == null) 1.0 else {
+                val g = e.optInt("good"); val m = e.optInt("meh"); val b = e.optInt("bad")
+                Math.exp(4.0 * ((g + 0.5 * m + 1.0) / (g + m + b + 2.0) - 0.5))
+            }
+        }
+    }
+
+    /** Regras que a IA aprendeu comparando fotos + legendas. */
+    fun learned(c: Context): List<String> = try { val a = JSONArray(p(c).getString("combo_regras", "[]")); (0 until a.length()).map { a.optString(it) } } catch (e: Exception) { emptyList() }
+    fun learnedText(c: Context) = learned(c).takeIf { it.isNotEmpty() }?.let { "🧠 O QUE JÁ SE APRENDEU NESTE PERFIL (foto + legenda) — siga:\n" + it.joinToString("\n") { r -> "- $r" } } ?: ""
+
+    /** 🧠 Manda os posts avaliados pra IA comparar as combinações. Devolve as regras (ou erro). */
+    fun learnCombos(c: Context): List<String> {
+        val rated = PostQueue.load(c).filter { o ->
+            PostQueue.imageFile(c, o.optString("id")).exists() && PostQueue.captionOf(o).isNotBlank() &&
+                (o.optInt("good") + o.optInt("meh") + o.optInt("bad") > 0 || o.optString("nota").isNotEmpty())
+        }
+        if (rated.size < 3) throw AiException(-3, "Avalie pelo menos 3 posts (🔥/😐/👎) pra IA comparar. Agora tem ${rated.size}.")
+        // mistura vencedoras e perdedoras (até 10 fotos)
+        val sorted = rated.sortedByDescending { photoMean(it) }
+        val pick = (sorted.take(6) + sorted.takeLast(4)).distinct().take(10)
+        val list = pick.map { o ->
+            val k = when { photoMean(o) > 0.6 -> "good"; photoMean(o) < 0.45 -> "bad"; else -> "meh" }
+            Triple(PostQueue.imageFile(c, o.optString("id")), PostQueue.captionOf(o), k)
+        }
+        val regras = Ai.learnCombos(c, list)
+        if (regras.isNotEmpty()) p(c).edit().putString("combo_regras", JSONArray(regras).toString()).putLong("combo_at", System.currentTimeMillis()).apply()
+        return regras
+    }
+
+    fun photoMean(o: org.json.JSONObject): Double {
+        val g = o.optInt("good"); val m = o.optInt("meh"); val b = o.optInt("bad")
+        val legacy = o.optString("nota").takeIf { g + m + b == 0 } // notas antigas (antes de acumular)
+        val gg = g + (if (legacy == "good") 1 else 0); val mm = m + (if (legacy == "meh") 1 else 0); val bb = b + (if (legacy == "bad") 1 else 0)
+        return (gg + 0.5 * mm + 1.0) / (gg + mm + bb + 2.0)
+    }
+
+    /** Legendas que podem sair agora: as que bombaram só esperam 3 posts; as outras, 12. */
+    fun capAvoid(c: Context): List<String> {
+        val rec = recentCaps(c)
+        return rec.take(12).filterIndexed { i, t -> i < 3 || !CaptionDB.isWinner(c, t) }
+    }
+
+    /**
+     * Sorteio do post, valorizando MUITO o que bombou, mas nunca repetindo em seguida:
+     * - foto que bombou pode voltar depois de 2 outras; as normais esperam ~60% da fila;
+     * - peso da foto: bombou ≈ 3x a 8x; nova = 2x; 👎 bem menos;
+     * - legenda: vencedoras entram no sorteio de qualquer foto e têm peso alto.
+     */
     fun randomPick(c: Context): Pair<String, String>? {
         val all = PostQueue.load(c).filter { PostQueue.imageFile(c, it.optString("id")).exists() }
         if (all.isEmpty()) return null
         val rec = recentPhotos(c)
         val k = minOf(all.size - 1, maxOf(minOf(3, all.size - 1), (all.size * 0.6).toInt()), 20)
-        val block = rec.take(k).toSet()
-        val cand = all.filter { it.optString("id") !in block }.ifEmpty { all }
+        val cand = all.filter { o ->
+            val idx = rec.indexOf(o.optString("id"))
+            idx < 0 || idx >= (if (photoMean(o) > 0.6) minOf(2, k) else k)
+        }.ifEmpty { all.filter { it.optString("id") != rec.firstOrNull() }.ifEmpty { all } }
         val w = cand.map { o ->
             val posted = o.optString("status") == "postada"
             val idx = rec.indexOf(o.optString("id"))
-            (if (!posted) 3.0 else 1.0) * (if (idx < 0) 1.5 else 1.0 + idx / 10.0)  // mais tempo sem sair = mais chance
+            val score = Math.exp(5.0 * (photoMean(o) - 0.5))
+            score * (if (!posted) 2.0 else 1.0) * (if (idx < 0) 1.5 else 1.0 + idx / 10.0)
         }
         var r = Math.random() * w.sum(); var o = cand.last()
         for (i in cand.indices) { r -= w[i]; if (r <= 0) { o = cand[i]; break } }
         val own = o.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
-        val avoid = recentCaps(c).take(12)
-        val pool = (own + mine(c)).filter { it.isNotBlank() }.distinct()
-        val cap = (if (pool.isNotEmpty()) CaptionDB.pick(c, pool, avoid) else null) ?: randomCaption(c, avoid)
+        val avoid = capAvoid(c)
+        val wins = CaptionDB.winners(c, 20).map { it.optString("t") }
+        val pool = (own + mine(c) + wins + CaptionDB.texts(c, "var").take(30)).filter { it.isNotBlank() }.distinct()
+        val cap = (if (pool.isNotEmpty()) CaptionDB.pick(c, pool, avoid, pairBonus(c, o.optString("id"))) else null) ?: randomCaption(c, avoid)
         remember(c, o.optString("id"), cap)
         return o.optString("id") to cap
     }
     /** Legenda sem IA: sorteia das suas (como estão) ou das prontas (com o final de interação), fugindo das últimas. */
     fun randomCaption(c: Context, avoid0: Collection<String> = emptyList()): String {
-        val avoid = avoid0 + recentCaps(c).take(12)
+        val avoid = avoid0 + capAvoid(c)
         if (mine(c).isNotEmpty() && Math.random() < 0.7) CaptionDB.pick(c, null, avoid)?.let { return it }
         val base = Ai.OFFLINE.filter { o -> avoid.none { it.startsWith(o) } }.ifEmpty { Ai.OFFLINE }
         return withCta(c, listOf(base.random())).first()

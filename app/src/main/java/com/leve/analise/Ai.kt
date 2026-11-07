@@ -111,6 +111,50 @@ Responda só com JSON: {"fotos":[{"n":1,"legendas":["...","...","...","...","...
         return out.toByteArray()
     }
 
+    private fun small(f: File): ByteArray {
+        val o = android.graphics.BitmapFactory.Options().apply { inSampleSize = 4 }
+        val bmp = android.graphics.BitmapFactory.decodeFile(f.path, o) ?: return shrink(f)
+        val out = java.io.ByteArrayOutputStream()
+        bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 70, out)
+        return out.toByteArray()
+    }
+
+    /** ✨ Variações novas das legendas que bombaram. */
+    fun variations(c: Context, wins: List<String>, flops: List<String>, mine: List<String>, n: Int): List<String> {
+        val prompt = """Você escreve legendas para posts de foto no Threads de uma criadora de conteúdo, em português do Brasil.
+Estas legendas BOMBARAM no perfil dela:
+${wins.joinToString("\n") { "- " + it.replace('\n', ' ') }}
+${if (flops.isNotEmpty()) "Estas FLOPARAM (evite esse tom/assunto):\n" + flops.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
+${if (mine.isNotEmpty()) "Jeito dela de escrever:\n" + mine.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
+${Captions.learnedText(c)}
+Crie $n legendas NOVAS que sejam variações das que bombaram: mesmo tema, mesma estrutura, mesmo tipo de gancho e tamanho, com outras palavras. Nada copiado igual.
+Regras: naturais, no máximo 1 emoji, sem hashtags, nada explícito, nada que finja ser outra pessoa real.
+Responda só com JSON: {"legendas":["..."]}"""
+        val arr = parseObj(ask(c, prompt, emptyList())).optJSONArray("legendas") ?: throw AiException(-2, "Resposta que não entendi")
+        return (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotBlank() }.take(n)
+    }
+
+    /**
+     * 🧠 Analisa COMBINAÇÕES: posts avaliados (foto + legenda + nota) → regras do que combina com o quê.
+     * pairs: (foto, legenda, "good"/"meh"/"bad")
+     */
+    fun learnCombos(c: Context, pairs: List<Triple<File, String, String>>): List<String> {
+        val list = pairs.mapIndexed { i, (_, cap, k) ->
+            "${i + 1}. nota: " + (when (k) { "good" -> "🔥 BOMBOU"; "bad" -> "👎 FLOPOU"; else -> "😐 normal" }) + " — legenda: \"" + cap.replace('\n', ' ') + "\""
+        }.joinToString("\n")
+        val prompt = """Você é analista de conteúdo do Threads. Estão anexadas ${pairs.size} fotos de posts de uma criadora, na ordem, cada uma com a legenda usada e como foi:
+$list
+
+Compare as que bombaram com as que floparam e descubra o que funciona na COMBINAÇÃO foto + legenda:
+tipo de foto (pose, enquadramento, cenário, roupa, luz, clima — sem descrever rosto nem identidade) × tipo de legenda (tom, tamanho, gancho, pergunta, humor…).
+Escreva de 4 a 8 regras curtas, práticas e específicas, no formato "foto X + legenda Y = bomba/flopa", e regras gerais se tiver.
+Se houver poucos dados, diga o que parece mais provável, sem inventar certeza.
+Responda só com JSON: {"regras":["...","..."]}"""
+        val imgs = pairs.map { Base64.encodeToString(small(it.first), Base64.NO_WRAP) }
+        val arr = parseObj(ask(c, prompt, imgs)).optJSONArray("regras") ?: throw AiException(-2, "Resposta que não entendi")
+        return (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotBlank() }.take(10)
+    }
+
     /** Prompt pro Flow a partir de uma foto de referência: pose, roupa, cenário, luz e câmera, sem identificar a pessoa. */
     fun flowPrompt(c: Context, img: File): String {
         val prompt = """Look at this reference photo and write ONE prompt in English for an AI image/video generator (Google Flow).
