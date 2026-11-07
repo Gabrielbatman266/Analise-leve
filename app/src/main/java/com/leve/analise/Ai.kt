@@ -122,6 +122,19 @@ Reply only with JSON: {"prompt":"..."}"""
         return parseObj(txt).optString("prompt").ifBlank { throw AiException(-2, "A IA não mandou o prompt") }
     }
 
+    /** Textos curtos pra aparecer DENTRO do vídeo (Reels), aprendendo com os que bombaram e os que floparam. */
+    fun overlayTexts(c: Context, n: Int, good: List<String>, bad: List<String>, mine: List<String>): List<String> {
+        val prompt = """Crie $n textos curtos pra aparecer ESCRITOS DENTRO de vídeos curtos (Reels/Threads) de uma criadora de conteúdo, em português do Brasil.
+Estilo viral: gancho, "pov:", frase de efeito, curiosidade, pergunta que faz comentar. De 3 a 12 palavras. Pode quebrar em 2 linhas com \n. No máximo 1 emoji. Sem hashtags.
+Nada explícito, nada que finja ser outra pessoa real, nada enganoso.
+${if (good.isNotEmpty()) "Textos que BOMBARAM (siga o ritmo e o tipo de gancho, sem copiar):\n" + good.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
+${if (bad.isNotEmpty()) "Textos que FLOPARAM (evite esse estilo):\n" + bad.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
+${if (mine.isNotEmpty()) "Outros já usados (não repita):\n" + mine.take(20).joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
+Responda só com JSON: {"textos":["...","..."]}"""
+        val arr = parseObj(ask(c, prompt, emptyList())).optJSONArray("textos") ?: throw AiException(-2, "A IA não mandou os textos")
+        return (0 until arr.length()).map { arr.optString(it).replace("\\n", "\n").trim() }.filter { it.isNotEmpty() }
+    }
+
     /** Pedido mínimo pra conferir chave e modelo. */
     fun test(c: Context): String = ask(c, "Responda só com JSON: {\"ok\":true}", emptyList()).trim().take(200)
 

@@ -109,6 +109,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         ui.postDelayed({ askPending() }, 600)
+        ui.postDelayed({ if (::insta.isInitialized) insta.maybeRefill() }, 2500)
         Updater.schedule(this)
         Updater.checkOnOpen(this)
         QuickPost.publishShortcut(this)

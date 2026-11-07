@@ -103,7 +103,7 @@ class InstaEditor(private val a: MainActivity) {
         if (i == 1 && music == null && ::timeline.isInitialized && timeline.visibility == View.VISIBLE && pendingMusicAsk) { pendingMusicAsk = false; chooseMusic() }
         if (i == 2 && etText.text.isBlank() && pendingTextFocus) { pendingTextFocus = false; etText.requestFocus() }
     }
-    private val SEC_NAMES = listOf("✏ Editar", "📁 Esboços", "✅ Prontos", "🎵 Músicas")
+    private val SEC_NAMES = listOf("✏ Editar", "📁 Crus", "✅ Prontos", "🎵 Músicas", "🤖 Auto")
     private lateinit var navRow: LinearLayout
     private val navBtns = ArrayList<Button>()
     private var secs: List<LinearLayout> = emptyList()
@@ -123,11 +123,11 @@ class InstaEditor(private val a: MainActivity) {
 
     private fun updateNav() {
         if (navBtns.isEmpty()) return
-        val counts = listOf(-1, Projects.list(a).size, VideoExport.library(a).size, VideoExport.musics(a).size)
+        val counts = listOf(-1, Projects.list(a).size, VideoExport.library(a).count { it.optInt("posts") == 0 }, VideoExport.musics(a).size, -1)
         navBtns.forEachIndexed { k, b ->
             val on = k == curSec
             b.text = SEC_NAMES[k] + if (counts[k] > 0) " ${counts[k]}" else ""
-            b.textSize = 12.5f; b.setTextColor(if (on) 0xFF1A0A10.toInt() else a.FG)
+            b.textSize = 11.5f; b.setTextColor(if (on) 0xFF1A0A10.toInt() else a.FG)
             b.background = GradientDrawable().apply { setColor(if (on) a.ACCENT else 0xFF1C1C24.toInt()); cornerRadius = a.dp(10).toFloat() }
         }
     }
@@ -397,11 +397,11 @@ class InstaEditor(private val a: MainActivity) {
         navRow = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
         host.addView(navRow, a.lpMatch().apply { topMargin = a.dp(12) })
         SEC_NAMES.forEachIndexed { i, n -> navBtns += a.button(n, navRow, weight = true) { showSection(i) } }
-        secs = List(4) { LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }.also { v -> host.addView(v, a.lpMatch()) } }
+        secs = List(5) { LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }.also { v -> host.addView(v, a.lpMatch()) } }
 
         // ---------- projetos
         a.page = secs[1]
-        val cp = a.card("Esboços")
+        val cp = a.card("Vídeos crus")
         a.text("Seus vídeos originais, guardados. Os novos do Flow entram sozinhos. Toque em ✏ Editar pra mudar texto e música e exportar quantas versões quiser.", 13f, a.MUTED, parent = cp)
         a.button("⚡ Exportar vários de uma vez", cp, primary = true) { exportManyDialog() }
         tvMany = a.text("", 13f, a.OK, parent = cp)
@@ -640,6 +640,47 @@ class InstaEditor(private val a: MainActivity) {
         a.text("Música de Reels dos outros: toque no nome do áudio › Salvar, e escolha em Áudios salvos na hora de postar. Assim ela vem licenciada.", 12f, a.MUTED, parent = cm)
         renderMusics()
 
+        // ---------- 🤖 produção automática
+        a.page = secs[4]
+        val ca = a.card("🤖 Produção automática")
+        a.text("Pega seus vídeos crus (aba Crus), coloca um TEXTO NO VÍDEO e um modelo de edição, e exporta vários de uma vez, cada um com legenda sorteada. Depois de postar, marque 🔥/😐/👎 em Prontos: o app passa a usar mais os textos e modelos que bombam.", 13f, a.MUTED, parent = ca)
+        a.text("Quantos vídeos", 12f, a.MUTED, parent = ca)
+        a.chips(ca, listOf("3", "5", "10", "20"), { Store.prefs(a).getInt("auto_n", 5).toString() }) { Store.prefs(a).edit().putInt("auto_n", it.toInt()).apply() }
+        a.text("Edição", 12f, a.MUTED, parent = ca)
+        a.chips(ca, listOf("Modelo sorteado (aprende)", "Do jeito de cada cru"), { if (Store.prefs(a).getBoolean("auto_model", true)) "Modelo sorteado (aprende)" else "Do jeito de cada cru" }) {
+            Store.prefs(a).edit().putBoolean("auto_model", it.startsWith("Modelo")).apply()
+        }
+        btnAuto = a.button("🤖 Produzir agora", ca, primary = true) { produceNow(Store.prefs(a).getInt("auto_n", 5)) }
+        tvAuto = a.text("", 13f, a.OK, parent = ca)
+        a.text("Manter sempre vídeos prontos (repõe sozinho quando você abre o app)", 12f, a.MUTED, parent = ca)
+        a.chips(ca, listOf("Desligado", "3", "5", "10"), { Store.prefs(a).getInt("auto_keep", 0).let { if (it == 0) "Desligado" else it.toString() } }) {
+            Store.prefs(a).edit().putInt("auto_keep", if (it == "Desligado") 0 else it.toInt()).apply()
+        }
+
+        val ct = a.card("Textos no vídeo")
+        a.text("O banco das frases que aparecem escritas no vídeo (não é a legenda do post). Enter = nova linha.", 13f, a.MUTED, parent = ct)
+        val etO = EditText(a).apply {
+            hint = "Ex.: pov: você parou de rolar\nsó pra me ver"; setTextColor(a.FG); setHintTextColor(a.MUTED); textSize = 15f
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            minLines = 2; gravity = Gravity.TOP or Gravity.START
+            background = GradientDrawable().apply { setColor(a.BG); cornerRadius = a.dp(10).toFloat(); setStroke(a.dp(1), a.LINE) }
+            setPadding(a.dp(12), a.dp(10), a.dp(12), a.dp(10))
+        }
+        ct.addView(etO, a.lpMatch())
+        val tr2 = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        ct.addView(tr2, a.lpMatch())
+        a.button("Salvar texto", tr2, primary = true, weight = true) {
+            val t = etO.text.toString().trim()
+            if (t.isEmpty()) a.toast("Escreva o texto primeiro") else { OverlayDB.add(a, t, "meu"); etO.setText(""); renderOverlays() }
+        }
+        a.button("✨ Gerar 10 com IA", tr2, weight = true) { genOverlays(10) }
+        ovBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        ct.addView(ovBox, a.lpMatch())
+
+        val cs2 = a.card("O que está bombando")
+        tvStats = a.text("", 13f, a.FG, parent = cs2)
+        renderOverlays()
+
         // ---------- biblioteca
         a.page = secs[2]
         val cl = a.card("Vídeos prontos")
@@ -696,6 +737,7 @@ class InstaEditor(private val a: MainActivity) {
         seek.progress = style.size - 20
         redraws.forEach { it() }
         updateMusicLabel(); drawPreview(); scheduleSave()
+        curModel = m.optString("name")
         a.toast("Modelo \"${m.optString("name")}\" aplicado")
     }
 
@@ -717,6 +759,152 @@ class InstaEditor(private val a: MainActivity) {
             }
             if (pair.size == 1) row.addView(View(a), LinearLayout.LayoutParams(0, 1, 1f))
         }
+    }
+
+    // ------------------------------------------------------------------ 🤖 produção automática
+
+    private lateinit var btnAuto: Button
+    private lateinit var tvAuto: TextView
+    private lateinit var ovBox: LinearLayout
+    private lateinit var tvStats: TextView
+    private var curModel = ""
+
+    private data class Plan(val proj: String, val text: String, val model: org.json.JSONObject?, val caption: String)
+
+    private fun renderOverlays() {
+        if (!::ovBox.isInitialized) return
+        ovBox.removeAllViews()
+        val l = OverlayDB.all(a)
+        if (l.isEmpty()) a.text("Nenhum texto ainda. Escreva alguns ou toque em ✨ Gerar com IA. Sem nada aqui, a produção usa frases prontas.", 12f, a.MUTED, parent = ovBox)
+        if (l.size > 40) a.text("Mostrando 40 de ${l.size}", 12f, a.MUTED, parent = ovBox)
+        l.sortedByDescending { OverlayDB.mean(it) * 10 + (if (OverlayDB.rated(it) > 0) 1 else 0) }.take(40).forEach { o ->
+            val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            ovBox.addView(row, a.lpMatch().apply { topMargin = a.dp(6) })
+            val n = OverlayDB.rated(o)
+            val badge = if (n > 0) "${(OverlayDB.mean(o) * 100).toInt()}% · " else ""
+            row.addView(TextView(a).apply {
+                text = "T  " + o.optString("t") + "\n" + badge + "usado ${o.optInt("uses")}x" + (if (o.optInt("good") > 0) " · 🔥${o.optInt("good")}" else "") + (if (o.optInt("bad") > 0) " · 👎${o.optInt("bad")}" else "")
+                textSize = 13f; setTextColor(a.FG)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            small(row, "✕") { OverlayDB.remove(a, o.optString("t")); renderOverlays() }
+        }
+        renderStats()
+    }
+
+    private fun renderStats() {
+        if (!::tvStats.isInitialized) return
+        val tt = OverlayDB.top(a, 5)
+        val mm = models().mapNotNull { m -> ModelScore.pct(m)?.let { m.optString("name") to it } }.sortedByDescending { it.second }.take(5)
+        tvStats.text = buildString {
+            append("Textos no vídeo:")
+            if (tt.isEmpty()) append(" ainda sem avaliação") else tt.forEach { append("\n• ").append(it.optString("t").replace('\n', ' ').take(50)).append("  ${(OverlayDB.mean(it) * 100).toInt()}%") }
+            append("\n\nModelos de edição:")
+            if (mm.isEmpty()) append(" ainda sem avaliação") else mm.forEach { append("\n★ ${it.first}  ${it.second}%") }
+            append("\n\nMarque 🔥/😐/👎 nos vídeos postados (Prontos). Cada nota ensina o texto, o modelo e a legenda.")
+        }
+    }
+
+    private fun genOverlays(n: Int, then: (() -> Unit)? = null) {
+        if (::tvAuto.isInitialized) { tvAuto.setTextColor(a.MUTED); tvAuto.text = "Criando textos com a IA…" }
+        Thread {
+            val r = try {
+                val good = OverlayDB.top(a, 8).filter { OverlayDB.mean(it) > 0.55 }.map { it.optString("t") }
+                val bad = OverlayDB.worst(a, 6).filter { OverlayDB.mean(it) < 0.45 }.map { it.optString("t") }
+                val l = Ai.overlayTexts(a, n, good, bad, OverlayDB.all(a).map { it.optString("t") })
+                l.forEach { OverlayDB.add(a, it, "ia") }; "${l.size} textos novos no banco"
+            } catch (e: Exception) { "A IA não respondeu (${e.message?.take(60)}). Usei o que já tem no banco." }
+            ui.post {
+                if (::tvAuto.isInitialized) { tvAuto.setTextColor(a.OK); tvAuto.text = r }
+                renderOverlays(); then?.invoke()
+            }
+        }.start()
+    }
+
+    /** Monta o plano: cada vídeo cru recebe textos diferentes; modelo e legenda sorteados pelo que bomba. */
+    private fun makePlans(n: Int): List<Plan> {
+        val projs = Projects.list(a).filter { Projects.srcFile(a, it.optString("id"), it.optBoolean("photo")).exists() }
+        if (projs.isEmpty()) return emptyList()
+        val lib = VideoExport.library(a)
+        val usedCombo = lib.map { it.optString("proj") + "|" + it.optString("texto").trim().lowercase() }.toMutableSet()
+        val order = projs.sortedBy { it.optInt("versoes") + Math.random() } // os menos usados primeiro
+        val useModel = Store.prefs(a).getBoolean("auto_model", true)
+        val ms = models()
+        val out = ArrayList<Plan>()
+        var k = 0
+        while (out.size < n && k < n * 4) {
+            val p = order[k % order.size]; k++
+            val pid = p.optString("id")
+            val avoid = usedCombo.filter { it.startsWith("$pid|") }.map { it.substringAfter('|') } + out.map { it.text }
+            val t = OverlayDB.pick(a, avoid) ?: OverlayDB.STARTERS.filter { s -> avoid.none { it == s.lowercase() } }.randomOrNull() ?: continue
+            usedCombo.add(pid + "|" + t.trim().lowercase())
+            out.add(Plan(pid, t, if (useModel) ModelScore.pick(ms) else null, Captions.randomCaption(a)))
+        }
+        return out
+    }
+
+    private fun produceNow(n: Int) {
+        if (VideoExport.busy()) { a.toast("Espere terminar o que está exportando"); return }
+        if (Projects.list(a).isEmpty()) { a.toast("Primeiro tenha vídeos crus (aba Crus): os do Flow entram sozinhos"); showSection(1); return }
+        val go = {
+            val plans = makePlans(n)
+            if (plans.isEmpty()) a.toast("Não consegui montar o plano") else { btnAuto.isEnabled = false; produce(plans) }
+        }
+        // banco pequeno? pede textos novos pra IA antes (se não der, segue com o que tem)
+        if (OverlayDB.size(a) < n && Ai.key(a).isNotEmpty()) genOverlays(maxOf(10, n)) { go() } else go()
+    }
+
+    private fun produce(plans: List<Plan>, i: Int = 0, ok: Int = 0) {
+        if (i >= plans.size) {
+            a.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            btnAuto.isEnabled = true
+            tvAuto.setTextColor(a.OK); tvAuto.text = "🤖 $ok de ${plans.size} vídeos prontos. Estão em ✅ Prontos."
+            renderLibrary(); renderProjects(); renderOverlays()
+            if (ok > 0) { a.toast("🤖 $ok vídeos prontos"); showSection(2) }
+            return
+        }
+        if (i == 0) { stopPlay(); a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+        val pl = plans[i]
+        val p = Projects.get(a, pl.proj) ?: run { produce(plans, i + 1, ok); return }
+        val photo = p.optBoolean("photo")
+        val f = Projects.srcFile(a, pl.proj, photo)
+        val m = pl.model
+        val st = (m?.optJSONObject("style") ?: p.optJSONObject("style"))?.let { styleOf(it) } ?: TextStyle.load(a)
+        val mus = (if (m != null && m.optString("music").isNotEmpty()) m.optString("music") else p.optString("music")).takeIf { it.isNotEmpty() }?.let { File(it) }?.takeIf { it.exists() }
+        val mt = if (m != null) m.optBoolean("mute") else p.optBoolean("mute")
+        val msStart = if (m != null && m.optString("music").isNotEmpty()) m.optLong("musicStart") else p.optLong("musicStart")
+        val secs = if (m != null) m.optInt("secs", 8) else p.optInt("secs", 8)
+        val q = m?.optString("quality")?.ifEmpty { null } ?: quality()
+        val cs = p.optLong("cutStart"); val ce = p.optLong("cutEnd")
+        val dur = if (photo) 0L else VideoExport.durationMs(f)
+        val job = VideoExport.Job(Uri.fromFile(f), photo, secs, pl.text, st, mus, mt, q,
+            if (photo) 0 else cs, if (photo || ce <= 0 || ce >= dur) 0 else ce, msStart,
+            if (photo) 0 else p.optLong("textStart"), if (photo) 0 else p.optLong("textEnd"), 0)
+        val label = "Produzindo ${i + 1} de ${plans.size}"
+        tvAuto.setTextColor(a.MUTED); tvAuto.text = "$label…\nT: ${pl.text.replace('\n', ' ').take(40)}" + (m?.let { "  ★ ${it.optString("name")}" } ?: "")
+        VideoExport.export(a, job, { pr -> tvAuto.text = "$label… $pr%\nT: ${pl.text.replace('\n', ' ').take(40)}" + (m?.let { "  ★ ${it.optString("name")}" } ?: "") }) { out, _ ->
+            if (out == null) { produce(plans, i + 1, ok); return@export }
+            Thread {
+                val vid = VideoExport.addToLibrary(a, out, pl.caption)
+                VideoExport.updateLib(a, vid) { it.put("proj", pl.proj); it.put("texto", pl.text); it.put("modelo", m?.optString("name") ?: ""); it.put("auto", true) }
+                Projects.update(a, pl.proj) { it.put("versoes", it.optInt("versoes") + 1) }
+                OverlayDB.used(a, pl.text)
+                ui.post { renderLibrary(); produce(plans, i + 1, ok + 1) }
+            }.start()
+        }
+    }
+
+    /** "Manter sempre N prontos": ao abrir o app, repõe o que falta. */
+    fun maybeRefill() {
+        val keep = Store.prefs(a).getInt("auto_keep", 0)
+        if (keep <= 0 || VideoExport.busy() || !::btnAuto.isInitialized || !btnAuto.isEnabled) return
+        val last = Store.prefs(a).getLong("auto_last", 0)
+        if (System.currentTimeMillis() - last < 10 * 60 * 1000L) return
+        val waiting = VideoExport.library(a).count { it.optInt("posts") == 0 }
+        val need = keep - waiting
+        if (need <= 0 || Projects.list(a).isEmpty()) return
+        Store.prefs(a).edit().putLong("auto_last", System.currentTimeMillis()).apply()
+        a.toast("🤖 Repondo $need vídeo(s) pronto(s)…")
+        produceNow(need)
     }
 
     // ------------------------------------------------------------------ exportar vários
@@ -799,7 +987,7 @@ class InstaEditor(private val a: MainActivity) {
 
     private fun newProject() {
         saveNow()
-        projId = null; src = null; base = null; isPhoto = false; music = null; mute = false; lastExportId = null
+        projId = null; src = null; base = null; isPhoto = false; music = null; mute = false; lastExportId = null; curModel = ""
         cutStart = 0; cutEnd = 0; durMs = 0; musicStart = 0; cutRow.visibility = View.GONE
         textStart = 0; textEnd = 0; musicEnd = 0; timeline.thumbs = emptyList(); syncTimeline()
         etText.setText(""); etCap.setText(""); durRow.visibility = View.GONE
@@ -1225,6 +1413,9 @@ class InstaEditor(private val a: MainActivity) {
             tvProg.text = "Salvando…"
             Thread {
                 val id = VideoExport.addToLibrary(a, f, etCap.text.toString().trim())
+                val txt0 = etText.text.toString().trim()
+                VideoExport.updateLib(a, id) { it.put("texto", txt0); it.put("modelo", curModel) }
+                if (txt0.isNotEmpty()) { OverlayDB.add(a, txt0, "meu"); OverlayDB.used(a, txt0) }
                 val pid = projId
                 if (pid != null) {
                     VideoExport.updateLib(a, id) { it.put("proj", pid) }
@@ -1277,7 +1468,9 @@ class InstaEditor(private val a: MainActivity) {
             val side = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
             box.addView(side, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             val posts = o.optInt("posts")
-            a.text(if (posts > 0) "Postado ${posts}x" else "Ainda não postado", 12f, if (posts > 0) a.OK else a.ACCENT, parent = side, bold = true)
+            a.text((if (o.optBoolean("auto")) "🤖 " else "") + (if (posts > 0) "Postado ${posts}x" else "Ainda não postado"), 12f, if (posts > 0) a.OK else a.ACCENT, parent = side, bold = true)
+            o.optString("texto").takeIf { it.isNotBlank() }?.let { a.text("T  " + it.replace('\n', ' ').take(60), 12f, a.FG, parent = side) }
+            o.optString("modelo").takeIf { it.isNotBlank() }?.let { a.text("★ $it", 12f, a.MUTED, parent = side) }
             val et = EditText(a).apply {
                 setText(o.optString("legenda")); hint = "Legenda"; setTextColor(a.FG); setHintTextColor(a.MUTED); textSize = 13f
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
@@ -1295,8 +1488,15 @@ class InstaEditor(private val a: MainActivity) {
                 side.addView(rr, a.lpMatch())
                 listOf("good" to "🔥", "meh" to "😐", "bad" to "👎").forEach { (k, e) ->
                     a.button(e, rr, primary = nota == k, weight = true) {
-                        CaptionDB.rate(a, o.optString("legenda"), k); VideoExport.updateLib(a, id) { it.put("nota", k) }; renderLibrary()
-                        a.toast("Anotado: o app vai ${if (k == "good") "usar mais" else if (k == "bad") "evitar" else "manter"} legendas assim")
+                        val prev = o.optString("nota")
+                        if (prev != k) {
+                            CaptionDB.rate(a, o.optString("legenda"), k)
+                            OverlayDB.rate(a, o.optString("texto"), k)
+                            ModelScore.rate(a, o.optString("modelo"), k)
+                            VideoExport.updateLib(a, id) { it.put("nota", k) }
+                        }
+                        renderLibrary(); renderOverlays()
+                        a.toast("Anotado: o app vai ${if (k == "good") "usar mais" else if (k == "bad") "evitar" else "manter"} texto, modelo e legenda assim")
                     }
                 }
             }
