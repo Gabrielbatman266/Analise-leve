@@ -1193,6 +1193,7 @@ class InstaEditor(private val a: MainActivity) {
         if (n.isEmpty()) return "Textos gerais servem pra qualquer vídeo"
         val parts = ArrayList<String>()
         parts += if (Contexts.noText(a, n)) "🎬 sem texto" else "T ${OverlayDB.count(a, n)} textos"
+        Contexts.seconds(a, n).takeIf { it > 0 }?.let { parts += "⏱ $it s" }
         parts += "♪ " + MusicPick.label(MusicPick.mode(a, n)).substringAfter(' ').lowercase()
         if (Contexts.noCaption(a, n)) parts += "sem legenda"
         return parts.joinToString("  ·  ")
@@ -1396,9 +1397,26 @@ class InstaEditor(private val a: MainActivity) {
             }
 
             // ④ postagem
-            val cp = stepCard("④", "Postagem", if (Contexts.noCaption(a, n)) "sem legenda" else "legenda sorteada", true)
+            val secN = Contexts.seconds(a, n)
+            val cp = stepCard("④", "Tempo e postagem", (if (secN > 0) "$secN s · " else "") + if (Contexts.noCaption(a, n)) "sem legenda" else "legenda sorteada", true)
+            a.text("⏱ Tempo de cada vídeo", 12f, a.MUTED, parent = cp)
+            val opts = listOf("Original", "5 s", "7 s", "10 s", "15 s", "Outro…")
+            a.chips(cp, opts, { val v = Contexts.seconds(a, n); when { v == 0 -> "Original"; "$v s" in opts -> "$v s"; else -> "Outro…" } }) { o ->
+                when (o) {
+                    "Original" -> { Contexts.update(a, n) { it.put("duracao", 0) }; renderProjects() }
+                    "Outro…" -> {
+                        val et = EditText(a).apply { inputType = InputType.TYPE_CLASS_NUMBER; hint = "segundos (ex.: 6)"; Contexts.seconds(a, n).takeIf { it > 0 }?.let { setText(it.toString()) } }
+                        AlertDialog.Builder(a).setTitle("Quantos segundos?").setView(et)
+                            .setPositiveButton("OK") { _, _ -> et.text.toString().toIntOrNull()?.let { v -> Contexts.update(a, n) { it.put("duracao", v.coerceIn(1, 90)) } }; renderProjects() }
+                            .setNegativeButton("Cancelar") { _, _ -> renderProjects() }.show()
+                    }
+                    else -> { Contexts.update(a, n) { it.put("duracao", o.substringBefore(' ').toInt()) }; renderProjects() }
+                }
+            }
+            if (secN > 0) a.text("Vídeos maiores são cortados em $secN s (a 1ª versão pega o começo, as outras outro trecho). Vídeos menores ficam como estão.", 11f, a.MUTED, parent = cp)
             if (noTxt) {
                 a.text("Versões de cada vídeo cru (cada uma com um trecho diferente)", 12f, a.MUTED, parent = cp)
+                if (secN == 0 && Contexts.versions(a, n) > 1) a.text("Dica: com um tempo curto (ex.: 5 s) as versões ficam bem diferentes uma da outra.", 11f, a.MUTED, parent = cp)
                 a.chips(cp, listOf("1", "2", "3", "5"), { Contexts.versions(a, n).toString() }) { v -> Contexts.update(a, n) { it.put("versoes", v.toInt()) }; renderProjects() }
             }
             a.text("Legenda do post", 12f, a.MUTED, parent = cp)

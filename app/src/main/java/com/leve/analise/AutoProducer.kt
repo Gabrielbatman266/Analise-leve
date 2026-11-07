@@ -149,23 +149,31 @@ object AutoProducer {
             pl.music.isEmpty() -> { mus = null; mt = false; msStart = 0 }               // som original
             else -> { mus = File(pl.music).takeIf { it.exists() } ?: mus; mt = false; msStart = 0 } // música da categoria
         }
-        val secs = if (m != null) m.optInt("secs", 8) else p.optInt("secs", 8)
+        val secs0 = if (m != null) m.optInt("secs", 8) else p.optInt("secs", 8)
         val q = m?.optString("quality")?.ifEmpty { null } ?: quality(c)
         var cs = p.optLong("cutStart"); var ce = p.optLong("cutEnd")
         val dur = if (photo) 0L else VideoExport.durationMs(f)
-        if (!photo && pl.text.isEmpty() && pl.version > 0 && dur > 6000) {
-            // versões sem texto: um trecho diferente do vídeo (70–95% do tamanho), pra não sair igual
+        val target = Contexts.seconds(c, pl.ctx) * 1000L
+        if (!photo && dur > 0) {
             val base0 = cs.coerceIn(0, dur); val base1 = if (ce <= 0 || ce > dur) dur else ce
             val len = base1 - base0
-            val seg = (len * (0.70 + Math.random() * 0.25)).toLong().coerceAtLeast(minOf(len, 4000))
-            val st0 = base0 + ((len - seg) * Math.random()).toLong()
-            cs = st0; ce = st0 + seg
+            val seg = when {
+                target in 1 until len -> target                                                     // tempo da categoria (ex.: 5 s)
+                pl.text.isEmpty() && pl.version > 0 && len > 6000 -> (len * (0.70 + Math.random() * 0.25)).toLong().coerceAtLeast(4000)
+                else -> len
+            }
+            if (seg < len) {
+                // 1ª versão começa do começo do vídeo; as outras pegam outro trecho, pra não sair igual
+                val st0 = if (pl.version == 0) base0 else base0 + ((len - seg) * Math.random()).toLong()
+                cs = st0; ce = st0 + seg
+            }
         }
+        val secs = if (photo && target > 0) (target / 1000).toInt() else secs0
         val job = VideoExport.Job(Uri.fromFile(f), photo, secs, pl.text, st, mus, mt, q,
             if (photo) 0 else cs, if (photo || ce <= 0 || ce >= dur) 0 else ce, msStart,
             if (photo) 0 else p.optLong("textStart"), if (photo) 0 else p.optLong("textEnd"), 0)
         val label = "Produzindo ${i + 1} de ${plans.size}"
-        val info = (if (pl.text.isEmpty()) "\n🎬 sem texto" + (if (pl.version > 0) " · corte ${pl.version + 1}" else "") else "\nT: ${pl.text.replace('\n', ' ').take(40)}") + (m?.let { "  ★ ${it.optString("name")}" } ?: "") + (mus?.let { "\n♪ " + VideoExport.nice(it) } ?: "")
+        val info = (if (pl.text.isEmpty()) "\n🎬 sem texto" + (if (pl.version > 0) " · trecho ${pl.version + 1}" else "") else "\nT: ${pl.text.replace('\n', ' ').take(40)}") + (m?.let { "  ★ ${it.optString("name")}" } ?: "") + (mus?.let { "\n♪ " + VideoExport.nice(it) } ?: "")
         progress("$label…$info")
         VideoExport.export(c, job, { pr -> progress("$label… $pr%$info") }) { out, _ ->
             if (out == null) { step(c, plans, i + 1, ok, progress, done); return@export }
