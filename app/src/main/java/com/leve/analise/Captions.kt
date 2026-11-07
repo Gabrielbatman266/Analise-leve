@@ -54,7 +54,7 @@ object Captions {
 Vibe: ${vibe(c)}. Tamanho: ${size(c)}. Contexto: ${ctx(c).ifEmpty { "nenhum" }}.
 ${learnedText(c)}
 ${if (wins.isNotEmpty()) "🔥 LEGENDAS QUE BOMBARAM NO MEU PERFIL (prioridade máxima): metade das suas legendas deve ser VARIAÇÃO delas — mesmo tema, mesma estrutura e o mesmo tipo de gancho, com outras palavras:\n" + wins.joinToString("\n") { "- ${it.optString("t").replace('\n', ' ')}  (🔥${it.optInt("good")})" } else ""}
-${if (flops.isNotEmpty()) "👎 FLOPARAM (evite esse tom e esse assunto):\n" + flops.joinToString("\n") { "- ${it.optString("t").replace('\n', ' ')}" } else ""}
+${if (flops.isNotEmpty()) "👎 FLOPARAM (evite esse tom e esse assunto):\n" + flops.joinToString("\n") { "- ${it.replace('\n', ' ')}" } else ""}
 ${if (words.isNotEmpty()) "Palavras que aparecem nas que bombam: " + words.joinToString(", ") else ""}
 ${if (mine(c).isNotEmpty()) "LEGENDAS QUE EU ESCREVI — escreva no mesmo estilo (tamanho, jeito de falar, gírias), sem copiar:\n" + mine(c).take(12).joinToString("\n") { "- $it" } else ""}
 ${if (ex.isNotEmpty()) "Outras legendas de referência que viralizaram (copie o ritmo e o tom, nunca o texto):\n" + ex.joinToString("\n") { "- $it" } else ""}
