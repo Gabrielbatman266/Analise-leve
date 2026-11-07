@@ -123,7 +123,7 @@ Reply only with JSON: {"prompt":"..."}"""
     }
 
     /** Textos curtos pra aparecer DENTRO do vídeo (Reels), aprendendo com os que bombaram e os que floparam. */
-    fun overlayTexts(c: Context, n: Int, good: List<String>, bad: List<String>, mine: List<String>, ctxName: String = "", ctxDesc: String = ""): List<String> {
+    fun overlayTexts(c: Context, n: Int, good: List<String>, bad: List<String>, mine: List<String>, ctxName: String = "", ctxDesc: String = "", frame: File? = null): List<String> {
         val ctxLine = if (ctxName.isEmpty()) "Os textos devem servir pra qualquer vídeo (genéricos)."
             else "TODOS os textos são pra vídeos do contexto \"$ctxName\"" + (if (ctxDesc.isNotBlank()) ": $ctxDesc" else "") + ". O texto tem que combinar com esse tipo de cena."
         val prompt = """Crie $n textos curtos pra aparecer ESCRITOS DENTRO de vídeos curtos (Reels/Threads) de uma criadora de conteúdo, em português do Brasil.
@@ -134,7 +134,9 @@ ${if (good.isNotEmpty()) "Textos que BOMBARAM (siga o ritmo e o tipo de gancho, 
 ${if (bad.isNotEmpty()) "Textos que FLOPARAM (evite esse estilo):\n" + bad.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
 ${if (mine.isNotEmpty()) "Outros já usados (não repita):\n" + mine.take(20).joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
 Responda só com JSON: {"textos":["...","..."]}"""
-        val arr = parseObj(ask(c, prompt, emptyList())).optJSONArray("textos") ?: throw AiException(-2, "A IA não mandou os textos")
+        val imgs = if (frame != null && frame.exists()) listOf(Base64.encodeToString(shrink(frame), Base64.NO_WRAP)) else emptyList()
+        val full = if (imgs.isEmpty()) prompt else prompt + "\nA imagem anexada é um quadro do vídeo: os textos têm que combinar com o que acontece nele (não descreva a pessoa)."
+        val arr = parseObj(ask(c, full, imgs)).optJSONArray("textos") ?: throw AiException(-2, "A IA não mandou os textos")
         return (0 until arr.length()).map { arr.optString(it).replace("\\n", "\n").trim() }.filter { it.isNotEmpty() }
     }
 

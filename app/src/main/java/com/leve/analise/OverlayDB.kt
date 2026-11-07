@@ -99,6 +99,21 @@ object OverlayDB {
             }?.optString("t")
     }
 
+    /**
+     * Texto pra um vídeo cru: primeiro os escritos SÓ pra ele ("v:id"), depois os do contexto dele, depois o Geral.
+     * Devolve o texto e a chave onde ele mora (pra nota cair no lugar certo).
+     */
+    fun pickFor(c: Context, avoid: Collection<String>, vidKey: String, ctx: String): Pair<String, String>? {
+        val av = avoid.map { norm(it) }.toSet()
+        val keys = setOf(vidKey, ctx, "")
+        return load(c).filter { it.optString("ctx") in keys && norm(it.optString("t")) !in av && it.optInt("bad") < 3 + it.optInt("good") * 2 }
+            .maxByOrNull {
+                val k = it.optString("ctx")
+                mean(it) + (Math.random() - 0.5) * 0.9 / sqrt(rated(it) + 1.0) - 0.05 * ln(1.0 + it.optInt("uses")) +
+                    (if (k == vidKey) 0.3 else if (ctx.isNotEmpty() && k == ctx) 0.12 else 0.0)
+            }?.let { it.optString("t") to it.optString("ctx") }
+    }
+
     fun top(c: Context, n: Int, ctx: String? = null) = all(c, ctx).filter { rated(it) > 0 }.sortedByDescending { mean(it) }.take(n)
     fun worst(c: Context, n: Int, ctx: String? = null) = all(c, ctx).filter { rated(it) > 0 }.sortedBy { mean(it) }.take(n)
 }

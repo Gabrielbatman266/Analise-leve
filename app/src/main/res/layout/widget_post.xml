@@ -23,16 +23,36 @@
         android:textColor="#9A9EAB"
         android:textSize="12sp" />
 
-    <TextView
-        android:id="@+id/w_post"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
         android:layout_marginTop="8dp"
-        android:gravity="center"
-        android:text="Postar próximo ↗"
-        android:textColor="#1A0A10"
-        android:textStyle="bold"
-        android:textSize="16sp"
-        android:background="@drawable/widget_btn" />
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/w_post"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginEnd="6dp"
+            android:gravity="center"
+            android:text="📸 Foto ↗"
+            android:textColor="#ECEEF3"
+            android:textStyle="bold"
+            android:textSize="15sp"
+            android:background="@drawable/widget_btn2" />
+
+        <TextView
+            android:id="@+id/w_video"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="🎬 Vídeo ↗"
+            android:textColor="#1A0A10"
+            android:textStyle="bold"
+            android:textSize="15sp"
+            android:background="@drawable/widget_btn" />
+    </LinearLayout>
 </LinearLayout>

@@ -69,6 +69,7 @@
             android:theme="@android:style/Theme.Translucent.NoTitleBar">
             <intent-filter>
                 <action android:name="com.leve.analise.POSTAR_PROXIMO" />
+                <action android:name="com.leve.analise.POSTAR_VIDEO" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
@@ -97,6 +98,20 @@
         </service>
 
         <receiver android:name=".PostConfirmReceiver" android:exported="false" />
+        <receiver android:name=".RateReceiver" android:exported="false" />
+
+        <activity
+            android:name=".PostVideoActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <service
+            android:name=".ProduceService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <receiver android:name=".ReminderReceiver" android:exported="true">
             <intent-filter>
