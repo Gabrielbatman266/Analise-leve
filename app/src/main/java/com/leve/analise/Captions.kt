@@ -49,6 +49,7 @@ object Captions {
         val ex = (best + refs + top).distinct().take(20)
         return """Você escreve legendas para posts de foto no Threads, em português do Brasil, no estilo de perfis que viralizam.
 Vibe: ${vibe(c)}. Tamanho: ${size(c)}. Contexto: ${ctx(c).ifEmpty { "nenhum" }}.
+${if (mine(c).isNotEmpty()) "LEGENDAS QUE EU ESCREVI — escreva no mesmo estilo (tamanho, jeito de falar, gírias), sem copiar:\n" + mine(c).take(12).joinToString("\n") { "- $it" } else ""}
 ${if (ex.isNotEmpty()) "Legendas de referência que viralizaram (copie o ritmo e o tom, nunca o texto):\n" + ex.joinToString("\n") { "- $it" } else ""}
 ${if (pats.isNotEmpty()) "Padrões que mais funcionaram (siga):\n" + pats.joinToString("\n") { "- $it" } else ""}
 Use a foto anexada para deixar as legendas específicas.

@@ -61,7 +61,10 @@ object AutoProducer {
         val bad = (OverlayDB.worst(c, 5, key) + OverlayDB.worst(c, 3, cx)).filter { OverlayDB.mean(it) < 0.45 }.map { it.optString("t") }.distinct().take(8)
         val name = if (isVid) "um vídeo específico" else cx
         val desc = if (isVid) listOf(p?.optString("desc").orEmpty(), Contexts.desc(c, cx)).filter { it.isNotBlank() }.joinToString(". ") else Contexts.desc(c, cx)
-        val l = Ai.overlayTexts(c, n, good, bad, OverlayDB.all(c, key).map { it.optString("t") }, name, desc, if (isVid && p != null) frameOf(c, p) else null)
+        // estilo: os textos que VOCÊ escreveu (do vídeo, da categoria e gerais), os que bombaram primeiro
+        val style = (OverlayDB.all(c, key) + OverlayDB.all(c, cx) + OverlayDB.all(c, "")).filter { it.optString("src") == "meu" }
+            .sortedByDescending { OverlayDB.mean(it) }.map { it.optString("t") }.distinct().take(15)
+        val l = Ai.overlayTexts(c, n, good, bad, OverlayDB.all(c, key).map { it.optString("t") }, name, desc, if (isVid && p != null) frameOf(c, p) else null, style)
         l.forEach { OverlayDB.add(c, it, "ia", key) }
         "${l.size} textos novos"
     } catch (e: Exception) { "A IA não respondeu (${e.message?.take(60)})" }

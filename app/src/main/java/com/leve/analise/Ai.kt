@@ -123,13 +123,14 @@ Reply only with JSON: {"prompt":"..."}"""
     }
 
     /** Textos curtos pra aparecer DENTRO do vídeo (Reels), aprendendo com os que bombaram e os que floparam. */
-    fun overlayTexts(c: Context, n: Int, good: List<String>, bad: List<String>, mine: List<String>, ctxName: String = "", ctxDesc: String = "", frame: File? = null): List<String> {
+    fun overlayTexts(c: Context, n: Int, good: List<String>, bad: List<String>, mine: List<String>, ctxName: String = "", ctxDesc: String = "", frame: File? = null, style: List<String> = emptyList()): List<String> {
         val ctxLine = if (ctxName.isEmpty()) "Os textos devem servir pra qualquer vídeo (genéricos)."
             else "TODOS os textos são pra vídeos do contexto \"$ctxName\"" + (if (ctxDesc.isNotBlank()) ": $ctxDesc" else "") + ". O texto tem que combinar com esse tipo de cena."
         val prompt = """Crie $n textos curtos pra aparecer ESCRITOS DENTRO de vídeos curtos (Reels/Threads) de uma criadora de conteúdo, em português do Brasil.
 $ctxLine
 Estilo viral: gancho, "pov:", frase de efeito, curiosidade, pergunta que faz comentar. De 3 a 12 palavras. Pode quebrar em 2 linhas com \n. No máximo 1 emoji. Sem hashtags.
 Nada explícito, nada que finja ser outra pessoa real, nada enganoso.
+${if (style.isNotEmpty()) "TEXTOS QUE EU ESCREVI — gere no MESMO estilo deles (mesmo tamanho, jeito de falar, gírias, emojis e quebras de linha), como se fosse eu escrevendo, sem copiar:\n" + style.joinToString("\n") { "- " + it.replace('\n', '/') } else ""}
 ${if (good.isNotEmpty()) "Textos que BOMBARAM (siga o ritmo e o tipo de gancho, sem copiar):\n" + good.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
 ${if (bad.isNotEmpty()) "Textos que FLOPARAM (evite esse estilo):\n" + bad.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
 ${if (mine.isNotEmpty()) "Outros já usados (não repita):\n" + mine.take(20).joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}

@@ -103,7 +103,8 @@ class InstaEditor(private val a: MainActivity) {
         if (i == 1 && music == null && ::timeline.isInitialized && timeline.visibility == View.VISIBLE && pendingMusicAsk) { pendingMusicAsk = false; chooseMusic() }
         if (i == 2 && etText.text.isBlank() && pendingTextFocus) { pendingTextFocus = false; etText.requestFocus() }
     }
-    private val SEC_NAMES = listOf("✏ Editar", "📁 Crus", "✅ Prontos", "🎵 Músicas", "🤖 Auto")
+    private val SEC_NAMES = listOf("✏ Editar", "🗂 Categorias", "🎬 Fila", "🎵 Músicas", "⚙ Auto")
+    private val NAV_ORDER = listOf(2, 1, 0, 3, 4) // ordem dos botões no topo
     private lateinit var navRow: LinearLayout
     private val navBtns = ArrayList<Button>()
     private var secs: List<LinearLayout> = emptyList()
@@ -123,11 +124,12 @@ class InstaEditor(private val a: MainActivity) {
 
     private fun updateNav() {
         if (navBtns.isEmpty()) return
-        val counts = listOf(-1, Projects.list(a).size, VideoExport.library(a).count { it.optInt("posts") == 0 }, VideoExport.musics(a).size, -1)
-        navBtns.forEachIndexed { k, b ->
+        val counts = listOf(-1, -1, VideoExport.library(a).count { it.optInt("posts") == 0 }, -1, -1)
+        navBtns.forEachIndexed { pos, b ->
+            val k = NAV_ORDER[pos]
             val on = k == curSec
             b.text = SEC_NAMES[k] + if (counts[k] > 0) " ${counts[k]}" else ""
-            b.textSize = 11.5f; b.setTextColor(if (on) 0xFF1A0A10.toInt() else a.FG)
+            b.textSize = 11f; b.setTextColor(if (on) 0xFF1A0A10.toInt() else a.FG)
             b.background = GradientDrawable().apply { setColor(if (on) a.ACCENT else 0xFF1C1C24.toInt()); cornerRadius = a.dp(10).toFloat() }
         }
     }
@@ -387,7 +389,7 @@ class InstaEditor(private val a: MainActivity) {
         }
     }
 
-    fun refreshLists() { if (::projBox.isInitialized) { renderProjects(); renderLibrary() } }
+    fun refreshLists() { if (::catBox.isInitialized) { renderProjects(); renderLibrary() } }
 
     private val ui get() = a.ui
 
@@ -396,25 +398,20 @@ class InstaEditor(private val a: MainActivity) {
         val host = a.page
         navRow = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
         host.addView(navRow, a.lpMatch().apply { topMargin = a.dp(12) })
-        SEC_NAMES.forEachIndexed { i, n -> navBtns += a.button(n, navRow, weight = true) { showSection(i) } }
+        NAV_ORDER.forEach { i -> navBtns += a.button(SEC_NAMES[i], navRow, weight = true) { showSection(i) } }
         secs = List(5) { LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }.also { v -> host.addView(v, a.lpMatch()) } }
 
-        // ---------- projetos
+        // ---------- 🗂 categorias: cada categoria = seus vídeos crus + seus textos
         a.page = secs[1]
-        val cp = a.card("Vídeos crus")
-        a.text("Seus vídeos originais, guardados. Os novos do Flow entram sozinhos. Toque em ✏ Editar pra mudar texto e música e exportar quantas versões quiser.", 13f, a.MUTED, parent = cp)
-        a.button("⚡ Exportar vários de uma vez", cp, primary = true) { exportManyDialog() }
-        tvMany = a.text("", 13f, a.OK, parent = cp)
-        a.button("＋ Começar um novo", cp) { newProject(); showSection(0) }
+        catHead = a.card("🗂 Categorias")
+        a.text("Separe os vídeos crus por tipo (ex.: Falando, Academia, Olhar). Cada categoria tem os textos dela; a produção só põe num vídeo textos da categoria dele (ou os gerais).", 13f, a.MUTED, parent = catHead)
         val rr0 = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
-        cp.addView(rr0, a.lpMatch())
-        a.button("✨ Separar com IA", rr0, weight = true) { classifyRaw() }
-        a.button("🏷 Contextos", rr0, weight = true) { showSection(4); ui.postDelayed({ if (::ctxCard.isInitialized) a.scrollTo(ctxCard) }, 150) }
-        tvRaw = a.text("Vídeo específico (ela falando, fazendo algo)? Toque em T Textos e diga o que acontece: ele ganha textos só dele. Vídeos genéricos (olhando, flertando): ponha num contexto, ex. \"Olhar\", e eles dividem os textos desse contexto.", 12f, a.MUTED, parent = cp)
-        rawFilter = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
-        cp.addView(rawFilter, a.lpMatch())
-        projBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
-        cp.addView(projBox, a.lpMatch())
+        catHead.addView(rr0, a.lpMatch())
+        a.button("＋ Nova categoria", rr0, primary = true, weight = true) { newCtxDialog { openCat = it; renderProjects() } }
+        a.button("✨ Separar vídeos com IA", rr0, weight = true) { classifyRaw() }
+        tvRaw = a.text("", 12f, a.OK, parent = catHead)
+        catBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        a.page.addView(catBox, a.lpMatch())
         renderProjects()
 
         // ---------- editor
@@ -649,15 +646,15 @@ class InstaEditor(private val a: MainActivity) {
 
         // ---------- 🤖 produção automática
         a.page = secs[4]
-        val ca = a.card("🤖 Produção automática")
-        a.text("Pega seus vídeos crus (aba Crus), coloca um TEXTO NO VÍDEO e um modelo de edição, e exporta vários de uma vez, cada um com legenda sorteada. Depois de postar, marque 🔥/😐/👎 em Prontos: o app passa a usar mais os textos e modelos que bombam.", 13f, a.MUTED, parent = ca)
+        val ca = a.card("⚙ Produção automática")
+        a.text("Junta um vídeo cru + um texto da categoria dele + um modelo de edição e exporta pra 🎬 Fila. Marque 🔥/😐/👎 depois de postar: o app usa mais o que bomba.", 13f, a.MUTED, parent = ca)
         a.text("Quantos vídeos", 12f, a.MUTED, parent = ca)
         a.chips(ca, listOf("3", "5", "10", "20"), { Store.prefs(a).getInt("auto_n", 5).toString() }) { Store.prefs(a).edit().putInt("auto_n", it.toInt()).apply() }
         a.text("Edição", 12f, a.MUTED, parent = ca)
         a.chips(ca, listOf("Modelo sorteado (aprende)", "Do jeito de cada cru"), { if (Store.prefs(a).getBoolean("auto_model", true)) "Modelo sorteado (aprende)" else "Do jeito de cada cru" }) {
             Store.prefs(a).edit().putBoolean("auto_model", it.startsWith("Modelo")).apply()
         }
-        a.text("Produzir de qual contexto", 12f, a.MUTED, parent = ca)
+        a.text("Produzir de qual categoria", 12f, a.MUTED, parent = ca)
         autoCtxBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         ca.addView(autoCtxBox, a.lpMatch())
         btnAuto = a.button("🤖 Produzir agora", ca, primary = true) { produceNow(Store.prefs(a).getInt("auto_n", 5)) }
@@ -673,58 +670,39 @@ class InstaEditor(private val a: MainActivity) {
         a.chips(ca, listOf("Só quando eu pedir", "Automático"), { if (AutoProducer.textAiAuto(a)) "Automático" else "Só quando eu pedir" }) {
             Store.prefs(a).edit().putBoolean("ov_ai_auto", it == "Automático").apply()
         }
-        a.text("Só quando eu pedir: a produção usa os textos que já estão no banco e não gasta crédito. Pra criar mais, toque em ✨ (no banco, no contexto ou no T Textos do vídeo).", 11f, a.MUTED, parent = ca)
+        a.text("Só quando eu pedir: a produção usa os textos que já existem e não gasta crédito. Pra criar mais, abra a categoria em 🗂 e toque em ✨.", 11f, a.MUTED, parent = ca)
         a.text("Manter sempre vídeos prontos: quando faltar, o app produz sozinho em segundo plano (depois de cada post e ao abrir)", 12f, a.MUTED, parent = ca)
         a.chips(ca, listOf("Desligado", "3", "5", "10"), { Store.prefs(a).getInt("auto_keep", 0).let { if (it == 0) "Desligado" else it.toString() } }) {
             Store.prefs(a).edit().putInt("auto_keep", if (it == "Desligado") 0 else it.toInt()).apply()
         }
 
-        val ct = a.card("Textos no vídeo")
-        a.text("O banco das frases que aparecem escritas no vídeo (não é a legenda do post). Escolha o contexto: os textos novos entram nele, e a IA cria pensando nele. Enter = nova linha.", 13f, a.MUTED, parent = ct)
-        txtCtxBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
-        ct.addView(txtCtxBox, a.lpMatch())
-        val etO = EditText(a).apply {
-            hint = "Ex.: pov: você parou de rolar\nsó pra me ver"; setTextColor(a.FG); setHintTextColor(a.MUTED); textSize = 15f
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-            minLines = 2; gravity = Gravity.TOP or Gravity.START
-            background = GradientDrawable().apply { setColor(a.BG); cornerRadius = a.dp(10).toFloat(); setStroke(a.dp(1), a.LINE) }
-            setPadding(a.dp(12), a.dp(10), a.dp(12), a.dp(10))
-        }
-        ct.addView(etO, a.lpMatch())
-        val tr2 = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
-        ct.addView(tr2, a.lpMatch())
-        a.button("Salvar texto", tr2, primary = true, weight = true) {
-            val t = etO.text.toString().trim()
-            if (t.isEmpty()) a.toast("Escreva o texto primeiro") else { OverlayDB.add(a, t, "meu", txtCtx ?: ""); etO.setText(""); renderOverlays() }
-        }
-        a.button("✨ Gerar 10 com IA", tr2, weight = true) { genOverlays(10, txtCtx ?: "") }
-        ovBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
-        ct.addView(ovBox, a.lpMatch())
-
-        ctxCard = a.card("Contextos")
-        a.text("Cada contexto junta crus parecidos. A descrição ajuda a IA a criar textos que combinam (ex.: \"treino na academia, roupa de academia, espelho da academia\").", 13f, a.MUTED, parent = ctxCard)
-        a.button("＋ Novo contexto", ctxCard, primary = true) { newCtxDialog { renderCtx(); renderProjects() } }
-        ctxBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
-        ctxCard.addView(ctxBox, a.lpMatch())
+        val cx2 = a.card("Exportar esboços com um modelo")
+        a.text("Sem IA e sem texto novo: aplica um modelo nos vídeos crus e exporta todos.", 12f, a.MUTED, parent = cx2)
+        a.button("⚡ Exportar vários de uma vez", cx2) { exportManyDialog() }
+        tvMany = a.text("", 13f, a.OK, parent = cx2)
 
         val cs2 = a.card("O que está bombando")
         tvStats = a.text("", 13f, a.FG, parent = cs2)
-        renderCtx(); renderOverlays()
+        renderCtx(); renderStats()
 
         // ---------- biblioteca
         a.page = secs[2]
-        val cl = a.card("Vídeos prontos")
-        a.text("Todo vídeo exportado fica guardado aqui no app. Postar ↗ manda direto pro Instagram, sem baixar nada e sem encher a galeria.", 13f, a.MUTED, parent = cl)
-        a.button("🎲 Postar vídeo aleatório", cl, primary = true) { postRandomVideo() }
+        val cf0 = a.card("🎬 Hoje")
+        tvFila = a.text("", 15f, a.FG, parent = cf0, bold = true)
+        a.button("🎬 Postar um vídeo agora", cf0, primary = true) { postRandomVideo() }
+        a.button("🤖 Produzir mais ${Store.prefs(a).getInt("auto_n", 5)}", cf0) { produceNow(Store.prefs(a).getInt("auto_n", 5)) }
+        a.text("Meta diária, quantos produzir e IA: em ⚙ Auto.", 11f, a.MUTED, parent = cf0)
+        val cl = a.card("Fila de vídeos prontos")
+        a.text("Saem um de cada vez em ordem aleatória; quando todos saem, a rodada recomeça. Depois de postar, marque 🔥/😐/👎.", 12f, a.MUTED, parent = cl)
         tvCycle = a.text("", 13f, a.OK, parent = cl)
-        a.button("＋ Importar vídeos que já tenho (sem metadados)", cl) {
+        a.button("＋ Pôr na fila vídeos que já tenho prontos", cl) {
             open("video/*", REQ_IMPORT, true)
         }
         tvImport = a.text("", 13f, a.OK, parent = cl)
         libBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         cl.addView(libBox, a.lpMatch())
         renderLibrary()
-        showSection(Store.prefs(a).getInt("ig_sec", 0), false)
+        showSection(Store.prefs(a).getInt("ig_sec", 2), false)
         // (a aba continua com a.page = Prontos: o cartão "Foto pro Instagram" entra ali)
     }
 
@@ -794,7 +772,12 @@ class InstaEditor(private val a: MainActivity) {
     // ------------------------------------------------------------------ 🤖 produção automática
 
     private lateinit var tvDaily: TextView
+    private lateinit var tvFila: TextView
     fun updateDaily() {
+        if (::tvFila.isInitialized) {
+            val g = Daily.goal(a); val w = AutoProducer.waiting(a)
+            tvFila.text = (if (g > 0) Daily.status(a) + "\n" else "") + "$w vídeo(s) pronto(s) na fila" + if (AutoProducer.running) " · 🤖 produzindo…" else ""
+        }
         if (!::tvDaily.isInitialized) return
         val g = Daily.goal(a)
         val next = Daily.nextAt(a)
@@ -846,57 +829,29 @@ class InstaEditor(private val a: MainActivity) {
 
     private fun newCtxDialog(done: (String) -> Unit) {
         val box = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(a.dp(20), a.dp(8), a.dp(20), 0) }
-        val en = EditText(a).apply { hint = "Nome (ex.: Academia)"; setSingleLine(true) }
-        val ed = EditText(a).apply { hint = "Descrição pra IA (opcional): como são esses vídeos" }
+        val en = EditText(a).apply { hint = "Nome (ex.: Falando, Olhar, Academia)"; setSingleLine(true) }
+        val ed = EditText(a).apply { hint = "Como são esses vídeos (ajuda a IA)" }
         box.addView(en); box.addView(ed)
-        AlertDialog.Builder(a).setTitle("Novo contexto").setView(box)
+        AlertDialog.Builder(a).setTitle("Nova categoria").setView(box)
             .setPositiveButton("Criar") { _, _ -> val n = Contexts.add(a, en.text.toString(), ed.text.toString().trim()); if (n.isNotEmpty()) done(n) }
             .setNegativeButton("Cancelar", null).show()
     }
 
     private fun chooseCtx(cur: String, done: (String) -> Unit) {
         val names = listOf(Contexts.GERAL) + Contexts.names(a)
-        val labels = names.map { (if (it == cur) "✓ " else "") + Contexts.label(a, it) } + "＋ Novo contexto…"
-        AlertDialog.Builder(a).setTitle("Contexto deste vídeo").setItems(labels.toTypedArray()) { _, i ->
+        val labels = names.map { (if (it == cur) "✓ " else "") + if (it.isEmpty()) "📥 Sem categoria (geral)" else Contexts.label(a, it) } + "＋ Nova categoria…"
+        AlertDialog.Builder(a).setTitle("Mover pra qual categoria?").setItems(labels.toTypedArray()) { _, i ->
             if (i < names.size) done(names[i]) else newCtxDialog { done(it) }
         }.show()
     }
 
     /** Atualiza todas as linhas de contexto (Auto, textos, cartão de contextos). */
     private fun renderCtx() {
-        if (!::ctxBox.isInitialized) return
+        if (!::autoCtxBox.isInitialized) return
         val ac = Store.prefs(a).getString("auto_ctx", null)
         ctxChips(autoCtxBox, true, ac, counts = { n -> Projects.list(a).count { it.optString("ctx") == n } }) { n ->
             Store.prefs(a).edit().apply { if (n == null) remove("auto_ctx") else putString("auto_ctx", n) }.apply(); renderCtx()
         }
-        ctxChips(txtCtxBox, true, txtCtx, counts = { n -> OverlayDB.count(a, n) }) { txtCtx = it; renderOverlays() }
-        ctxBox.removeAllViews()
-        val projs = Projects.list(a)
-        Contexts.list(a).forEach { cx ->
-            val n = cx.optString("name")
-            val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-            ctxBox.addView(row, a.lpMatch().apply { topMargin = a.dp(8) })
-            val rated = OverlayDB.all(a, n).filter { OverlayDB.rated(it) > 0 }
-            val nota = if (rated.isEmpty()) "" else " · nota ${(rated.map { OverlayDB.mean(it) }.average() * 100).toInt()}%"
-            row.addView(TextView(a).apply {
-                text = Contexts.label(a, n) + "\n" + "${projs.count { it.optString("ctx") == n }} crus · ${OverlayDB.count(a, n)} textos$nota" +
-                    (cx.optString("desc").takeIf { it.isNotBlank() }?.let { "\n" + it.take(80) } ?: "")
-                textSize = 13f; setTextColor(a.FG)
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            small(row, "✨") { genOverlays(10, n) }
-            small(row, "✏") {
-                val ed = EditText(a).apply { setText(cx.optString("desc")); hint = "Como são esses vídeos" }
-                AlertDialog.Builder(a).setTitle("Descrição de $n").setView(ed)
-                    .setPositiveButton("Salvar") { _, _ -> Contexts.update(a, n) { it.put("desc", ed.text.toString().trim()) }; renderCtx() }
-                    .setNegativeButton("Cancelar", null).show()
-            }
-            small(row, "✕") {
-                AlertDialog.Builder(a).setTitle("Apagar o contexto $n?").setMessage("Os crus e os textos dele voltam pro Geral. Nada é apagado.")
-                    .setPositiveButton("Apagar") { _, _ -> Contexts.remove(a, n); if (rawCtx == n) rawCtx = null; if (txtCtx == n) txtCtx = ""; renderCtx(); renderProjects(); renderOverlays() }
-                    .setNegativeButton("Cancelar", null).show()
-            }
-        }
-        if (Contexts.list(a).isEmpty()) a.text("Nenhum contexto ainda. Crie um, ou use ✨ Separar com IA na aba Crus.", 12f, a.MUTED, parent = ctxBox)
     }
 
     /** Textos só deste vídeo: descrição do que acontece + lista + gerar com IA olhando o vídeo. */
@@ -1040,11 +995,11 @@ class InstaEditor(private val a: MainActivity) {
 
     /** Monta o plano: cada vídeo cru recebe textos diferentes; modelo e legenda sorteados pelo que bomba. */
 
-    private fun produceNow(n: Int) {
+    private fun produceNow(n: Int, only0: String? = Store.prefs(a).getString("auto_ctx", null)) {
         if (VideoExport.busy() || AutoProducer.running) { a.toast("Já tem uma produção ou exportação rodando"); return }
         if (Projects.list(a).isEmpty()) { a.toast("Primeiro tenha vídeos crus (aba Crus): os do Flow entram sozinhos"); showSection(1); return }
-        val only = Store.prefs(a).getString("auto_ctx", null)
-        if (only != null && Projects.list(a).none { it.optString("ctx") == only }) { a.toast("Nenhum cru em ${Contexts.label(a, only)}"); return }
+        val only = only0
+        if (only != null && Projects.list(a).none { it.optString("ctx") == only }) { a.toast("Nenhum vídeo cru em ${Contexts.label(a, only)}"); return }
         stopPlay(); btnAuto.isEnabled = false
         a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         tvAuto.setTextColor(a.MUTED); tvAuto.text = "Preparando…"
@@ -1180,49 +1135,153 @@ class InstaEditor(private val a: MainActivity) {
         a.toast("Esboço aberto: mude texto e música e exporte")
     }
 
+    // ------------------------------------------------------------------ 🗂 categorias
+
+    private lateinit var catHead: LinearLayout
+    private lateinit var catBox: LinearLayout
+    private var openCat: String? = null       // null = lista; "" = sem categoria; nome = categoria aberta
+    private var pendingCat: String? = null    // vídeo adicionado de dentro de uma categoria já entra nela
+
+    private fun thumbOf(pid: String) = Projects.thumb(a, pid).takeIf { it.exists() }?.let { BitmapFactory.decodeFile(it.path) }
+
     private fun renderProjects() {
-        if (!::projBox.isInitialized) return
+        if (!::catBox.isInitialized) return
         updateNav()
-        projBox.removeAllViews()
-        val all = Projects.list(a)
-        if (::rawFilter.isInitialized) ctxChips(rawFilter, true, rawCtx, counts = { n -> all.count { it.optString("ctx") == n } }) { rawCtx = it; renderProjects() }
-        val l = if (rawCtx == null) all else all.filter { it.optString("ctx") == rawCtx }
-        if (l.isEmpty()) { a.text(if (all.isEmpty()) "Nenhum vídeo cru ainda." else "Nenhum cru nesse contexto.", 12f, a.MUTED, parent = projBox); return }
-        l.take(40).forEach { o ->
-            val id = o.optString("id")
-            val box = LinearLayout(a).apply {
-                orientation = LinearLayout.HORIZONTAL; setPadding(a.dp(8), a.dp(8), a.dp(8), a.dp(8)); gravity = Gravity.CENTER_VERTICAL
-                background = GradientDrawable().apply { setColor(a.BG); cornerRadius = a.dp(12).toFloat()
-                    setStroke(a.dp(if (id == projId) 2 else 1), if (id == projId) a.ACCENT else a.LINE) }
+        catBox.removeAllViews()
+        if (openCat == null) renderCatList() else renderCatDetail(openCat!!)
+    }
+
+    private fun catCard(): LinearLayout = LinearLayout(a).apply {
+        orientation = LinearLayout.VERTICAL; setPadding(a.dp(14), a.dp(12), a.dp(14), a.dp(12))
+        background = GradientDrawable().apply { setColor(a.CARD); cornerRadius = a.dp(14).toFloat(); setStroke(a.dp(1), a.LINE) }
+    }.also { catBox.addView(it, a.lpMatch().apply { topMargin = a.dp(12) }) }
+
+    private fun renderCatList() {
+        val projs = Projects.list(a)
+        val names = Contexts.names(a) + listOf("")
+        names.forEach { n ->
+            val crus = projs.filter { it.optString("ctx") == n }
+            if (n.isEmpty() && crus.isEmpty() && OverlayDB.count(a, "") == 0) return@forEach
+            val card = catCard()
+            card.setOnClickListener { openCat = n; renderProjects(); a.scrollTo(catHead) }
+            a.text(if (n.isEmpty()) "📥  Sem categoria · textos gerais" else Contexts.label(a, n), 17f, a.FG, parent = card, bold = true)
+            val rated = OverlayDB.all(a, n).filter { OverlayDB.rated(it) > 0 }
+            val nota = if (rated.isEmpty()) "" else "  ·  🔥 ${(rated.map { OverlayDB.mean(it) }.average() * 100).toInt()}%"
+            a.text("${crus.size} vídeo(s) cru(s)  ·  ${OverlayDB.count(a, n)} texto(s)$nota", 13f, a.MUTED, parent = card)
+            if (n.isNotEmpty()) Contexts.desc(a, n).takeIf { it.isNotBlank() }?.let { a.text(it.take(90), 12f, a.MUTED, parent = card) }
+            if (crus.isNotEmpty()) {
+                val strip = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+                card.addView(strip, a.lpMatch().apply { topMargin = a.dp(8) })
+                crus.take(5).forEach { p ->
+                    strip.addView(ImageView(a).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF1C1C24.toInt()); thumbOf(p.optString("id"))?.let { setImageBitmap(it) } },
+                        LinearLayout.LayoutParams(a.dp(44), a.dp(78)).apply { rightMargin = a.dp(4) })
+                }
+                if (crus.size > 5) strip.addView(TextView(a).apply { text = "+${crus.size - 5}"; setTextColor(a.MUTED); gravity = Gravity.CENTER }, LinearLayout.LayoutParams(a.dp(44), a.dp(78)))
             }
-            projBox.addView(box, a.lpMatch().apply { topMargin = a.dp(8) })
-            val th = Projects.thumb(a, id)
-            box.addView(ImageView(a).apply { scaleType = ImageView.ScaleType.CENTER_CROP; if (th.exists()) setImageBitmap(BitmapFactory.decodeFile(th.path)) },
-                LinearLayout.LayoutParams(a.dp(54), a.dp(96)).apply { rightMargin = a.dp(10) })
+            a.text("Abrir ›", 13f, a.ACCENT, parent = card, bold = true)
+        }
+        if (Contexts.list(a).isEmpty()) a.text("Nenhuma categoria ainda. Toque em ＋ Nova categoria (ex.: \"Falando\", \"Olhar\") ou em ✨ Separar vídeos com IA.", 13f, a.MUTED, parent = catBox)
+    }
+
+    private fun renderCatDetail(n: String) {
+        val key = n
+        // topo
+        val top = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        catBox.addView(top, a.lpMatch().apply { topMargin = a.dp(12) })
+        top.addView(android.widget.Button(a).apply {
+            text = "◀"; textSize = 16f; setTextColor(a.FG)
+            background = GradientDrawable().apply { setColor(0xFF1C1C24.toInt()); cornerRadius = a.dp(10).toFloat() }
+            setOnClickListener { openCat = null; renderProjects() }
+        }, LinearLayout.LayoutParams(a.dp(52), a.dp(44)).apply { rightMargin = a.dp(10) })
+        top.addView(TextView(a).apply { text = if (n.isEmpty()) "📥 Sem categoria" else Contexts.label(a, n); textSize = 20f; setTextColor(a.FG); typeface = android.graphics.Typeface.DEFAULT_BOLD },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        if (n.isNotEmpty()) {
+            small(top, "✏") {
+                val ed = EditText(a).apply { setText(Contexts.desc(a, n)); hint = "Como são esses vídeos (ajuda a IA)" }
+                AlertDialog.Builder(a).setTitle("Descrição de $n").setView(ed)
+                    .setPositiveButton("Salvar") { _, _ -> Contexts.update(a, n) { it.put("desc", ed.text.toString().trim()) }; renderProjects() }
+                    .setNegativeButton("Cancelar", null).show()
+            }
+            small(top, "🗑") {
+                AlertDialog.Builder(a).setTitle("Apagar a categoria $n?").setMessage("Os vídeos e textos dela vão pra Sem categoria. Nada é apagado.")
+                    .setPositiveButton("Apagar") { _, _ -> Contexts.remove(a, n); openCat = null; renderProjects(); renderCtx() }
+                    .setNegativeButton("Cancelar", null).show()
+            }
+        }
+        if (n.isNotEmpty()) a.text(Contexts.desc(a, n).ifBlank { "Sem descrição. Toque em ✏ e conte como são esses vídeos: a IA usa isso." }, 12f, a.MUTED, parent = catBox)
+
+        // 1) vídeos crus
+        val cv = catCard()
+        val crus = Projects.list(a).filter { it.optString("ctx") == n }
+        a.text("🎬 Vídeos crus (${crus.size})", 15f, a.FG, parent = cv, bold = true)
+        a.button("＋ Adicionar vídeo nesta categoria", cv) { pendingCat = n; chooseMyVideo() }
+        if (crus.isEmpty()) a.text("Nenhum vídeo aqui ainda.", 12f, a.MUTED, parent = cv)
+        crus.forEach { o ->
+            val id = o.optString("id")
+            val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            cv.addView(row, a.lpMatch().apply { topMargin = a.dp(8) })
+            row.addView(ImageView(a).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF1C1C24.toInt()); thumbOf(id)?.let { setImageBitmap(it) }; setOnClickListener { openProject(id) } },
+                LinearLayout.LayoutParams(a.dp(50), a.dp(88)).apply { rightMargin = a.dp(10) })
             val side = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
-            box.addView(side, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            val t = o.optString("desc").ifBlank { o.optString("text").replace('\n', ' ') }.take(60).ifEmpty { "(sem descrição: toque em T Textos)" }
-            val tag = if (o.optBoolean("flow")) " · do Flow" else ""
-            val ver = o.optInt("versoes")
-            a.text((if (o.optBoolean("photo")) "🖼 " else "🎬 ") + t, 13f, a.FG, parent = side)
-            a.text((if (ver > 0) "$ver versão(ões) exportada(s)" else "Nunca exportado") + tag, 11f, a.MUTED, parent = side)
-            val cx = o.optString("ctx")
-            side.addView(TextView(a).apply {
-                text = Contexts.label(a, cx) + "  ▾"; textSize = 12f
-                setTextColor(if (cx.isEmpty()) a.MUTED else 0xFF1A0A10.toInt()); setPadding(a.dp(10), a.dp(4), a.dp(10), a.dp(4))
-                background = GradientDrawable().apply { setColor(if (cx.isEmpty()) 0xFF1C1C24.toInt() else 0xFF4CC68E.toInt()); cornerRadius = a.dp(12).toFloat() }
-                setOnClickListener { chooseCtx(cx) { n -> Projects.update(a, id) { it.put("ctx", n) }; renderProjects(); renderCtx() } }
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = a.dp(4) })
+            row.addView(side, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val nt = OverlayDB.count(a, AutoProducer.vidKey(id))
+            a.text(o.optString("desc").ifBlank { "(vídeo sem descrição)" }.take(60), 13f, a.FG, parent = side)
+            a.text("${o.optInt("versoes")} versão(ões)" + (if (nt > 0) " · $nt texto(s) só dele" else "") + (if (o.optBoolean("flow")) " · do Flow" else ""), 11f, a.MUTED, parent = side)
             val r = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
             side.addView(r, a.lpMatch())
-            a.button(if (id == projId) "Aberto" else "✏ Editar", r, primary = id != projId, weight = true) { if (id != projId) openProject(id) else showSection(0) }
-            val nt = OverlayDB.count(a, AutoProducer.vidKey(id))
-            a.button("T Textos" + if (nt > 0) " $nt" else "", r, weight = true) { videoTexts(id) }
-            val del = a.button("Apagar", r, weight = true) { }
+            a.button("✏", r, weight = true) { openProject(id) }
+            a.button("T só dele", r, weight = true) { videoTexts(id) }
+            a.button("⇄", r, weight = true) { chooseCtx(n) { nn -> Projects.update(a, id) { it.put("ctx", nn) }; renderProjects(); renderCtx() } }
+            val del = a.button("🗑", r, weight = true) { }
             del.setOnClickListener {
-                if (del.tag != "armed") { del.tag = "armed"; del.text = "De novo"; ui.postDelayed({ del.tag = null; del.text = "Apagar" }, 2500) }
+                if (del.tag != "armed") { del.tag = "armed"; del.text = "?"; ui.postDelayed({ del.tag = null; del.text = "🗑" }, 2500) }
                 else { if (projId == id) newProject(); Projects.remove(a, id); renderProjects() }
             }
+        }
+
+        // 2) textos da categoria
+        val ct = catCard()
+        a.text(if (n.isEmpty()) "T Textos gerais (servem pra qualquer vídeo)" else "T Textos de $n (${OverlayDB.count(a, key)})", 15f, a.FG, parent = ct, bold = true)
+        a.text("Escreva do seu jeito: a IA aprende com os seus textos e gera parecidos. Enter = nova linha.", 12f, a.MUTED, parent = ct)
+        val et = EditText(a).apply {
+            hint = "Escreva um texto pro vídeo…"; setTextColor(a.FG); setHintTextColor(a.MUTED); textSize = 15f
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            minLines = 2; gravity = Gravity.TOP or Gravity.START
+            background = GradientDrawable().apply { setColor(a.BG); cornerRadius = a.dp(10).toFloat(); setStroke(a.dp(1), a.LINE) }
+            setPadding(a.dp(12), a.dp(10), a.dp(12), a.dp(10))
+        }
+        ct.addView(et, a.lpMatch())
+        val tr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        ct.addView(tr, a.lpMatch())
+        val st = TextView(a).apply { textSize = 12f; setTextColor(a.OK) }
+        a.button("Salvar", tr, weight = true) {
+            val t = et.text.toString().trim(); if (t.isNotEmpty()) { OverlayDB.add(a, t, "meu", key); renderProjects() }
+        }
+        a.button("✨ Gerar 10 parecidos com os meus", tr, primary = true, weight = true) {
+            st.setTextColor(a.MUTED); st.text = "A IA está aprendendo com os seus textos…"
+            Thread { val r = AutoProducer.genTexts(a, 10, key); ui.post { st.setTextColor(a.OK); st.text = r; renderProjects() } }.start()
+        }
+        ct.addView(st)
+        val l = OverlayDB.all(a, key).sortedWith(compareByDescending<org.json.JSONObject> { if (it.optString("src") == "meu") 1 else 0 }.thenByDescending { OverlayDB.mean(it) })
+        if (l.isEmpty()) a.text("Nenhum texto ainda.", 12f, a.MUTED, parent = ct)
+        l.forEach { o ->
+            val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            ct.addView(row, a.lpMatch().apply { topMargin = a.dp(6) })
+            val nr = OverlayDB.rated(o)
+            val who = if (o.optString("src") == "meu") "✍ meu" else "✨ IA"
+            row.addView(TextView(a).apply {
+                text = o.optString("t") + "\n" + who + (if (nr > 0) " · ${(OverlayDB.mean(o) * 100).toInt()}% · 🔥${o.optInt("good")} 👎${o.optInt("bad")}" else "") + " · usado ${o.optInt("uses")}x"
+                textSize = 13f; setTextColor(a.FG)
+                setOnLongClickListener { chooseCtx(key) { nn -> OverlayDB.setCtx(a, o.optString("t"), nn); renderProjects() }; true }
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            small(row, "✕") { OverlayDB.remove(a, o.optString("t")); renderProjects() }
+        }
+
+        // 3) produzir desta categoria
+        if (crus.isNotEmpty()) {
+            val cp2 = catCard()
+            a.button("🤖 Produzir ${Store.prefs(a).getInt("auto_n", 5)} vídeos desta categoria", cp2, primary = true) { produceNow(Store.prefs(a).getInt("auto_n", 5), n) }
+            a.text("Os vídeos vão pra 🎬 Fila. Quantos: mude em ⚙ Auto.", 11f, a.MUTED, parent = cp2)
         }
     }
 
@@ -1331,6 +1390,7 @@ class InstaEditor(private val a: MainActivity) {
                     ui.post {
                         if (!ok) { Projects.remove(a, pid); a.toast("Não abriu essa foto"); return@post }
                         projId = pid; isPhoto = true; src = Uri.fromFile(f); durRow.visibility = View.VISIBLE
+                        pendingCat?.let { cx -> Projects.update(a, pid) { it.put("ctx", cx) } }; pendingCat = null
                         loadBase("Foto salva no projeto: vira um vídeo de ${photoSecs}s"); saveNow(); renderProjects()
                     }
                 }.start()
@@ -1379,6 +1439,7 @@ class InstaEditor(private val a: MainActivity) {
                 if (!ok) { Projects.remove(a, pid); a.toast("Não consegui abrir esse vídeo"); return@post }
                 projId = pid; isPhoto = false; src = Uri.fromFile(f); durRow.visibility = View.GONE
                 cutStart = 0; cutEnd = 0
+                pendingCat?.let { cx -> Projects.update(a, pid) { it.put("ctx", cx) } }; pendingCat = null
                 loadBase("Vídeo salvo no projeto"); saveNow(); renderProjects()
             }
         }.start()
