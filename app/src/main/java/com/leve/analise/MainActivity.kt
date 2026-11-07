@@ -109,10 +109,11 @@ class MainActivity : Activity() {
 
     private var keysRedraw: (() -> Unit)? = null
     private var tnRedraw: (() -> Unit)? = null
+    private var healthRedraw: (() -> Unit)? = null
 
     override fun onResume() {
         super.onResume()
-        PostBar.update(this); keysRedraw?.invoke(); tnRedraw?.invoke()
+        PostBar.update(this); keysRedraw?.invoke(); tnRedraw?.invoke(); healthRedraw?.invoke()
         ui.postDelayed({ askPending() }, 600)
         ui.postDelayed({ if (::insta.isInitialized) insta.maybeRefill() }, 2500)
         Updater.schedule(this)
@@ -124,6 +125,8 @@ class MainActivity : Activity() {
             PostQueue.cleanGallery(this, false)
             GalleryClean.sweep(this)
             val rec = Recover.run(this)
+            val hf = Health.autoFix(this)
+            if (hf.isNotEmpty()) ui.post { toast("🩺 " + hf.first()); healthRedraw?.invoke() }
             if (rec.sum() > 0) ui.post {
                 toast("Recuperei: " + listOf(rec[0] to "foto(s) da fila", rec[1] to "vídeo(s) prontos", rec[2] to "vídeo(s) crus", rec[3] to "referência(s)").filter { it.first > 0 }.joinToString(", ") { "${it.first} ${it.second}" })
                 postStamp = -1L; refresh(); if (::insta.isInitialized) insta.refreshLists(); if (::refs.isInitialized) refs.renderPhotos()
@@ -218,6 +221,23 @@ class MainActivity : Activity() {
         keysUi()
         keysRedraw = { keysUi() }
         text("Notificação fixa com 📸 Threads · 🎬 Instagram · 🤖 Produzir. O botão flutuante fica por cima de qualquer app: toque pra abrir o menu, arraste pra mudar de lugar, segure pra esconder. Ele pisca ⏰ quando é hora de postar e mostra quantos faltam hoje.", 12f, MUTED, parent = ck)
+
+        val ch = card("🩺 Saúde das filas")
+        val hBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        ch.addView(hBox, lpMatch())
+        fun healthUi() {
+            hBox.removeAllViews()
+            val issues = Health.check(this)
+            if (issues.isEmpty()) text("✓ Tudo girando bem: fotos, legendas, vídeos, textos e músicas variados.", 13f, OK, parent = hBox)
+            issues.forEach { i ->
+                text("${i.area}: ${i.msg}", 13f, FG, parent = hBox)
+                if (i.fix != null) button("🔄 ${i.fixLabel}", hBox) { toast(i.fix.invoke(this)); healthUi() }
+            }
+            Health.lastFix(this).takeIf { it.isNotBlank() }?.let { text("Último conserto automático:\n$it", 11f, MUTED, parent = hBox) }
+        }
+        healthUi(); healthRedraw = { healthUi() }
+        chips(ch, listOf("🤖 Conserta sozinho", "Só avisar"), { if (Health.autoOn(this)) "🤖 Conserta sozinho" else "Só avisar" }) { Health.setAuto(this, it.startsWith("🤖")) }
+        text("Código simples (sem IA, não gasta crédito). Confere todas as filas ao abrir o app e depois de cada post: se algo repete, gira a fila puxando o que está há mais tempo parado; limpa itens quebrados e destrava legendas.", 11f, MUTED, parent = ch)
 
         val cp = card("Fila de posts")
         text("Adicione fotos: cada uma sai sem metadados e ganha legendas. Toque em Postar e o Threads abre com a foto e a legenda juntas. É só publicar.", 13f, MUTED, parent = cp)

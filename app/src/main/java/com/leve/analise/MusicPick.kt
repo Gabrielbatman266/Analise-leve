@@ -78,7 +78,7 @@ object MusicPick {
     }
 
     /** Músicas dos últimos vídeos produzidos (pra variar). */
-    fun recent(c: Context, n: Int = 2): List<String> = VideoExport.library(c).take(n).map { it.optString("musica") }.filter { it.isNotEmpty() }
+    fun recent(c: Context, n: Int = 2 + Health.musicExtra(c)): List<String> = VideoExport.library(c).take(n).map { it.optString("musica") }.filter { it.isNotEmpty() }
 
     /**
      * Decide a música de um vídeo. Devolve: null = usar a do modelo/projeto; "" = som original; caminho = essa música.

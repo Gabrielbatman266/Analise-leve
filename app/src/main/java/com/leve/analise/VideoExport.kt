@@ -361,6 +361,9 @@ object VideoExport {
     /** Origem de um vídeo pronto: o vídeo cru de onde ele saiu (vídeos importados contam como origem própria). */
     fun origin(o: JSONObject): String = o.optString("proj").ifBlank { "solo:" + o.optString("id") }
 
+    fun recentIds(c: Context) = recent(c, "vid_rec")
+    fun recentOrigins(c: Context) = recent(c, "vid_last_orig")
+
     private fun recent(c: Context, key: String): List<String> =
         Store.prefs(c).getString(key, "")!!.split('\u0001').filter { it.isNotBlank() }
 
@@ -406,6 +409,10 @@ object VideoExport {
         val rec = recent(c, "vid_rec")
         val recentO = recent(c, "vid_last_orig")
         val projs = Projects.list(c).associateBy { it.optString("id") }
+        val byId = lib.associateBy { it.optString("id") }
+        Health.takeForced(c, "force_vids") { id -> byId[id]?.let { o -> id !in rec.take(2) && origin(o) != recentO.firstOrNull() } == true }?.let { fid ->
+            pushRec(c, "vid_rec", fid, 40); pushRec(c, "vid_last_orig", origin(byId.getValue(fid)), 20); return fid
+        }
         val cand = candidates(c, lib, rec, recentO)
         val w = cand.map { weight(c, it, rec, projs) }
         var r = Math.random() * w.sum(); var pick = cand.last()

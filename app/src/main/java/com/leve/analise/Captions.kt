@@ -122,7 +122,7 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
     /** Guarda o que acabou de sair (foto + legenda) pra não repetir em seguida. */
     fun remember(c: Context, photoId: String?, cap: String?) {
         photoId?.let { pushRecent(c, "rec_fotos", it, 40) }
-        cap?.let { pushRecent(c, "rec_caps", it.trim(), 30) }
+        cap?.let { pushRecent(c, "rec_caps", it.trim(), 40) }
     }
 
     /**
@@ -191,7 +191,7 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
     /** Legendas que podem sair agora: as que bombaram só esperam 3 posts; as outras, 12. */
     fun capAvoid(c: Context): List<String> {
         val rec = recentCaps(c)
-        return rec.take(12).filterIndexed { i, t -> i < 3 || !CaptionDB.isWinner(c, t) }
+        return rec.take(12 + Health.capExtra(c)).filterIndexed { i, t -> i < 3 || !CaptionDB.isWinner(c, t) }
     }
 
     /**
@@ -204,6 +204,14 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         val all = PostQueue.load(c).filter { PostQueue.imageFile(c, it.optString("id")).exists() }
         if (all.isEmpty()) return null
         val rec = recentPhotos(c)
+        val byId = all.associateBy { it.optString("id") }
+        Health.takeForced(c, "force_fotos") { id -> id in byId && id !in rec.take(2) }?.let { fid ->
+            val o = byId.getValue(fid)
+            val own = o.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
+            val pool = (own + mine(c) + CaptionDB.winners(c, 20).map { it.optString("t") }).filter { it.isNotBlank() }.distinct()
+            val cap = (if (pool.isNotEmpty()) CaptionDB.pick(c, pool, capAvoid(c), pairBonus(c, fid)) else null) ?: randomCaption(c, capAvoid(c))
+            remember(c, fid, cap); return fid to cap
+        }
         val k = minOf(all.size - 1, maxOf(minOf(3, all.size - 1), (all.size * 0.6).toInt()), 20)
         val cand = all.filter { o ->
             val idx = rec.indexOf(o.optString("id"))

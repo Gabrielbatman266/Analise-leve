@@ -113,7 +113,7 @@ object AutoProducer {
         // música por categoria (variando: nunca a mesma em seguida)
         val avoidM = ArrayList(MusicPick.recent(c))
         return out.map { pl ->
-            val m = MusicPick.resolve(c, pl.ctx, avoidM.takeLast(2), asked)
+            val m = MusicPick.resolve(c, pl.ctx, avoidM.takeLast(2 + Health.musicExtra(c)), asked)
             if (!m.isNullOrEmpty()) avoidM.add(m)
             pl.copy(music = m)
         }
