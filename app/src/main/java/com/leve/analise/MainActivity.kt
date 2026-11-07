@@ -509,7 +509,7 @@ class MainActivity : Activity() {
 
         val cs = card("O que está funcionando")
         tvLearn = text("", 13f, FG, parent = cs)
-        text("Marque 🔥 / 😐 / 👎 nos posts (o app também pergunta 5 h depois de cada post). O que bombou sai MUITO mais (foto, legenda e a combinação das duas), mas nunca logo em seguida.", 12f, MUTED, parent = cs)
+        text("Marque 💎 / 🔥 / 😐 / 👎 nos posts (o app também pergunta 5 h depois de cada post). 💎 Viralizou = deu MUITO certo, vale por dois 🔥. O que bombou sai MUITO mais (foto, legenda e a combinação das duas), mas nunca logo em seguida.", 12f, MUTED, parent = cs)
         val tvRules = text("", 13f, FG, parent = cs)
         fun rulesT() {
             val r = Captions.learned(this)
@@ -838,10 +838,10 @@ class MainActivity : Activity() {
                 val rr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
                 side.addView(rr, lpMatch())
                 val nota = o.optString("nota")
-                listOf("good" to "🔥 Bombou", "meh" to "😐", "bad" to "👎").forEach { (k, e) ->
+                listOf("top" to "💎", "good" to "🔥", "meh" to "😐", "bad" to "👎").forEach { (k, e) ->
                     button(e, rr, primary = nota == k, weight = true) {
                         RateLater.applyPhoto(this, id, k); refresh()
-                        toast(if (k == "good") "Anotado: vou usar mais legendas assim" else if (k == "bad") "Anotado: vou evitar legendas assim" else "Anotado")
+                        toast(if (k == "top") "💎 Anotado: prioridade máxima pra fotos e legendas assim" else if (k == "good") "Anotado: vou usar mais legendas assim" else if (k == "bad") "Anotado: vou evitar legendas assim" else "Anotado")
                     }
                 }
                 button("🎲 Postar de novo com legenda aleatória ↗", side) {

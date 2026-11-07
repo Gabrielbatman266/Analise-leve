@@ -353,7 +353,7 @@ class InstaEditor(private val a: MainActivity) {
     private fun updateCycle() {
         if (!::tvCycle.isInitialized) return
         val lib = VideoExport.library(a)
-        tvCycle.text = if (lib.isEmpty()) "" else "${lib.size} vídeo(s) · ${lib.count { it.optInt("posts") == 0 }} nunca postado(s) · ${lib.count { Learn.verdict(it) == "good" }} 🔥"
+        tvCycle.text = if (lib.isEmpty()) "" else "${lib.size} vídeo(s) · ${lib.count { it.optInt("posts") == 0 }} nunca postado(s) · ${lib.count { Learn.isWin(it) }} 🔥/💎"
     }
 
     /** Sorteia um vídeo que ainda não saiu nesta rodada e uma legenda do banco. */
@@ -1985,7 +1985,7 @@ class InstaEditor(private val a: MainActivity) {
 
         // 📊 resultados
         val rs = sub("📊 Resultados dos vídeos")
-        a.text("🔥 ${rated.count { Learn.verdict(it) == "good" }} bombaram  ·  😐 ${rated.count { Learn.verdict(it) == "meh" }}  ·  👎 ${rated.count { Learn.verdict(it) == "bad" }} floparam  ·  ⏳ ${waitNota.size} sem nota", 13f, a.FG, parent = rs)
+        a.text("💎 ${rated.count { Learn.verdict(it) == "top" }} viralizaram  ·  🔥 ${rated.count { Learn.verdict(it) == "good" }} bombaram  ·  😐 ${rated.count { Learn.verdict(it) == "meh" }}  ·  👎 ${rated.count { Learn.verdict(it) == "bad" }} floparam  ·  ⏳ ${waitNota.size} sem nota", 13f, a.FG, parent = rs)
         if (waitNota.isNotEmpty()) {
             a.text("⭐ Como foram? (1 toque ensina texto, música, edição, legenda e o vídeo cru)", 12f, a.MUTED, parent = rs)
             waitNota.sortedByDescending { it.optLong("lastPost") }.take(4).forEach { o ->
@@ -1998,7 +1998,7 @@ class InstaEditor(private val a: MainActivity) {
                 a.text("${tag[VideoExport.origin(o)] ?: ""} · " + o.optString("texto").replace('\n', ' ').ifBlank { "sem texto" }.take(40), 12f, a.FG, parent = side)
                 val rr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
                 side.addView(rr, a.lpMatch())
-                listOf("good" to "🔥", "meh" to "😐", "bad" to "👎").forEach { (k, e) ->
+                listOf("top" to "💎", "good" to "🔥", "meh" to "😐", "bad" to "👎").forEach { (k, e) ->
                     a.button(e, rr, weight = true) { RateLater.apply(a, id, k); renderLibrary(); renderStats() }
                 }
             }
@@ -2048,7 +2048,7 @@ class InstaEditor(private val a: MainActivity) {
                 ui.post { renderLibrary(); a.toast(m) } }.start()
         }
         a.button("✨ Textos parecidos com os 🔥", ir, weight = true) {
-            val topCtx = rated.filter { Learn.verdict(it) == "good" }.groupBy { it.optString("tctx").ifEmpty { it.optString("ctx") } }.maxByOrNull { it.value.size }?.key ?: ""
+            val topCtx = rated.filter { Learn.isWin(it) }.groupBy { it.optString("tctx").ifEmpty { it.optString("ctx") } }.maxByOrNull { it.value.size }?.key ?: ""
             st.setTextColor(a.MUTED); st.text = "Criando textos no estilo dos que bombaram" + (if (topCtx.isNotEmpty()) " ($topCtx)" else "") + "…"
             Thread { val m = AutoProducer.genTexts(a, 10, topCtx); ui.post { st.setTextColor(a.OK); st.text = m } }.start()
         }
@@ -2065,7 +2065,7 @@ class InstaEditor(private val a: MainActivity) {
                 val cell = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
                 strip.addView(cell, LinearLayout.LayoutParams(a.dp(60), ViewGroup.LayoutParams.WRAP_CONTENT).apply { rightMargin = a.dp(6) })
                 cell.addView(thumbV(o.optString("id"), 54, 96).apply { (layoutParams as LinearLayout.LayoutParams).rightMargin = 0 })
-                val v = when (Learn.verdict(o)) { "good" -> "🔥"; "bad" -> "👎"; else -> "" }
+                val v = Learn.verdict(o).let { if (it == "meh") "" else Learn.emoji(it) }
                 cell.addView(TextView(a).apply { text = "${k + 1}º ${tag[VideoExport.origin(o)] ?: ""} $v"; textSize = 10f; setTextColor(a.MUTED); gravity = Gravity.CENTER })
             }
         }
@@ -2080,6 +2080,7 @@ class InstaEditor(private val a: MainActivity) {
         fun header(t: String) { libBox.addView(TextView(a).apply { text = t; textSize = 14f; setTextColor(a.FG); typeface = android.graphics.Typeface.DEFAULT_BOLD }, a.lpMatch().apply { topMargin = a.dp(16) }) }
         if (byRes) {
             val sec = listOf(
+                "💎 Viralizaram (prioridade máxima)" to all.filter { Learn.verdict(it) == "top" },
                 "🔥 Bombaram (voltam mais vezes)" to all.filter { Learn.verdict(it) == "good" },
                 "🆕 Na fila, nunca postados" to all.filter { it.optInt("posts") == 0 },
                 "😐 Normais / esperando nota" to all.filter { it.optInt("posts") > 0 && Learn.verdict(it).let { v -> v == "meh" || v == "" } },
@@ -2127,7 +2128,7 @@ class InstaEditor(private val a: MainActivity) {
             val side = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
             box.addView(side, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             val posts = o.optInt("posts")
-            val sc = if (Learn.rated(o) > 0) "  ·  " + Learn.hist(o).joinToString(" → ") { when (it.second) { "good" -> "🔥"; "bad" -> "👎"; else -> "😐" } } else ""
+            val sc = if (Learn.rated(o) > 0) "  ·  " + Learn.hist(o).joinToString(" → ") { Learn.emoji(it.second) } else ""
             a.text((tag[VideoExport.origin(o)]?.let { "$it  " } ?: "") + (if (posts > 0) "Postado ${posts}x" else "Ainda não postado") + sc, 12f, if (posts > 0) a.OK else a.ACCENT, parent = side, bold = true)
             o.optString("texto").takeIf { it.isNotBlank() }?.let { a.text("T  " + it.replace('\n', ' ').take(60), 12f, a.FG, parent = side) }
                 ?: if (o.optBoolean("auto")) a.text("🎬 sem texto", 12f, a.MUTED, parent = side) else null
@@ -2149,11 +2150,11 @@ class InstaEditor(private val a: MainActivity) {
                 val rr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
                 side.addView(rr, a.lpMatch())
                 a.text("Como foi o último post?", 11f, a.MUTED, parent = side).also { side.removeView(it); side.addView(it, side.indexOfChild(rr)) }
-                listOf("good" to "🔥", "meh" to "😐", "bad" to "👎").forEach { (k, e) ->
+                listOf("top" to "💎", "good" to "🔥", "meh" to "😐", "bad" to "👎").forEach { (k, e) ->
                     a.button(e, rr, primary = nota == k, weight = true) {
                         RateLater.apply(a, id, k)
                         renderLibrary(); renderOverlays()
-                        a.toast("Anotado: o app vai ${if (k == "good") "usar mais" else if (k == "bad") "evitar" else "manter"} texto, modelo e legenda assim")
+                        a.toast("Anotado: o app vai ${if (k == "top") "usar MUITO mais" else if (k == "good") "usar mais" else if (k == "bad") "evitar" else "manter"} texto, modelo e legenda assim")
                     }
                 }
             }

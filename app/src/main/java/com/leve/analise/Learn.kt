@@ -21,11 +21,13 @@ object Learn {
     fun mean(o: JSONObject): Double {
         val g = o.optInt("good"); val m = o.optInt("meh"); val b = o.optInt("bad")
         val legacy = o.optString("nota").takeIf { g + m + b == 0 }
-        val gg = g + (if (legacy == "good") 1 else 0); val mm = m + (if (legacy == "meh") 1 else 0); val bb = b + (if (legacy == "bad") 1 else 0)
+        val gg = g + (if (legacy == "good") 1 else if (legacy == "top") 2 else 0); val mm = m + (if (legacy == "meh") 1 else 0); val bb = b + (if (legacy == "bad") 1 else 0)
         return (gg + 0.5 * mm + 1.0) / (gg + mm + bb + 2.0)
     }
     fun rated(o: JSONObject) = o.optInt("good") + o.optInt("meh") + o.optInt("bad") + (if (o.optInt("good") + o.optInt("meh") + o.optInt("bad") == 0 && o.optString("nota").isNotEmpty()) 1 else 0)
-    fun verdict(o: JSONObject) = when { rated(o) == 0 -> ""; mean(o) > 0.6 -> "good"; mean(o) < 0.45 -> "bad"; else -> "meh" }
+    fun verdict(o: JSONObject) = when { rated(o) == 0 -> ""; o.optInt("top") > 0 && mean(o) > 0.7 -> "top"; mean(o) > 0.6 -> "good"; mean(o) < 0.45 -> "bad"; else -> "meh" }
+    fun emoji(k: String) = when (k) { "top" -> "💎"; "good" -> "🔥"; "bad" -> "👎"; "meh" -> "😐"; else -> "" }
+    fun isWin(o: JSONObject) = verdict(o).let { it == "good" || it == "top" }
 
     // ---------- histórico de cada post (a mesma foto/vídeo pode ir mal numa vez e bem na outra)
     fun secondChance(c: Context) = p(c).getBoolean("second_chance", true)
@@ -52,7 +54,7 @@ object Learn {
     }
     fun onSecondChance(c: Context, o: JSONObject) = secondChance(c) && rated(o) == 1 && verdict(o) == "bad"
 
-    private fun score(k: String) = when (k) { "good" -> 1.0; "meh" -> 0.5; else -> 0.0 }
+    private fun score(k: String) = when (k) { "top", "good" -> 1.0; "meh" -> 0.5; else -> 0.0 }
 
     /** Repostagens: quantos flopparam e depois bombaram, e o contrário. */
     fun repostStats(items: List<JSONObject>): String {
@@ -61,8 +63,9 @@ object Learn {
         var up = 0; var down = 0; var same = 0
         multi.forEach { h ->
             val ks = h.map { it.second }
-            val fu = ks.indices.any { i -> ks[i] == "bad" && ks.drop(i + 1).contains("good") }
-            val fd = ks.indices.any { i -> ks[i] == "good" && ks.drop(i + 1).contains("bad") }
+            val win = { k: String -> k == "good" || k == "top" }
+            val fu = ks.indices.any { i -> ks[i] == "bad" && ks.drop(i + 1).any(win) }
+            val fd = ks.indices.any { i -> win(ks[i]) && ks.drop(i + 1).contains("bad") }
             when { fu -> up++; fd -> down++; else -> same++ }
         }
         val pct = (up * 100) / multi.size
@@ -93,7 +96,7 @@ object Learn {
         val h = hist(o)
         if (h.isEmpty()) return ""
         val fmt = java.text.SimpleDateFormat("EEE HH'h'", java.util.Locale("pt", "BR"))
-        return "histórico: " + h.mapIndexed { i, (at, k) -> "${i + 1}ª " + (when (k) { "good" -> "🔥"; "bad" -> "👎"; else -> "😐" }) + (if (at > 0) " " + fmt.format(java.util.Date(at)) else "") }.joinToString(", ")
+        return "histórico: " + h.mapIndexed { i, (at, k) -> "${i + 1}ª " + emoji(k) + (if (at > 0) " " + fmt.format(java.util.Date(at)) else "") }.joinToString(", ")
     }
 
     // ---------- regras dos vídeos
@@ -117,7 +120,7 @@ object Learn {
             }
             Triple(File(VideoExport.videoDir(c), "${o.optString("id")}.jpg"), desc, verdict(o))
         }
-        val r = Ai.learnVideos(c, items, repostStats(lib) + "\n" + hourStats(lib))
+        val r = Ai.learnVideos(c, items, repostStats(lib) + "\n" + hourStats(lib) + "\n💎 = VIRALIZOU (muito acima do normal): dê peso máximo ao que esses têm em comum.")
         if (r.isNotEmpty()) p(c).edit().putString("combo_regras_v", JSONArray(r).toString()).putLong("combo_v_at", System.currentTimeMillis()).apply()
         return r
     }

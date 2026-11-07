@@ -140,7 +140,7 @@ Responda só com JSON: {"legendas":["..."]}"""
      */
     fun learnCombos(c: Context, pairs: List<Triple<File, String, String>>, extra: String = ""): List<String> {
         val list = pairs.mapIndexed { i, (_, cap, k) ->
-            "${i + 1}. nota: " + (when (k) { "good" -> "🔥 BOMBOU"; "bad" -> "👎 FLOPOU"; else -> "😐 normal" }) + " — legenda: \"" + cap.replace('\n', ' ') + "\""
+            "${i + 1}. nota: " + (when (k) { "top" -> "💎 VIRALIZOU"; "good" -> "🔥 BOMBOU"; "bad" -> "👎 FLOPOU"; else -> "😐 normal" }) + " — legenda: \"" + cap.replace('\n', ' ') + "\""
         }.joinToString("\n")
         val prompt = """Você é analista de conteúdo do Threads. Estão anexadas ${pairs.size} fotos de posts de uma criadora, na ordem, cada uma com a legenda usada e como foi:
 $list
@@ -162,7 +162,7 @@ Responda só com JSON: {"regras":["...","..."]}"""
     /** 🧠 Vídeos: quadro de cada vídeo + o que tinha nele + como foi → regras. */
     fun learnVideos(c: Context, items: List<Triple<File, String, String>>, extra: String = ""): List<String> {
         val list = items.mapIndexed { i, (_, d, k) ->
-            "${i + 1}. " + (when (k) { "good" -> "🔥 BOMBOU"; "bad" -> "👎 FLOPOU"; else -> "😐 normal" }) + " — " + d
+            "${i + 1}. " + (when (k) { "top" -> "💎 VIRALIZOU"; "good" -> "🔥 BOMBOU"; "bad" -> "👎 FLOPOU"; else -> "😐 normal" }) + " — " + d
         }.joinToString("\n")
         val prompt = """Você é analista de Reels/Instagram. Estão anexados ${items.size} quadros (um de cada vídeo postado por uma criadora), na ordem, com o que tinha em cada vídeo e como foi:
 $list

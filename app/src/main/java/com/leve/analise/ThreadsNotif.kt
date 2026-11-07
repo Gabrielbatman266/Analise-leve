@@ -69,30 +69,31 @@ object ThreadsNotif {
 
     /** Post passou do limite: avisa com som e marca 🔥 no post que bate com o trecho. */
     fun hit(c: Context, likes: Int, text: String, open: PendingIntent?) {
-        val key = "tn_hit_" + text.hashCode()
+        val key = "tn_hit_" + text.hashCode() + (if (likes >= min(c) * 5) "_top" else "")
         if (p(c).getBoolean(key, false)) return
         p(c).edit().putBoolean(key, true).apply()
-        val rated = if (autoRate(c)) rateMatching(c, text) else null
+        val rated = if (autoRate(c)) rateMatching(c, text, if (likes >= min(c) * 5) "top" else "good") else null
         val nm = c.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("tn_hit", "Posts que bombaram (Threads)", NotificationManager.IMPORTANCE_HIGH))
         val nb = Notification.Builder(c, "tn_hit").setSmallIcon(android.R.drawable.star_on)
-            .setContentTitle("🔥 Post com $likes+ curtidas no Threads")
-            .setContentText((if (rated != null) "Marquei como 🔥: " else "") + text.replace('\n', ' ').take(100))
+            .setContentTitle((if (likes >= min(c) * 5) "💎" else "🔥") + " Post com $likes+ curtidas no Threads")
+            .setContentText((if (rated != null) "Marquei como ${if (likes >= min(c) * 5) "💎" else "🔥"}: " else "") + text.replace('\n', ' ').take(100))
             .setAutoCancel(true)
         open?.let { nb.setContentIntent(it) }
         try { nm.notify(("hit" + text).hashCode(), nb.build()) } catch (e: SecurityException) { }
     }
 
     /** Acha o post da fila cuja legenda aparece no texto da notificação e dá 🔥 (uma vez por post). */
-    private fun rateMatching(c: Context, text: String): String? {
+    private fun rateMatching(c: Context, text: String, k: String): String? {
         val t = text.lowercase()
         val o = PostQueue.load(c).filter { it.optString("status") == "postada" }.sortedByDescending { it.optLong("postedAt") }.firstOrNull { o ->
             val cap = PostQueue.captionOf(o).lowercase().replace('\n', ' ').trim()
             cap.length >= 6 && (t.contains(cap.take(40)) || t.contains(cap.take(18)))
         } ?: return null
         val id = o.optString("id")
-        if (o.optLong("notaAt") == o.optLong("postedAt") && o.optString("nota") == "good") return null
-        RateLater.applyPhoto(c, id, "good")
+        val cur = if (o.optLong("notaAt") == o.optLong("postedAt")) o.optString("nota") else ""
+        if (cur == k || cur == "top") return null
+        RateLater.applyPhoto(c, id, k)
         return id
     }
 }

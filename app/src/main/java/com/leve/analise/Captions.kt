@@ -53,7 +53,7 @@ object Captions {
         return """Você escreve legendas para posts de foto no Threads, em português do Brasil, no estilo de perfis que viralizam.
 Vibe: ${vibe(c)}. Tamanho: ${size(c)}. Contexto: ${ctx(c).ifEmpty { "nenhum" }}.
 ${learnedText(c)}
-${if (wins.isNotEmpty()) "🔥 LEGENDAS QUE BOMBARAM NO MEU PERFIL (prioridade máxima): metade das suas legendas deve ser VARIAÇÃO delas — mesmo tema, mesma estrutura e o mesmo tipo de gancho, com outras palavras:\n" + wins.joinToString("\n") { "- ${it.optString("t").replace('\n', ' ')}  (🔥${it.optInt("good")})" } else ""}
+${if (wins.isNotEmpty()) "🔥 LEGENDAS QUE BOMBARAM NO MEU PERFIL (prioridade máxima): metade das suas legendas deve ser VARIAÇÃO delas — mesmo tema, mesma estrutura e o mesmo tipo de gancho, com outras palavras:\n" + wins.joinToString("\n") { "- ${it.optString("t").replace('\n', ' ')}  (🔥${it.optInt("good")})" } + "\n(as com mais 🔥 viralizaram de verdade: priorize o estilo delas)" else ""}
 ${if (flops.isNotEmpty()) "👎 FLOPARAM (evite esse tom e esse assunto):\n" + flops.joinToString("\n") { "- ${it.replace('\n', ' ')}" } else ""}
 ${if (words.isNotEmpty()) "Palavras que aparecem nas que bombam: " + words.joinToString(", ") else ""}
 ${if (mine(c).isNotEmpty()) "LEGENDAS QUE EU ESCREVI — escreva no mesmo estilo (tamanho, jeito de falar, gírias), sem copiar:\n" + mine(c).take(12).joinToString("\n") { "- $it" } else ""}
@@ -172,11 +172,11 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         val sorted = rated.sortedByDescending { photoMean(it) }
         val pick = (sorted.take(6) + sorted.takeLast(4)).distinct().take(10)
         val list = pick.map { o ->
-            val k = when { photoMean(o) > 0.6 -> "good"; photoMean(o) < 0.45 -> "bad"; else -> "meh" }
+            val k = Learn.verdict(o).ifEmpty { "meh" }
             val h = Learn.histText(o)
             Triple(PostQueue.imageFile(c, o.optString("id")), PostQueue.captionOf(o) + (if (h.isNotEmpty()) "  [$h]" else ""), k)
         }
-        val regras = Ai.learnCombos(c, list, Learn.repostStats(rated) + "\n" + Learn.hourStats(rated))
+        val regras = Ai.learnCombos(c, list, Learn.repostStats(rated) + "\n" + Learn.hourStats(rated) + "\n💎 = VIRALIZOU (muito acima do normal): dê peso máximo ao que essas têm em comum.")
         if (regras.isNotEmpty()) p(c).edit().putString("combo_regras", JSONArray(regras).toString()).putLong("combo_at", System.currentTimeMillis()).apply()
         return regras
     }
@@ -184,7 +184,7 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
     fun photoMean(o: org.json.JSONObject): Double {
         val g = o.optInt("good"); val m = o.optInt("meh"); val b = o.optInt("bad")
         val legacy = o.optString("nota").takeIf { g + m + b == 0 } // notas antigas (antes de acumular)
-        val gg = g + (if (legacy == "good") 1 else 0); val mm = m + (if (legacy == "meh") 1 else 0); val bb = b + (if (legacy == "bad") 1 else 0)
+        val gg = g + (if (legacy == "good") 1 else if (legacy == "top") 2 else 0); val mm = m + (if (legacy == "meh") 1 else 0); val bb = b + (if (legacy == "bad") 1 else 0)
         return (gg + 0.5 * mm + 1.0) / (gg + mm + bb + 2.0)
     }
 
@@ -212,7 +212,7 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         val w = cand.map { o ->
             val posted = o.optString("status") == "postada"
             val idx = rec.indexOf(o.optString("id"))
-            val score = Math.exp(5.0 * (Learn.chanceMean(c, o) - 0.5))
+            val score = Math.exp(5.0 * (Learn.chanceMean(c, o) - 0.5)) * (1.0 + 0.6 * o.optInt("top"))
             score * (if (!posted) 2.0 else 1.0) * (if (idx < 0) 1.5 else 1.0 + idx / 10.0)
         }
         var r = Math.random() * w.sum(); var o = cand.last()

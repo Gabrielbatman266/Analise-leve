@@ -128,6 +128,14 @@ object RateLater {
         am.set(android.app.AlarmManager.RTC, System.currentTimeMillis() + 12 * 60 * 60 * 1000L, pi)
     }
 
+    /** 💎 Viralizou vale como dois 🔥 em tudo que aprende; guarda também a contagem de 💎. */
+    fun bump(o: JSONObject, k: String, d: Int) {
+        if (k == "top") { o.put("top", maxOf(0, o.optInt("top") + d)); o.put("good", maxOf(0, o.optInt("good") + 2 * d)) }
+        else o.put(k, maxOf(0, o.optInt(k) + d))
+    }
+    /** Repete a nota nos bancos (texto, legenda, música…): 💎 conta como 🔥 duas vezes. */
+    fun times(k: String, f: (String) -> Unit) { if (k == "top") { f("good"); f("good") } else f(k) }
+
     /** Foto do Threads: pergunta como foi 5 h depois do post. */
     fun schedulePhoto(c: Context, id: String) {
         val am = c.getSystemService(android.app.AlarmManager::class.java)
@@ -143,11 +151,12 @@ object RateLater {
         val at = o.optLong("postedAt")
         if (o.optLong("notaAt") == at && o.optString("nota") == k) return
         val prev = if (o.optLong("notaAt") == at) o.optString("nota") else ""
-        if (prev.isEmpty()) { CaptionDB.rate(c, PostQueue.captionOf(o), k); Learn.noteRated(c, "f") }
-        Captions.ratePair(c, id, PostQueue.captionOf(o), k, prev)
+        if (prev.isEmpty()) { times(k) { CaptionDB.rate(c, PostQueue.captionOf(o), it) }; Learn.noteRated(c, "f") }
+        Captions.ratePair(c, id, PostQueue.captionOf(o), if (k == "top") "good" else k, if (prev == "top") "good" else prev)
+        if (k == "top" && prev != "top") Captions.ratePair(c, id, PostQueue.captionOf(o), "good")
         PostQueue.update(c, id) {
-            if (prev.isNotEmpty()) it.put(prev, maxOf(0, it.optInt(prev) - 1)) // trocou a nota deste post
-            it.put(k, it.optInt(k) + 1); it.put("nota", k); it.put("notaAt", at)
+            if (prev.isNotEmpty()) bump(it, prev, -1) // trocou a nota deste post
+            bump(it, k, 1); it.put("nota", k); it.put("notaAt", at)
             Learn.addHist(it, at, k)
         }
     }
@@ -160,15 +169,17 @@ object RateLater {
         val prev = if (o.optLong("notaAt") == at) o.optString("nota") else ""
         if (prev.isEmpty()) {
             // primeira nota deste post: ensina texto, legenda, modelo, música e o vídeo cru de origem
-            CaptionDB.rate(c, o.optString("legenda"), k)
-            OverlayDB.rate(c, o.optString("texto"), k, o.optString("tctx").ifEmpty { o.optString("ctx") })
-            ModelScore.rate(c, o.optString("modelo"), k)
-            MusicPick.rate(c, o.optString("musica"), k)
-            o.optString("proj").takeIf { it.isNotEmpty() }?.let { pj -> Projects.update(c, pj) { it.put(k, it.optInt(k) + 1) } }
+            times(k) { kk ->
+                CaptionDB.rate(c, o.optString("legenda"), kk)
+                OverlayDB.rate(c, o.optString("texto"), kk, o.optString("tctx").ifEmpty { o.optString("ctx") })
+                ModelScore.rate(c, o.optString("modelo"), kk)
+                MusicPick.rate(c, o.optString("musica"), kk)
+            }
+            o.optString("proj").takeIf { it.isNotEmpty() }?.let { pj -> Projects.update(c, pj) { bump(it, k, 1) } }
             Learn.noteRated(c, "v")
         }
         VideoExport.updateLib(c, vid) {
-            if (prev.isNotEmpty()) it.put(prev, maxOf(0, it.optInt(prev) - 1))
+            if (prev.isNotEmpty()) bump(it, prev, -1)
             if (it.optInt("good") + it.optInt("meh") + it.optInt("bad") == 0 && it.optString("nota").isNotEmpty() && prev.isEmpty() && it.optLong("notaAt") == 0L)
                 it.optString("nota").let { old -> it.put(old, 1) } // nota antiga vira contagem
             it.put(k, it.optInt(k) + 1); it.put("nota", k); it.put("notaAt", at)
@@ -194,7 +205,7 @@ class RateReceiver : android.content.BroadcastReceiver() {
             val b = android.app.Notification.Builder(c, "nota").setSmallIcon(android.R.drawable.star_on)
                 .setContentTitle("Como foi esse vídeo?")
                 .setContentText("T: " + o.optString("texto").replace('\n', ' ').take(60))
-                .addAction(act("good", "🔥 Bombou", 1)).addAction(act("meh", "😐 Normal", 2)).addAction(act("bad", "👎 Flopou", 3))
+                .addAction(act("top", "💎 Viralizou", 4)).addAction(act("good", "🔥 Bombou", 1)).addAction(act("bad", "👎 Flopou", 3))
                 .setAutoCancel(true)
             if (th.exists()) android.graphics.BitmapFactory.decodeFile(th.path)?.let { b.setLargeIcon(it) }
             try { nm.notify(nid, b.build()) } catch (e: SecurityException) { }
@@ -202,7 +213,7 @@ class RateReceiver : android.content.BroadcastReceiver() {
         }
         RateLater.apply(c, vid, i.action ?: return)
         nm.cancel(nid)
-        android.widget.Toast.makeText(c, if (i.action == "good") "Anotado: mais vídeos assim" else if (i.action == "bad") "Anotado: menos vídeos assim" else "Anotado", android.widget.Toast.LENGTH_SHORT).show()
+        android.widget.Toast.makeText(c, if (i.action == "top") "💎 Anotado: muito mais vídeos assim" else if (i.action == "good") "Anotado: mais vídeos assim" else if (i.action == "bad") "Anotado: menos vídeos assim" else "Anotado", android.widget.Toast.LENGTH_SHORT).show()
     }
 
     private fun photo(c: Context, i: Intent, id: String, nm: android.app.NotificationManager) {
@@ -217,7 +228,7 @@ class RateReceiver : android.content.BroadcastReceiver() {
             val b = android.app.Notification.Builder(c, "nota").setSmallIcon(android.R.drawable.star_on)
                 .setContentTitle("Como foi essa foto no Threads?")
                 .setContentText(PostQueue.captionOf(o).replace('\n', ' ').take(70))
-                .addAction(act("good", "🔥 Bombou", 1)).addAction(act("meh", "😐 Normal", 2)).addAction(act("bad", "👎 Flopou", 3))
+                .addAction(act("top", "💎 Viralizou", 4)).addAction(act("good", "🔥 Bombou", 1)).addAction(act("bad", "👎 Flopou", 3))
                 .setAutoCancel(true)
             try { android.graphics.BitmapFactory.decodeFile(PostQueue.imageFile(c, id).path, android.graphics.BitmapFactory.Options().apply { inSampleSize = 4 })?.let { b.setLargeIcon(it) } } catch (e: Exception) { }
             try { nm.notify(nid, b.build()) } catch (e: SecurityException) { }
@@ -225,7 +236,7 @@ class RateReceiver : android.content.BroadcastReceiver() {
         }
         RateLater.applyPhoto(c, id, i.action ?: return)
         nm.cancel(nid)
-        android.widget.Toast.makeText(c, if (i.action == "good") "Anotado: essa volta mais vezes" else if (i.action == "bad") "Anotado: vou evitar assim" else "Anotado", android.widget.Toast.LENGTH_SHORT).show()
+        android.widget.Toast.makeText(c, if (i.action == "top") "💎 Anotado: essa vira prioridade máxima" else if (i.action == "good") "Anotado: essa volta mais vezes" else if (i.action == "bad") "Anotado: vou evitar assim" else "Anotado", android.widget.Toast.LENGTH_SHORT).show()
     }
 }
 

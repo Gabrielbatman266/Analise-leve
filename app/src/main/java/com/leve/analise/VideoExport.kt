@@ -317,7 +317,7 @@ object VideoExport {
         val idx = rec.indexOf(o.optString("id"))
         val pj = projs[o.optString("proj")]
         val origin = if (pj == null) 1.0 else Math.exp(2.0 * (Learn.mean(pj) - 0.5))
-        return Math.exp(5.0 * (Learn.chanceMean(c, o) - 0.5)) * (if (o.optInt("posts") == 0) 2.0 else 1.0) * (if (idx < 0) 1.5 else 1.0 + idx / 10.0) * origin
+        return Math.exp(5.0 * (Learn.chanceMean(c, o) - 0.5)) * (1.0 + 0.6 * o.optInt("top")) * (if (o.optInt("posts") == 0) 2.0 else 1.0) * (if (idx < 0) 1.5 else 1.0 + idx / 10.0) * origin
     }
 
     /** Candidatos agora: o que saiu há pouco espera (o que bombou espera só 2 posts) e o mesmo vídeo cru não sai em seguida. */
@@ -325,7 +325,7 @@ object VideoExport {
         val k = minOf(lib.size - 1, maxOf(minOf(3, lib.size - 1), (lib.size * 0.6).toInt()), 20)
         var pool = lib.filter { o ->
             val idx = rec.indexOf(o.optString("id"))
-            idx < 0 || idx >= (if (Learn.mean(o) > 0.6) minOf(2, k) else k)
+            idx < 0 || idx >= (if (Learn.isWin(o)) minOf(2, k) else k)
         }.ifEmpty { lib.filter { it.optString("id") != rec.firstOrNull() }.ifEmpty { lib } }
         val origins = lib.map { origin(it) }.distinct().size
         val avoid = recentO.take(minOf(3, maxOf(0, origins - 1)))
