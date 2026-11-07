@@ -108,10 +108,11 @@ class MainActivity : Activity() {
     }
 
     private var keysRedraw: (() -> Unit)? = null
+    private var tnRedraw: (() -> Unit)? = null
 
     override fun onResume() {
         super.onResume()
-        PostBar.update(this); keysRedraw?.invoke()
+        PostBar.update(this); keysRedraw?.invoke(); tnRedraw?.invoke()
         ui.postDelayed({ askPending() }, 600)
         ui.postDelayed({ if (::insta.isInitialized) insta.maybeRefill() }, 2500)
         Updater.schedule(this)
@@ -329,6 +330,30 @@ class MainActivity : Activity() {
             Store.prefs(this).edit().putInt("clip_ttl", if (o == "Nunca") 0 else o.substringBefore(' ').toInt()).apply()
         }
         text("Com o Leve Teclado, a legenda também some do histórico do teclado no tempo que você escolher lá. E no Threads, tudo que você copia vai sozinho pro banco de legendas (ligue em Leve Teclado › Post Leve).", 12f, MUTED, parent = cg)
+
+        val ctn = card("🔕 Notificações do Threads")
+        text("Some com as notificações de curtida pequenas. Só aparece quando um post passa do limite, e aí o Post Leve avisa com som e marca o post como 🔥 sozinho.", 13f, MUTED, parent = ctn)
+        val tnBtn = button("", ctn) { }
+        val tnSt = text("", 12f, OK, parent = ctn)
+        fun tnT() {
+            val acc = ThreadsNotif.hasAccess(this); val on = ThreadsNotif.on(this) && acc
+            tnBtn.text = if (!acc) "1. Liberar acesso às notificações" else if (on) "✓ Filtro ligado (toque pra desligar)" else "Ligar o filtro"
+            tnSt.text = if (on) "Hoje: ${ThreadsNotif.silencedToday(this)} notificação(ões) silenciada(s)" else ""
+        }
+        tnBtn.setOnClickListener {
+            if (!ThreadsNotif.hasAccess(this)) { ThreadsNotif.setOn(this, true); toast("Ative o Post Leve em \"Acesso a notificações\" e volte"); ThreadsNotif.openAccess(this) }
+            else { ThreadsNotif.setOn(this, !ThreadsNotif.on(this)); tnT() }
+        }
+        tnT(); tnRedraw = { tnT() }
+        text("Aparecer só com", 12f, MUTED, parent = ctn)
+        chips(ctn, listOf("20", "50", "100", "500"), { ThreadsNotif.min(this).toString() }) { ThreadsNotif.setMin(this, it.toInt()) }
+        text("curtidas ou mais", 12f, MUTED, parent = ctn)
+        text("O que silenciar", 12f, MUTED, parent = ctn)
+        chips(ctn, listOf("Só curtidas", "Tudo do Threads"), { if (ThreadsNotif.mode(this) == "all") "Tudo do Threads" else "Só curtidas" }) { ThreadsNotif.setMode(this, if (it == "Tudo do Threads") "all" else "likes") }
+        text("Passou do limite = 🔥 automático no post", 12f, MUTED, parent = ctn)
+        chips(ctn, listOf("Ligado", "Desligado"), { if (ThreadsNotif.autoRate(this)) "Ligado" else "Desligado" }) { ThreadsNotif.setAutoRate(this, it == "Ligado") }
+        button("2. Deixar o Threads sem som (recomendado)", ctn) { ThreadsNotif.openThreadsSettings(this) }
+        text("O filtro apaga a notificação, mas o som do Threads pode tocar antes. Deixe as notificações do Threads silenciosas: quem toca é o aviso do Post Leve quando bomba. O 🔥 automático só funciona quando a notificação mostra um trecho da legenda.", 11f, MUTED, parent = ctn)
 
         val cu = card("Atualizações")
         text("Versão instalada: ${Updater.mineName(this)}", 13f, FG, parent = cu)

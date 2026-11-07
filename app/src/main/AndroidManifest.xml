@@ -104,6 +104,15 @@
         <receiver android:name=".DailyReceiver" android:exported="false" />
         <receiver android:name=".PostBarReceiver" android:exported="false" />
         <receiver android:name=".ClipCleanReceiver" android:exported="false" />
+        <service
+            android:name=".ThreadsListener"
+            android:exported="true"
+            android:label="Post Leve: filtro do Threads"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
         <!-- o Leve Teclado manda pra cá o que você copia no Threads -->
         <receiver android:name=".TextInReceiver" android:exported="true">
             <intent-filter>
