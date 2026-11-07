@@ -322,6 +322,11 @@ class MainActivity : Activity() {
                 Thread { val n = GalleryClean.purgeAll(this); ui.post { purge.text = "🧹 Apagar da galeria as cópias antigas do app"; toast("$n cópia(s) apagada(s) da galeria. Tudo continua no app.") } }.start() }
         }
         text("Apaga só as cópias que o app criou (pastas PostLeve, PostLeve Ref, PostLeve Flow, músicas). Seus esboços, vídeos prontos, músicas e fotos de referência continuam no app.", 12f, MUTED, parent = cg)
+        text("📋 Apagar a legenda copiada (área de transferência) depois de", 12f, MUTED, parent = cg)
+        chips(cg, listOf("2 min", "10 min", "30 min", "Nunca"), { ClipSync.ttl(this).let { if (it == 0) "Nunca" else "$it min" } }) { o ->
+            Store.prefs(this).edit().putInt("clip_ttl", if (o == "Nunca") 0 else o.substringBefore(' ').toInt()).apply()
+        }
+        text("Com o Leve Teclado, a legenda também some do histórico do teclado no tempo que você escolher lá. E no Threads, tudo que você copia vai sozinho pro banco de legendas (ligue em Leve Teclado › Post Leve).", 12f, MUTED, parent = cg)
 
         val cu = card("Atualizações")
         text("Versão instalada: ${Updater.mineName(this)}", 13f, FG, parent = cu)
@@ -411,7 +416,7 @@ class MainActivity : Activity() {
 
     private fun copyCaption(t: String) {
         if (t.isBlank()) return
-        try { getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("legenda", t)) } catch (e: Exception) { }
+        ClipSync.copy(this, t)
         Captions.addMine(this, t)
     }
 

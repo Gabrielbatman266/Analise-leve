@@ -1939,7 +1939,7 @@ class InstaEditor(private val a: MainActivity) {
     private fun post(id: String, caption: String) {
         val cap = caption.trim()
         if (cap.isNotEmpty()) {
-            try { a.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("legenda", cap)) } catch (e: Exception) { }
+            ClipSync.copy(a, cap)
             Captions.addMine(a, cap)
         }
         // posta direto do app: nada é baixado nem copiado pra galeria

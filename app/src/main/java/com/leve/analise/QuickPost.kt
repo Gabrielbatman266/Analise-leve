@@ -105,7 +105,7 @@ class PostVideoActivity : android.app.Activity() {
         }
         val o = VideoExport.library(this).firstOrNull { it.optString("id") == id }
         val cap = VideoExport.captionFor(this, o, false)
-        if (cap.isNotEmpty()) try { getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("legenda", cap)) } catch (e: Exception) { }
+        if (cap.isNotEmpty()) ClipSync.copy(this, cap)
         VideoExport.updateLib(this, id) { it.put("legenda", cap) }
         val uri = PostQueue.uri(id).buildUpon().path("/$id.mp4").build()
         try {

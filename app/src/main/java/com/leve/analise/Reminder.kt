@@ -135,9 +135,7 @@ class PostActivity : Activity() {
             finish(); return
         }
         val cap = pick?.second ?: intent.getStringExtra("caption") ?: PostQueue.captionOf(item)
-        try {
-            getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("legenda", cap))
-        } catch (e: Exception) { }
+        ClipSync.copy(this, cap)
         PostQueue.putInGallery(this, id) // fica em primeiro na galeria; a cópia anterior é apagada
         try {
             startActivity(PostQueue.shareIntent(this, id, cap))

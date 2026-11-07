@@ -103,6 +103,13 @@
         <receiver android:name=".CleanReceiver" android:exported="false" />
         <receiver android:name=".DailyReceiver" android:exported="false" />
         <receiver android:name=".PostBarReceiver" android:exported="false" />
+        <receiver android:name=".ClipCleanReceiver" android:exported="false" />
+        <!-- o Leve Teclado manda pra cá o que você copia no Threads -->
+        <receiver android:name=".TextInReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="com.leve.analise.ADD_TEXT" />
+            </intent-filter>
+        </receiver>
 
         <service
             android:name=".FloatService"
