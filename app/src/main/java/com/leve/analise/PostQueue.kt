@@ -28,19 +28,22 @@ object PostQueue {
     fun imageFile(c: Context, id: String) = File(dir(c), "$id.jpg")
     fun stamp(c: Context): Long = file(c).lastModified()
 
-    fun load(c: Context): MutableList<JSONObject> = synchronized(lock) {
-        val f = file(c)
-        if (!f.exists()) return mutableListOf()
-        try {
-            val a = JSONArray(f.readText())
-            (0 until a.length()).map { a.getJSONObject(it) }.toMutableList()
-        } catch (e: Exception) { mutableListOf() }
+    fun load(c: Context): MutableList<JSONObject> = synchronized(lock) { JsonFile.read(file(c)) }
+
+    private fun save(c: Context, list: List<JSONObject>) {
+        synchronized(lock) { JsonFile.write(file(c), list) }
+        QuickPost.updateWidgets(c)
     }
 
-    private fun save(c: Context, list: List<JSONObject>) = synchronized(lock) {
-        val a = JSONArray(); list.forEach { a.put(it) }
-        file(c).writeText(a.toString())
-        QuickPost.updateWidgets(c)
+    /** Volta pra fila fotos cujo arquivo existe mas sumiram da lista. */
+    fun restore(c: Context, lost: List<Pair<String, Long>>): Int = synchronized(lock) {
+        val l = load(c); val have = l.map { it.optString("id") }.toSet()
+        var n = 0
+        lost.filter { it.first !in have }.forEach { (id, at) ->
+            l.add(JSONObject().put("id", id).put("status", "pronta").put("legendas", JSONArray(Captions.randomCaptions(c, 5)))
+                .put("ia", false).put("at", at).put("usos", 0).put("recuperada", true)); n++
+        }
+        if (n > 0) save(c, l); n
     }
 
     /** Salva a foto limpa (JPEG novo, sem EXIF/GPS) e coloca na fila esperando legendas. */

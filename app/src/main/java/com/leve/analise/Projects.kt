@@ -15,18 +15,26 @@ object Projects {
     fun srcFile(c: Context, id: String, photo: Boolean) = File(dir(c, id), if (photo) "src.jpg" else "src.mp4")
     fun thumb(c: Context, id: String) = File(dir(c, id), "thumb.jpg")
 
-    fun list(c: Context): MutableList<JSONObject> = synchronized(lock) {
-        try { val a = JSONArray(listFile(c).readText()); (0 until a.length()).map { a.getJSONObject(it) }.toMutableList() }
-        catch (e: Exception) { mutableListOf() }
-    }
+    fun list(c: Context): MutableList<JSONObject> = synchronized(lock) { JsonFile.read(listFile(c)) }
 
     private fun save(c: Context, l: List<JSONObject>) = synchronized(lock) {
-        val a = JSONArray(); l.sortedByDescending { it.optLong("updated") }.forEach { a.put(it) }
-        listFile(c).writeText(a.toString())
+        JsonFile.write(listFile(c), l.sortedByDescending { it.optLong("updated") })
+    }
+
+    /** Volta pra lista vídeos crus cuja pasta existe mas sumiram. */
+    fun restore(c: Context): Int = synchronized(lock) {
+        val l = list(c); val have = l.map { it.optString("id") }.toSet(); var n = 0
+        root(c).listFiles()?.filter { it.isDirectory && it.name !in have }?.forEach { d ->
+            val photo = File(d, "src.jpg").exists()
+            if (!photo && !File(d, "src.mp4").exists()) return@forEach
+            l.add(JSONObject().put("id", d.name).put("photo", photo).put("created", d.lastModified()).put("updated", d.lastModified()).put("recuperado", true)); n++
+        }
+        if (n > 0) save(c, l); n
     }
 
     fun create(c: Context, photo: Boolean): String = synchronized(lock) {
-        val id = "p" + System.currentTimeMillis().toString(36)
+        var id = "p" + System.currentTimeMillis().toString(36)
+        while (File(root(c), id).exists()) id += (0..9).random()
         val l = list(c)
         l.add(JSONObject().put("id", id).put("photo", photo).put("created", System.currentTimeMillis()).put("updated", System.currentTimeMillis()))
         save(c, l); id

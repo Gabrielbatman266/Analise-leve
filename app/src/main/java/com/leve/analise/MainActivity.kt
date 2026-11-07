@@ -123,6 +123,11 @@ class MainActivity : Activity() {
         Thread {
             PostQueue.cleanGallery(this, false)
             GalleryClean.sweep(this)
+            val rec = Recover.run(this)
+            if (rec.sum() > 0) ui.post {
+                toast("Recuperei: " + listOf(rec[0] to "foto(s) da fila", rec[1] to "vídeo(s) prontos", rec[2] to "vídeo(s) crus", rec[3] to "referência(s)").filter { it.first > 0 }.joinToString(", ") { "${it.first} ${it.second}" })
+                postStamp = -1L; refresh(); if (::insta.isInitialized) insta.refreshLists(); if (::refs.isInitialized) refs.renderPhotos()
+            }
             val nr = ThreadsRefs.scan(this)
             if (nr > 0) ui.post { toast("📌 $nr foto(s) do Threads nas Referências"); if (::refs.isInitialized) refs.renderPhotos() }
             val n = FolderScan.scan(this)

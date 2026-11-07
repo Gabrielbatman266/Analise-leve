@@ -519,15 +519,23 @@ object VideoExport {
     fun videoDir(c: Context) = File(c.filesDir, "videos").apply { mkdirs() }
     private fun libFile(c: Context) = File(c.filesDir, "videos.json")
 
-    fun library(c: Context): MutableList<JSONObject> = try {
-        val a = JSONArray(libFile(c).readText()); (0 until a.length()).map { a.getJSONObject(it) }.toMutableList()
-    } catch (e: Exception) { mutableListOf() }
+    fun library(c: Context): MutableList<JSONObject> = JsonFile.read(libFile(c))
 
-    private fun saveLib(c: Context, l: List<JSONObject>) { val a = JSONArray(); l.forEach { a.put(it) }; libFile(c).writeText(a.toString()) }
+    private fun saveLib(c: Context, l: List<JSONObject>) = JsonFile.write(libFile(c), l)
+
+    /** Volta pra fila vídeos cujo arquivo existe mas sumiram da lista. */
+    fun restore(c: Context, lost: List<Pair<String, Long>>): Int = JsonFile.edit(libFile(c)) { l ->
+        val have = l.map { it.optString("id") }.toSet(); var n = 0
+        lost.filter { it.first !in have }.forEach { (id, at) ->
+            l.add(JSONObject().put("id", id).put("legenda", "").put("at", at).put("posts", 0).put("recuperado", true)); n++
+        }
+        n
+    }
 
     /** Guarda o vídeo pronto no app (com miniatura e legenda) e uma cópia na galeria. */
     fun addToLibrary(c: Context, tmp: File, caption: String, imported: Boolean = false): String {
-        val id = "v" + System.currentTimeMillis().toString(36)
+        var id = "v" + System.currentTimeMillis().toString(36)
+        while (File(videoDir(c), "$id.mp4").exists()) id += (0..9).random()
         val f = File(videoDir(c), "$id.mp4")
         tmp.copyTo(f, true); tmp.delete()
         try {
@@ -539,15 +547,13 @@ object VideoExport {
             r.release()
         } catch (e: Exception) { }
         if (Store.prefs(c).getBoolean("save_gallery", false)) saveToGallery(c, f, false)
-        val l = library(c)
-        l.add(0, JSONObject().put("id", id).put("legenda", caption).put("at", System.currentTimeMillis()).put("posts", 0).put("importado", imported))
-        saveLib(c, l)
+        JsonFile.edit(libFile(c)) { l -> l.add(0, JSONObject().put("id", id).put("legenda", caption).put("at", System.currentTimeMillis()).put("posts", 0).put("importado", imported)) }
         return id
     }
 
-    fun updateLib(c: Context, id: String, f: (JSONObject) -> Unit) { val l = library(c); l.firstOrNull { it.optString("id") == id }?.let(f); saveLib(c, l) }
+    fun updateLib(c: Context, id: String, f: (JSONObject) -> Unit) { JsonFile.edit(libFile(c)) { l -> l.firstOrNull { it.optString("id") == id }?.let(f) } }
     fun removeLib(c: Context, id: String) {
-        saveLib(c, library(c).filter { it.optString("id") != id })
+        JsonFile.edit(libFile(c)) { l -> l.removeAll { it.optString("id") == id } }
         File(videoDir(c), "$id.mp4").delete(); File(videoDir(c), "$id.jpg").delete()
     }
 

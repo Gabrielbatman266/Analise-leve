@@ -25,13 +25,8 @@ object Refs {
     private fun linksFile(c: Context) = File(c.filesDir, "refs_links.json")
     fun thumbDir(c: Context) = File(c.filesDir, "refs_thumbs").apply { mkdirs() }
 
-    fun links(c: Context): MutableList<JSONObject> = synchronized(lock) {
-        try { val a = JSONArray(linksFile(c).readText()); (0 until a.length()).map { a.getJSONObject(it) }.toMutableList() }
-        catch (e: Exception) { mutableListOf() }
-    }
-    private fun saveLinks(c: Context, l: List<JSONObject>) = synchronized(lock) {
-        val a = JSONArray(); l.forEach { a.put(it) }; linksFile(c).writeText(a.toString())
-    }
+    fun links(c: Context): MutableList<JSONObject> = synchronized(lock) { JsonFile.read(linksFile(c)) }
+    private fun saveLinks(c: Context, l: List<JSONObject>) = synchronized(lock) { JsonFile.write(linksFile(c), l) }
     fun updateLink(c: Context, id: String, f: (JSONObject) -> Unit) = synchronized(lock) {
         val l = links(c); l.firstOrNull { it.optString("id") == id }?.let(f); saveLinks(c, l)
     }
@@ -129,12 +124,16 @@ object Refs {
     fun photoFile(c: Context, id: String) = File(photoDir(c), "$id.jpg")
     fun photoThumb(c: Context, id: String) = File(photoDir(c), "${id}_t.jpg")
 
-    fun photos(c: Context): MutableList<JSONObject> = synchronized(lock) {
-        try { val a = JSONArray(photosFile(c).readText()); (0 until a.length()).map { a.getJSONObject(it) }.toMutableList() }
-        catch (e: Exception) { mutableListOf() }
-    }
-    private fun savePhotos(c: Context, l: List<JSONObject>) = synchronized(lock) {
-        val a = JSONArray(); l.forEach { a.put(it) }; photosFile(c).writeText(a.toString())
+    fun photos(c: Context): MutableList<JSONObject> = synchronized(lock) { JsonFile.read(photosFile(c)) }
+    private fun savePhotos(c: Context, l: List<JSONObject>) = synchronized(lock) { JsonFile.write(photosFile(c), l) }
+
+    /** Volta pro estoque fotos de referência cujo arquivo existe mas sumiram da lista. */
+    fun restorePhotos(c: Context): Int = synchronized(lock) {
+        val l = photos(c); val have = l.map { it.optString("id") }.toSet(); var n = 0
+        photoDir(c).listFiles { f -> f.name.endsWith(".jpg") && !f.name.endsWith("_t.jpg") }?.filter { it.nameWithoutExtension !in have }?.forEach { f ->
+            l.add(JSONObject().put("id", f.nameWithoutExtension).put("at", f.lastModified()).put("tags", JSONArray()).put("note", "").put("prompt", "").put("usos", 0).put("recuperada", true)); n++
+        }
+        if (n > 0) savePhotos(c, l); n
     }
     fun updatePhoto(c: Context, id: String, f: (JSONObject) -> Unit) = synchronized(lock) {
         val l = photos(c); l.firstOrNull { it.optString("id") == id }?.let(f); savePhotos(c, l)
