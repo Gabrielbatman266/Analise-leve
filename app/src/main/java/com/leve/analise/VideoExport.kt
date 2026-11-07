@@ -291,7 +291,9 @@ object VideoExport {
     fun captionFor(c: Context, o: JSONObject?, fresh: Boolean): String {
         if (o != null && (o.optBoolean("semleg") || Contexts.noCaption(c, o.optString("ctx")))) return ""
         val old = o?.optString("legenda").orEmpty()
-        return if (!fresh && old.isNotBlank() && o?.optInt("posts") == 0) old else Captions.randomCaption(c, listOf(old))
+        val cap = if (!fresh && old.isNotBlank() && o?.optInt("posts") == 0 && old.trim() !in Captions.recentCaps(c).take(6)) old else Captions.randomCaption(c, listOf(old))
+        Captions.remember(c, null, cap)
+        return cap
     }
 
     /** Origem de um vídeo pronto: o vídeo cru de onde ele saiu (vídeos importados contam como origem própria). */

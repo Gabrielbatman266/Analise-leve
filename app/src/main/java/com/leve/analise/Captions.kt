@@ -92,18 +92,53 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
      * Sorteio do post: uma foto aleatória (as ainda não postadas primeiro; se todas já foram, reusa)
      * e uma legenda aleatória entre as dela e as que você escreveu.
      */
+    // ---------- variedade: o que saiu por último não sai de novo logo em seguida
+    private fun recent(c: Context, k: String): List<String> = try {
+        val a = JSONArray(p(c).getString(k, "[]")); (0 until a.length()).map { a.optString(it) }
+    } catch (e: Exception) { emptyList() }
+    private fun pushRecent(c: Context, k: String, v: String, max: Int) {
+        if (v.isBlank()) return
+        val l = (listOf(v) + recent(c, k).filter { it != v }).take(max)
+        p(c).edit().putString(k, JSONArray(l).toString()).apply()
+    }
+    fun recentCaps(c: Context) = recent(c, "rec_caps")
+    fun recentPhotos(c: Context) = recent(c, "rec_fotos")
+    /** Guarda o que acabou de sair (foto + legenda) pra não repetir em seguida. */
+    fun remember(c: Context, photoId: String?, cap: String?) {
+        photoId?.let { pushRecent(c, "rec_fotos", it, 40) }
+        cap?.let { pushRecent(c, "rec_caps", it.trim(), 30) }
+    }
+
+    /**
+     * Sorteio do post: foto e legenda variadas.
+     * - fotos que saíram há pouco ficam de fora (até ~60% da fila, no máximo 20);
+     * - foto nova tem mais chance; a que bombou pode voltar, mas só depois de outras;
+     * - legenda: nunca uma das últimas (até 12); a que bombou tem mais chance.
+     */
     fun randomPick(c: Context): Pair<String, String>? {
         val all = PostQueue.load(c).filter { PostQueue.imageFile(c, it.optString("id")).exists() }
         if (all.isEmpty()) return null
-        val fresh = all.filter { it.optString("status") != "postada" }
-        val o = (if (fresh.isNotEmpty()) fresh else all).random()
+        val rec = recentPhotos(c)
+        val k = minOf(all.size - 1, maxOf(minOf(3, all.size - 1), (all.size * 0.6).toInt()), 20)
+        val block = rec.take(k).toSet()
+        val cand = all.filter { it.optString("id") !in block }.ifEmpty { all }
+        val w = cand.map { o ->
+            val posted = o.optString("status") == "postada"
+            val idx = rec.indexOf(o.optString("id"))
+            (if (!posted) 3.0 else 1.0) * (if (idx < 0) 1.5 else 1.0 + idx / 10.0)  // mais tempo sem sair = mais chance
+        }
+        var r = Math.random() * w.sum(); var o = cand.last()
+        for (i in cand.indices) { r -= w[i]; if (r <= 0) { o = cand[i]; break } }
         val own = o.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
+        val avoid = recentCaps(c).take(12)
         val pool = (own + mine(c)).filter { it.isNotBlank() }.distinct()
-        val cap = (if (pool.isNotEmpty()) CaptionDB.pick(c, pool) else null) ?: randomCaption(c)
+        val cap = (if (pool.isNotEmpty()) CaptionDB.pick(c, pool, avoid) else null) ?: randomCaption(c, avoid)
+        remember(c, o.optString("id"), cap)
         return o.optString("id") to cap
     }
-    /** Legenda sem IA: sorteia das suas (como estão) ou das prontas (com o final de interação). */
-    fun randomCaption(c: Context, avoid: Collection<String> = emptyList()): String {
+    /** Legenda sem IA: sorteia das suas (como estão) ou das prontas (com o final de interação), fugindo das últimas. */
+    fun randomCaption(c: Context, avoid0: Collection<String> = emptyList()): String {
+        val avoid = avoid0 + recentCaps(c).take(12)
         if (mine(c).isNotEmpty() && Math.random() < 0.7) CaptionDB.pick(c, null, avoid)?.let { return it }
         val base = Ai.OFFLINE.filter { o -> avoid.none { it.startsWith(o) } }.ifEmpty { Ai.OFFLINE }
         return withCta(c, listOf(base.random())).first()

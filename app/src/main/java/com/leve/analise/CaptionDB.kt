@@ -109,7 +109,12 @@ object CaptionDB {
         val av = avoid.map { norm(it) }.toSet()
         val pool = if (candidates != null) candidates.filter { norm(it) !in av }.map { find(c, it) ?: entry(it, "ia") }
                    else load(c).filter { it.optString("src") != "viral" && norm(it.optString("t")) !in av }
-        return pool.maxByOrNull { sample(it) }?.optString("t")
+        if (pool.isEmpty()) return null
+        // sorteio ponderado: legenda que bombou tem mais chance, mas todas podem sair
+        val w = pool.map { o -> val m = mean(o); (m * m + 0.08) / (1.0 + 0.15 * ln(1.0 + o.optInt("uses"))) }
+        var r = Math.random() * w.sum()
+        for (i in pool.indices) { r -= w[i]; if (r <= 0) return pool[i].optString("t") }
+        return pool.last().optString("t")
     }
 
     fun top(c: Context, n: Int) = load(c).filter { it.optInt("good") + it.optInt("meh") + it.optInt("bad") > 0 }

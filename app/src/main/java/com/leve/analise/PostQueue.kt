@@ -116,8 +116,10 @@ object PostQueue {
     fun uri(id: String): Uri = Uri.parse("content://$AUTH/$id.jpg")
 
     /** Foto + legenda juntas. Vai direto pro Threads quando ele está instalado. */
-    fun shareIntent(c: Context, id: String, caption: String): Intent =
-        VideoExport.shareTo(c, uri(id), "image/jpeg", THREADS, listOf("share", "compose", "post"), caption)
+    fun shareIntent(c: Context, id: String, caption: String): Intent {
+        Captions.remember(c, id, caption) // o que sai agora não volta logo em seguida
+        return VideoExport.shareTo(c, uri(id), "image/jpeg", THREADS, listOf("share", "compose", "post"), caption)
+    }
 
     // ---------- galeria: só uma cópia, sempre a mais recente ----------
     fun galleryOn(c: Context) = Store.prefs(c).getBoolean("gallery_first", true)
