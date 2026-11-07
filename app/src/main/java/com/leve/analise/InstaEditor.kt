@@ -406,6 +406,13 @@ class InstaEditor(private val a: MainActivity) {
         a.button("⚡ Exportar vários de uma vez", cp, primary = true) { exportManyDialog() }
         tvMany = a.text("", 13f, a.OK, parent = cp)
         a.button("＋ Começar um novo", cp) { newProject(); showSection(0) }
+        val rr0 = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        cp.addView(rr0, a.lpMatch())
+        a.button("✨ Separar com IA", rr0, weight = true) { classifyRaw() }
+        a.button("🏷 Contextos", rr0, weight = true) { showSection(4); ui.postDelayed({ if (::ctxCard.isInitialized) a.scrollTo(ctxCard) }, 150) }
+        tvRaw = a.text("Separe os crus por contexto (Academia, Praia, Espelho…): cada um só recebe textos que combinam com ele.", 12f, a.MUTED, parent = cp)
+        rawFilter = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        cp.addView(rawFilter, a.lpMatch())
         projBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         cp.addView(projBox, a.lpMatch())
         renderProjects()
@@ -650,6 +657,9 @@ class InstaEditor(private val a: MainActivity) {
         a.chips(ca, listOf("Modelo sorteado (aprende)", "Do jeito de cada cru"), { if (Store.prefs(a).getBoolean("auto_model", true)) "Modelo sorteado (aprende)" else "Do jeito de cada cru" }) {
             Store.prefs(a).edit().putBoolean("auto_model", it.startsWith("Modelo")).apply()
         }
+        a.text("Produzir de qual contexto", 12f, a.MUTED, parent = ca)
+        autoCtxBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        ca.addView(autoCtxBox, a.lpMatch())
         btnAuto = a.button("🤖 Produzir agora", ca, primary = true) { produceNow(Store.prefs(a).getInt("auto_n", 5)) }
         tvAuto = a.text("", 13f, a.OK, parent = ca)
         a.text("Manter sempre vídeos prontos (repõe sozinho quando você abre o app)", 12f, a.MUTED, parent = ca)
@@ -658,7 +668,9 @@ class InstaEditor(private val a: MainActivity) {
         }
 
         val ct = a.card("Textos no vídeo")
-        a.text("O banco das frases que aparecem escritas no vídeo (não é a legenda do post). Enter = nova linha.", 13f, a.MUTED, parent = ct)
+        a.text("O banco das frases que aparecem escritas no vídeo (não é a legenda do post). Escolha o contexto: os textos novos entram nele, e a IA cria pensando nele. Enter = nova linha.", 13f, a.MUTED, parent = ct)
+        txtCtxBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        ct.addView(txtCtxBox, a.lpMatch())
         val etO = EditText(a).apply {
             hint = "Ex.: pov: você parou de rolar\nsó pra me ver"; setTextColor(a.FG); setHintTextColor(a.MUTED); textSize = 15f
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
@@ -671,15 +683,21 @@ class InstaEditor(private val a: MainActivity) {
         ct.addView(tr2, a.lpMatch())
         a.button("Salvar texto", tr2, primary = true, weight = true) {
             val t = etO.text.toString().trim()
-            if (t.isEmpty()) a.toast("Escreva o texto primeiro") else { OverlayDB.add(a, t, "meu"); etO.setText(""); renderOverlays() }
+            if (t.isEmpty()) a.toast("Escreva o texto primeiro") else { OverlayDB.add(a, t, "meu", txtCtx ?: ""); etO.setText(""); renderOverlays() }
         }
-        a.button("✨ Gerar 10 com IA", tr2, weight = true) { genOverlays(10) }
+        a.button("✨ Gerar 10 com IA", tr2, weight = true) { genOverlays(10, txtCtx ?: "") }
         ovBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         ct.addView(ovBox, a.lpMatch())
 
+        ctxCard = a.card("Contextos")
+        a.text("Cada contexto junta crus parecidos. A descrição ajuda a IA a criar textos que combinam (ex.: \"treino na academia, roupa de academia, espelho da academia\").", 13f, a.MUTED, parent = ctxCard)
+        a.button("＋ Novo contexto", ctxCard, primary = true) { newCtxDialog { renderCtx(); renderProjects() } }
+        ctxBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        ctxCard.addView(ctxBox, a.lpMatch())
+
         val cs2 = a.card("O que está bombando")
         tvStats = a.text("", 13f, a.FG, parent = cs2)
-        renderOverlays()
+        renderCtx(); renderOverlays()
 
         // ---------- biblioteca
         a.page = secs[2]
@@ -769,12 +787,136 @@ class InstaEditor(private val a: MainActivity) {
     private lateinit var tvStats: TextView
     private var curModel = ""
 
-    private data class Plan(val proj: String, val text: String, val model: org.json.JSONObject?, val caption: String)
+    private data class Plan(val proj: String, val text: String, val model: org.json.JSONObject?, val caption: String, val ctx: String)
+
+    // ------------------------------------------------------------------ contextos
+
+    private lateinit var tvRaw: TextView
+    private lateinit var rawFilter: LinearLayout
+    private lateinit var autoCtxBox: LinearLayout
+    private lateinit var txtCtxBox: LinearLayout
+    private lateinit var ctxCard: LinearLayout
+    private lateinit var ctxBox: LinearLayout
+    private var rawCtx: String? = null      // filtro dos crus (null = todos)
+    private var txtCtx: String? = ""        // contexto do banco de textos ("" = Geral, null = ver todos)
+
+    /** Linha de etiquetas de contexto. includeAll = mostra "Todos" (valor null). */
+    private fun ctxChips(parent: LinearLayout, includeAll: Boolean, cur: String?, counts: ((String) -> Int)? = null, pick: (String?) -> Unit) {
+        parent.removeAllViews()
+        val sc = android.widget.HorizontalScrollView(a).apply { isHorizontalScrollBarEnabled = false }
+        val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        sc.addView(row); parent.addView(sc, a.lpMatch().apply { topMargin = a.dp(6) })
+        val opts: List<String?> = (if (includeAll) listOf<String?>(null) else emptyList()) + listOf<String?>(Contexts.GERAL) + Contexts.names(a)
+        opts.forEach { n ->
+            val on = n == cur
+            val cnt = if (n != null && counts != null) counts(n) else -1
+            row.addView(TextView(a).apply {
+                text = (if (n == null) "Todos" else Contexts.label(a, n)) + if (cnt > 0) " $cnt" else ""
+                textSize = 13f; setTextColor(if (on) 0xFF1A0A10.toInt() else a.FG); setPadding(a.dp(12), a.dp(6), a.dp(12), a.dp(6))
+                background = GradientDrawable().apply { setColor(if (on) a.ACCENT else 0xFF1C1C24.toInt()); cornerRadius = a.dp(16).toFloat() }
+                setOnClickListener { pick(n) }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { rightMargin = a.dp(6) })
+        }
+        row.addView(TextView(a).apply {
+            text = "＋"; textSize = 15f; setTextColor(a.FG); setPadding(a.dp(14), a.dp(4), a.dp(14), a.dp(4))
+            background = GradientDrawable().apply { setColor(0xFF1C1C24.toInt()); cornerRadius = a.dp(16).toFloat() }
+            setOnClickListener { newCtxDialog { n -> renderCtx(); renderProjects(); pick(n) } }
+        })
+    }
+
+    private fun newCtxDialog(done: (String) -> Unit) {
+        val box = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(a.dp(20), a.dp(8), a.dp(20), 0) }
+        val en = EditText(a).apply { hint = "Nome (ex.: Academia)"; setSingleLine(true) }
+        val ed = EditText(a).apply { hint = "Descrição pra IA (opcional): como são esses vídeos" }
+        box.addView(en); box.addView(ed)
+        AlertDialog.Builder(a).setTitle("Novo contexto").setView(box)
+            .setPositiveButton("Criar") { _, _ -> val n = Contexts.add(a, en.text.toString(), ed.text.toString().trim()); if (n.isNotEmpty()) done(n) }
+            .setNegativeButton("Cancelar", null).show()
+    }
+
+    private fun chooseCtx(cur: String, done: (String) -> Unit) {
+        val names = listOf(Contexts.GERAL) + Contexts.names(a)
+        val labels = names.map { (if (it == cur) "✓ " else "") + Contexts.label(a, it) } + "＋ Novo contexto…"
+        AlertDialog.Builder(a).setTitle("Contexto deste vídeo").setItems(labels.toTypedArray()) { _, i ->
+            if (i < names.size) done(names[i]) else newCtxDialog { done(it) }
+        }.show()
+    }
+
+    /** Atualiza todas as linhas de contexto (Auto, textos, cartão de contextos). */
+    private fun renderCtx() {
+        if (!::ctxBox.isInitialized) return
+        val ac = Store.prefs(a).getString("auto_ctx", null)
+        ctxChips(autoCtxBox, true, ac, counts = { n -> Projects.list(a).count { it.optString("ctx") == n } }) { n ->
+            Store.prefs(a).edit().apply { if (n == null) remove("auto_ctx") else putString("auto_ctx", n) }.apply(); renderCtx()
+        }
+        ctxChips(txtCtxBox, true, txtCtx, counts = { n -> OverlayDB.count(a, n) }) { txtCtx = it; renderOverlays() }
+        ctxBox.removeAllViews()
+        val projs = Projects.list(a)
+        Contexts.list(a).forEach { cx ->
+            val n = cx.optString("name")
+            val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            ctxBox.addView(row, a.lpMatch().apply { topMargin = a.dp(8) })
+            val rated = OverlayDB.all(a, n).filter { OverlayDB.rated(it) > 0 }
+            val nota = if (rated.isEmpty()) "" else " · nota ${(rated.map { OverlayDB.mean(it) }.average() * 100).toInt()}%"
+            row.addView(TextView(a).apply {
+                text = Contexts.label(a, n) + "\n" + "${projs.count { it.optString("ctx") == n }} crus · ${OverlayDB.count(a, n)} textos$nota" +
+                    (cx.optString("desc").takeIf { it.isNotBlank() }?.let { "\n" + it.take(80) } ?: "")
+                textSize = 13f; setTextColor(a.FG)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            small(row, "✨") { genOverlays(10, n) }
+            small(row, "✏") {
+                val ed = EditText(a).apply { setText(cx.optString("desc")); hint = "Como são esses vídeos" }
+                AlertDialog.Builder(a).setTitle("Descrição de $n").setView(ed)
+                    .setPositiveButton("Salvar") { _, _ -> Contexts.update(a, n) { it.put("desc", ed.text.toString().trim()) }; renderCtx() }
+                    .setNegativeButton("Cancelar", null).show()
+            }
+            small(row, "✕") {
+                AlertDialog.Builder(a).setTitle("Apagar o contexto $n?").setMessage("Os crus e os textos dele voltam pro Geral. Nada é apagado.")
+                    .setPositiveButton("Apagar") { _, _ -> Contexts.remove(a, n); if (rawCtx == n) rawCtx = null; if (txtCtx == n) txtCtx = ""; renderCtx(); renderProjects(); renderOverlays() }
+                    .setNegativeButton("Cancelar", null).show()
+            }
+        }
+        if (Contexts.list(a).isEmpty()) a.text("Nenhum contexto ainda. Crie um, ou use ✨ Separar com IA na aba Crus.", 12f, a.MUTED, parent = ctxBox)
+    }
+
+    /** A IA olha um quadro de cada cru sem contexto e separa (cria contextos novos se precisar). */
+    private fun classifyRaw() {
+        if (Ai.key(a).isEmpty()) { a.toast("Coloque a chave da IA em Ajustes"); return }
+        val alvo = Projects.list(a).filter { it.optString("ctx").isEmpty() }
+        if (alvo.isEmpty()) { a.toast("Todos os crus já têm contexto. Toque na etiqueta de um pra trocar."); return }
+        tvRaw.setTextColor(a.MUTED); tvRaw.text = "Separando ${alvo.size} crus…"
+        Thread {
+            var done = 0; var err = ""
+            alvo.chunked(6).forEach { lote ->
+                val frames = lote.mapIndexedNotNull { k, p ->
+                    val photo = p.optBoolean("photo"); val f = Projects.srcFile(a, p.optString("id"), photo)
+                    val b = if (photo) BitmapFactory.decodeFile(f.path, BitmapFactory.Options().apply { inSampleSize = 4 }) else VideoExport.frameAt(a, Uri.fromFile(f), 1500)
+                    if (b == null) null else File(a.cacheDir, "cls_$k.jpg").also { o -> o.outputStream().use { b.compress(Bitmap.CompressFormat.JPEG, 80, it) } }.let { p to it }
+                }
+                if (frames.isEmpty()) return@forEach
+                try {
+                    val ctxs = Contexts.list(a).map { it.optString("name") to it.optString("desc") }
+                    val r = Ai.classify(a, frames.map { it.second }, ctxs)
+                    frames.forEachIndexed { k, (p, _) ->
+                        val name = r.getOrNull(k).orEmpty()
+                        if (name.isNotEmpty()) { val n = Contexts.add(a, name); Projects.update(a, p.optString("id")) { it.put("ctx", n) }; done++ }
+                    }
+                } catch (e: Exception) { err = e.message ?: "erro" }
+                ui.post { tvRaw.text = "Separando… $done de ${alvo.size}"; renderProjects() }
+            }
+            ui.post {
+                tvRaw.setTextColor(if (err.isEmpty()) a.OK else a.ACCENT)
+                tvRaw.text = "$done de ${alvo.size} crus separados." + if (err.isNotEmpty()) " A IA parou: ${err.take(60)}" else " Toque na etiqueta de um cru pra corrigir."
+                renderProjects(); renderCtx()
+            }
+        }.start()
+    }
 
     private fun renderOverlays() {
         if (!::ovBox.isInitialized) return
         ovBox.removeAllViews()
-        val l = OverlayDB.all(a)
+        renderCtxQuiet()
+        val l = OverlayDB.all(a, txtCtx)
         if (l.isEmpty()) a.text("Nenhum texto ainda. Escreva alguns ou toque em ✨ Gerar com IA. Sem nada aqui, a produção usa frases prontas.", 12f, a.MUTED, parent = ovBox)
         if (l.size > 40) a.text("Mostrando 40 de ${l.size}", 12f, a.MUTED, parent = ovBox)
         l.sortedByDescending { OverlayDB.mean(it) * 10 + (if (OverlayDB.rated(it) > 0) 1 else 0) }.take(40).forEach { o ->
@@ -782,13 +924,19 @@ class InstaEditor(private val a: MainActivity) {
             ovBox.addView(row, a.lpMatch().apply { topMargin = a.dp(6) })
             val n = OverlayDB.rated(o)
             val badge = if (n > 0) "${(OverlayDB.mean(o) * 100).toInt()}% · " else ""
+            val oc = o.optString("ctx")
             row.addView(TextView(a).apply {
-                text = "T  " + o.optString("t") + "\n" + badge + "usado ${o.optInt("uses")}x" + (if (o.optInt("good") > 0) " · 🔥${o.optInt("good")}" else "") + (if (o.optInt("bad") > 0) " · 👎${o.optInt("bad")}" else "")
+                setOnLongClickListener { chooseCtx(oc) { n -> OverlayDB.setCtx(a, o.optString("t"), n); renderOverlays() }; true }
+                text = "T  " + o.optString("t") + "\n" + (if (txtCtx == null) Contexts.label(a, oc) + " · " else "") + badge + "usado ${o.optInt("uses")}x" + (if (o.optInt("good") > 0) " · 🔥${o.optInt("good")}" else "") + (if (o.optInt("bad") > 0) " · 👎${o.optInt("bad")}" else "")
                 textSize = 13f; setTextColor(a.FG)
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             small(row, "✕") { OverlayDB.remove(a, o.optString("t")); renderOverlays() }
         }
         renderStats()
+    }
+
+    private fun renderCtxQuiet() {
+        if (::txtCtxBox.isInitialized) ctxChips(txtCtxBox, true, txtCtx, counts = { n -> OverlayDB.count(a, n) }) { txtCtx = it; renderOverlays() }
     }
 
     private fun renderStats() {
@@ -798,20 +946,24 @@ class InstaEditor(private val a: MainActivity) {
         tvStats.text = buildString {
             append("Textos no vídeo:")
             if (tt.isEmpty()) append(" ainda sem avaliação") else tt.forEach { append("\n• ").append(it.optString("t").replace('\n', ' ').take(50)).append("  ${(OverlayDB.mean(it) * 100).toInt()}%") }
+            Contexts.names(a).forEach { n ->
+                OverlayDB.top(a, 1, n).firstOrNull()?.let { append("\n${Contexts.label(a, n)}: ").append(it.optString("t").replace('\n', ' ').take(40)).append("  ${(OverlayDB.mean(it) * 100).toInt()}%") }
+            }
             append("\n\nModelos de edição:")
             if (mm.isEmpty()) append(" ainda sem avaliação") else mm.forEach { append("\n★ ${it.first}  ${it.second}%") }
             append("\n\nMarque 🔥/😐/👎 nos vídeos postados (Prontos). Cada nota ensina o texto, o modelo e a legenda.")
         }
     }
 
-    private fun genOverlays(n: Int, then: (() -> Unit)? = null) {
-        if (::tvAuto.isInitialized) { tvAuto.setTextColor(a.MUTED); tvAuto.text = "Criando textos com a IA…" }
+    private fun genOverlays(n: Int, ctx: String = "", then: (() -> Unit)? = null) {
+        if (::tvAuto.isInitialized) { tvAuto.setTextColor(a.MUTED); tvAuto.text = "Criando textos com a IA" + (if (ctx.isNotEmpty()) " pra $ctx" else "") + "…" }
         Thread {
             val r = try {
-                val good = OverlayDB.top(a, 8).filter { OverlayDB.mean(it) > 0.55 }.map { it.optString("t") }
-                val bad = OverlayDB.worst(a, 6).filter { OverlayDB.mean(it) < 0.45 }.map { it.optString("t") }
-                val l = Ai.overlayTexts(a, n, good, bad, OverlayDB.all(a).map { it.optString("t") })
-                l.forEach { OverlayDB.add(a, it, "ia") }; "${l.size} textos novos no banco"
+                // aprende primeiro com o próprio contexto; completa com o Geral
+                val good = (OverlayDB.top(a, 8, ctx) + OverlayDB.top(a, 4, "")).filter { OverlayDB.mean(it) > 0.55 }.map { it.optString("t") }.distinct().take(10)
+                val bad = (OverlayDB.worst(a, 5, ctx) + OverlayDB.worst(a, 3, "")).filter { OverlayDB.mean(it) < 0.45 }.map { it.optString("t") }.distinct().take(8)
+                val l = Ai.overlayTexts(a, n, good, bad, OverlayDB.all(a, ctx).map { it.optString("t") }, ctx, Contexts.desc(a, ctx))
+                l.forEach { OverlayDB.add(a, it, "ia", ctx) }; "${l.size} textos novos" + (if (ctx.isNotEmpty()) " em ${Contexts.label(a, ctx)}" else " no Geral")
             } catch (e: Exception) { "A IA não respondeu (${e.message?.take(60)}). Usei o que já tem no banco." }
             ui.post {
                 if (::tvAuto.isInitialized) { tvAuto.setTextColor(a.OK); tvAuto.text = r }
@@ -822,7 +974,8 @@ class InstaEditor(private val a: MainActivity) {
 
     /** Monta o plano: cada vídeo cru recebe textos diferentes; modelo e legenda sorteados pelo que bomba. */
     private fun makePlans(n: Int): List<Plan> {
-        val projs = Projects.list(a).filter { Projects.srcFile(a, it.optString("id"), it.optBoolean("photo")).exists() }
+        val only = Store.prefs(a).getString("auto_ctx", null)
+        val projs = Projects.list(a).filter { Projects.srcFile(a, it.optString("id"), it.optBoolean("photo")).exists() && (only == null || it.optString("ctx") == only) }
         if (projs.isEmpty()) return emptyList()
         val lib = VideoExport.library(a)
         val usedCombo = lib.map { it.optString("proj") + "|" + it.optString("texto").trim().lowercase() }.toMutableSet()
@@ -835,9 +988,10 @@ class InstaEditor(private val a: MainActivity) {
             val p = order[k % order.size]; k++
             val pid = p.optString("id")
             val avoid = usedCombo.filter { it.startsWith("$pid|") }.map { it.substringAfter('|') } + out.map { it.text }
-            val t = OverlayDB.pick(a, avoid) ?: OverlayDB.STARTERS.filter { s -> avoid.none { it == s.lowercase() } }.randomOrNull() ?: continue
+            val cx = p.optString("ctx")
+            val t = OverlayDB.pick(a, avoid, cx) ?: OverlayDB.STARTERS.filter { s -> avoid.none { it == s.lowercase() } }.randomOrNull() ?: continue
             usedCombo.add(pid + "|" + t.trim().lowercase())
-            out.add(Plan(pid, t, if (useModel) ModelScore.pick(ms) else null, Captions.randomCaption(a)))
+            out.add(Plan(pid, t, if (useModel) ModelScore.pick(ms) else null, Captions.randomCaption(a), cx))
         }
         return out
     }
@@ -845,12 +999,18 @@ class InstaEditor(private val a: MainActivity) {
     private fun produceNow(n: Int) {
         if (VideoExport.busy()) { a.toast("Espere terminar o que está exportando"); return }
         if (Projects.list(a).isEmpty()) { a.toast("Primeiro tenha vídeos crus (aba Crus): os do Flow entram sozinhos"); showSection(1); return }
+        Store.prefs(a).getString("auto_ctx", null)?.let { cx -> if (Projects.list(a).none { it.optString("ctx") == cx }) { a.toast("Nenhum cru em ${Contexts.label(a, cx)}"); return } }
         val go = {
             val plans = makePlans(n)
             if (plans.isEmpty()) a.toast("Não consegui montar o plano") else { btnAuto.isEnabled = false; produce(plans) }
         }
-        // banco pequeno? pede textos novos pra IA antes (se não der, segue com o que tem)
-        if (OverlayDB.size(a) < n && Ai.key(a).isNotEmpty()) genOverlays(maxOf(10, n)) { go() } else go()
+        // contextos com poucos textos? pede textos novos pra IA antes de cada um (se não der, segue com o que tem)
+        val only = Store.prefs(a).getString("auto_ctx", null)
+        val needed = Projects.list(a).filter { only == null || it.optString("ctx") == only }.map { it.optString("ctx") }.distinct()
+            .filter { cx -> OverlayDB.count(a, cx) + (if (cx.isEmpty()) 0 else OverlayDB.count(a, "")) < 6 }
+        if (Ai.key(a).isEmpty() || needed.isEmpty()) { go(); return }
+        fun next(k: Int) { if (k >= needed.size) go() else genOverlays(10, needed[k]) { next(k + 1) } }
+        next(0)
     }
 
     private fun produce(plans: List<Plan>, i: Int = 0, ok: Int = 0) {
@@ -885,9 +1045,9 @@ class InstaEditor(private val a: MainActivity) {
             if (out == null) { produce(plans, i + 1, ok); return@export }
             Thread {
                 val vid = VideoExport.addToLibrary(a, out, pl.caption)
-                VideoExport.updateLib(a, vid) { it.put("proj", pl.proj); it.put("texto", pl.text); it.put("modelo", m?.optString("name") ?: ""); it.put("auto", true) }
+                VideoExport.updateLib(a, vid) { it.put("proj", pl.proj); it.put("texto", pl.text); it.put("modelo", m?.optString("name") ?: ""); it.put("auto", true); it.put("ctx", pl.ctx) }
                 Projects.update(a, pl.proj) { it.put("versoes", it.optInt("versoes") + 1) }
-                OverlayDB.used(a, pl.text)
+                OverlayDB.used(a, pl.text, pl.ctx)
                 ui.post { renderLibrary(); produce(plans, i + 1, ok + 1) }
             }.start()
         }
@@ -1027,9 +1187,11 @@ class InstaEditor(private val a: MainActivity) {
         if (!::projBox.isInitialized) return
         updateNav()
         projBox.removeAllViews()
-        val l = Projects.list(a)
-        if (l.isEmpty()) { a.text("Nenhum projeto ainda.", 12f, a.MUTED, parent = projBox); return }
-        l.take(30).forEach { o ->
+        val all = Projects.list(a)
+        if (::rawFilter.isInitialized) ctxChips(rawFilter, true, rawCtx, counts = { n -> all.count { it.optString("ctx") == n } }) { rawCtx = it; renderProjects() }
+        val l = if (rawCtx == null) all else all.filter { it.optString("ctx") == rawCtx }
+        if (l.isEmpty()) { a.text(if (all.isEmpty()) "Nenhum vídeo cru ainda." else "Nenhum cru nesse contexto.", 12f, a.MUTED, parent = projBox); return }
+        l.take(40).forEach { o ->
             val id = o.optString("id")
             val box = LinearLayout(a).apply {
                 orientation = LinearLayout.HORIZONTAL; setPadding(a.dp(8), a.dp(8), a.dp(8), a.dp(8)); gravity = Gravity.CENTER_VERTICAL
@@ -1047,6 +1209,13 @@ class InstaEditor(private val a: MainActivity) {
             val ver = o.optInt("versoes")
             a.text((if (o.optBoolean("photo")) "🖼 " else "🎬 ") + t, 13f, a.FG, parent = side)
             a.text((if (ver > 0) "$ver versão(ões) exportada(s)" else "Nunca exportado") + tag, 11f, a.MUTED, parent = side)
+            val cx = o.optString("ctx")
+            side.addView(TextView(a).apply {
+                text = Contexts.label(a, cx) + "  ▾"; textSize = 12f
+                setTextColor(if (cx.isEmpty()) a.MUTED else 0xFF1A0A10.toInt()); setPadding(a.dp(10), a.dp(4), a.dp(10), a.dp(4))
+                background = GradientDrawable().apply { setColor(if (cx.isEmpty()) 0xFF1C1C24.toInt() else 0xFF4CC68E.toInt()); cornerRadius = a.dp(12).toFloat() }
+                setOnClickListener { chooseCtx(cx) { n -> Projects.update(a, id) { it.put("ctx", n) }; renderProjects(); renderCtx() } }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = a.dp(4) })
             val r = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
             side.addView(r, a.lpMatch())
             a.button(if (id == projId) "Aberto" else "✏ Editar", r, primary = id != projId, weight = true) { if (id != projId) openProject(id) else showSection(0) }
@@ -1414,8 +1583,9 @@ class InstaEditor(private val a: MainActivity) {
             Thread {
                 val id = VideoExport.addToLibrary(a, f, etCap.text.toString().trim())
                 val txt0 = etText.text.toString().trim()
-                VideoExport.updateLib(a, id) { it.put("texto", txt0); it.put("modelo", curModel) }
-                if (txt0.isNotEmpty()) { OverlayDB.add(a, txt0, "meu"); OverlayDB.used(a, txt0) }
+                val cx0 = projId?.let { Projects.get(a, it)?.optString("ctx") }.orEmpty()
+                VideoExport.updateLib(a, id) { it.put("texto", txt0); it.put("modelo", curModel); it.put("ctx", cx0) }
+                if (txt0.isNotEmpty()) { OverlayDB.add(a, txt0, "meu", cx0); OverlayDB.used(a, txt0, cx0) }
                 val pid = projId
                 if (pid != null) {
                     VideoExport.updateLib(a, id) { it.put("proj", pid) }
@@ -1471,6 +1641,7 @@ class InstaEditor(private val a: MainActivity) {
             a.text((if (o.optBoolean("auto")) "🤖 " else "") + (if (posts > 0) "Postado ${posts}x" else "Ainda não postado"), 12f, if (posts > 0) a.OK else a.ACCENT, parent = side, bold = true)
             o.optString("texto").takeIf { it.isNotBlank() }?.let { a.text("T  " + it.replace('\n', ' ').take(60), 12f, a.FG, parent = side) }
             o.optString("modelo").takeIf { it.isNotBlank() }?.let { a.text("★ $it", 12f, a.MUTED, parent = side) }
+            o.optString("ctx").takeIf { it.isNotBlank() }?.let { a.text(Contexts.label(a, it), 12f, a.MUTED, parent = side) }
             val et = EditText(a).apply {
                 setText(o.optString("legenda")); hint = "Legenda"; setTextColor(a.FG); setHintTextColor(a.MUTED); textSize = 13f
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
@@ -1491,7 +1662,7 @@ class InstaEditor(private val a: MainActivity) {
                         val prev = o.optString("nota")
                         if (prev != k) {
                             CaptionDB.rate(a, o.optString("legenda"), k)
-                            OverlayDB.rate(a, o.optString("texto"), k)
+                            OverlayDB.rate(a, o.optString("texto"), k, o.optString("ctx"))
                             ModelScore.rate(a, o.optString("modelo"), k)
                             VideoExport.updateLib(a, id) { it.put("nota", k) }
                         }

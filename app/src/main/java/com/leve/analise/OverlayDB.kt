@@ -39,16 +39,23 @@ object OverlayDB {
     }
     private fun norm(t: String) = t.trim().lowercase().replace(Regex("\\s+"), " ")
 
-    fun all(c: Context): List<JSONObject> = load(c)
+    /** ctx null = todos; "" = só Geral; nome = só daquele contexto */
+    fun all(c: Context, ctx: String? = null): List<JSONObject> = load(c).filter { ctx == null || it.optString("ctx") == ctx }
     fun size(c: Context) = load(c).size
-    private fun find(c: Context, t: String) = load(c).firstOrNull { norm(it.optString("t")) == norm(t) }
+    fun count(c: Context, ctx: String) = load(c).count { it.optString("ctx") == ctx }
+    private fun find(c: Context, t: String, ctx: String? = null) =
+        load(c).firstOrNull { norm(it.optString("t")) == norm(t) && (ctx == null || it.optString("ctx") == ctx) }
+            ?: load(c).firstOrNull { norm(it.optString("t")) == norm(t) }
 
-    fun add(c: Context, t: String, src: String) {
+    fun moveCtx(c: Context, from: String, to: String) { synchronized(lock) { load(c).filter { it.optString("ctx") == from }.forEach { it.put("ctx", to) }; save(c) } }
+    fun setCtx(c: Context, t: String, ctx: String) { synchronized(lock) { find(c, t)?.put("ctx", ctx); save(c) } }
+
+    fun add(c: Context, t: String, src: String, ctx: String = "") {
         synchronized(lock) {
             val txt = t.trim(); if (txt.isEmpty()) return
             val l = load(c)
-            if (l.any { norm(it.optString("t")) == norm(txt) }) return
-            l.add(0, JSONObject().put("t", txt).put("src", src).put("at", System.currentTimeMillis()).put("uses", 0).put("good", 0).put("meh", 0).put("bad", 0))
+            if (l.any { norm(it.optString("t")) == norm(txt) && it.optString("ctx") == ctx }) return
+            l.add(0, JSONObject().put("t", txt).put("src", src).put("ctx", ctx).put("at", System.currentTimeMillis()).put("uses", 0).put("good", 0).put("meh", 0).put("bad", 0))
             while (l.size > MAX) { val k = l.indexOfLast { it.optInt("uses") == 0 }; l.removeAt(if (k >= 0) k else l.size - 1) }
             save(c)
         }
@@ -56,19 +63,19 @@ object OverlayDB {
 
     fun remove(c: Context, t: String) { synchronized(lock) { load(c).removeAll { norm(it.optString("t")) == norm(t) }; save(c) } }
 
-    fun used(c: Context, t: String) {
+    fun used(c: Context, t: String, ctx: String = "") {
         synchronized(lock) {
             if (t.isBlank()) return
-            if (find(c, t) == null) add(c, t, "meu")
-            find(c, t)?.let { it.put("uses", it.optInt("uses") + 1) }; save(c)
+            if (find(c, t, ctx) == null) add(c, t, "meu", ctx)
+            find(c, t, ctx)?.let { it.put("uses", it.optInt("uses") + 1) }; save(c)
         }
     }
 
-    fun rate(c: Context, t: String, r: String) {
+    fun rate(c: Context, t: String, r: String, ctx: String = "") {
         synchronized(lock) {
             if (t.isBlank()) return
-            if (find(c, t) == null) add(c, t, "meu")
-            find(c, t)?.let { it.put(r, it.optInt(r) + 1) }; save(c)
+            if (find(c, t, ctx) == null) add(c, t, "meu", ctx)
+            find(c, t, ctx)?.let { it.put(r, it.optInt(r) + 1) }; save(c)
         }
     }
 
@@ -79,15 +86,21 @@ object OverlayDB {
     fun rated(o: JSONObject) = o.optInt("good") + o.optInt("meh") + o.optInt("bad")
 
     /** Escolhe o texto do momento: boa nota + incerteza (novos ganham chance) − um pouco por já ter sido muito usado. */
-    fun pick(c: Context, avoid: Collection<String> = emptyList()): String? {
+    /**
+     * Texto pro vídeo de um contexto: só textos daquele contexto ou do Geral,
+     * com preferência pros do próprio contexto (eles foram feitos pra ele).
+     */
+    fun pick(c: Context, avoid: Collection<String> = emptyList(), ctx: String = ""): String? {
         val av = avoid.map { norm(it) }.toSet()
-        return load(c).filter { norm(it.optString("t")) !in av && it.optInt("bad") < 3 + it.optInt("good") * 2 }
-            .maxByOrNull { mean(it) + (Math.random() - 0.5) * 0.9 / sqrt(rated(it) + 1.0) - 0.05 * ln(1.0 + it.optInt("uses")) }
-            ?.optString("t")
+        return load(c).filter { (it.optString("ctx") == ctx || it.optString("ctx") == "") && norm(it.optString("t")) !in av && it.optInt("bad") < 3 + it.optInt("good") * 2 }
+            .maxByOrNull {
+                mean(it) + (Math.random() - 0.5) * 0.9 / sqrt(rated(it) + 1.0) - 0.05 * ln(1.0 + it.optInt("uses")) +
+                    (if (ctx.isNotEmpty() && it.optString("ctx") == ctx) 0.12 else 0.0)
+            }?.optString("t")
     }
 
-    fun top(c: Context, n: Int) = load(c).filter { rated(it) > 0 }.sortedByDescending { mean(it) }.take(n)
-    fun worst(c: Context, n: Int) = load(c).filter { rated(it) > 0 }.sortedBy { mean(it) }.take(n)
+    fun top(c: Context, n: Int, ctx: String? = null) = all(c, ctx).filter { rated(it) > 0 }.sortedByDescending { mean(it) }.take(n)
+    fun worst(c: Context, n: Int, ctx: String? = null) = all(c, ctx).filter { rated(it) > 0 }.sortedBy { mean(it) }.take(n)
 }
 
 /** Nota dos modelos de edição (mesma ideia: bombou/flopou). Fica junto dos modelos salvos. */

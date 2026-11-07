@@ -123,8 +123,11 @@ Reply only with JSON: {"prompt":"..."}"""
     }
 
     /** Textos curtos pra aparecer DENTRO do vídeo (Reels), aprendendo com os que bombaram e os que floparam. */
-    fun overlayTexts(c: Context, n: Int, good: List<String>, bad: List<String>, mine: List<String>): List<String> {
+    fun overlayTexts(c: Context, n: Int, good: List<String>, bad: List<String>, mine: List<String>, ctxName: String = "", ctxDesc: String = ""): List<String> {
+        val ctxLine = if (ctxName.isEmpty()) "Os textos devem servir pra qualquer vídeo (genéricos)."
+            else "TODOS os textos são pra vídeos do contexto \"$ctxName\"" + (if (ctxDesc.isNotBlank()) ": $ctxDesc" else "") + ". O texto tem que combinar com esse tipo de cena."
         val prompt = """Crie $n textos curtos pra aparecer ESCRITOS DENTRO de vídeos curtos (Reels/Threads) de uma criadora de conteúdo, em português do Brasil.
+$ctxLine
 Estilo viral: gancho, "pov:", frase de efeito, curiosidade, pergunta que faz comentar. De 3 a 12 palavras. Pode quebrar em 2 linhas com \n. No máximo 1 emoji. Sem hashtags.
 Nada explícito, nada que finja ser outra pessoa real, nada enganoso.
 ${if (good.isNotEmpty()) "Textos que BOMBARAM (siga o ritmo e o tipo de gancho, sem copiar):\n" + good.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
@@ -133,6 +136,29 @@ ${if (mine.isNotEmpty()) "Outros já usados (não repita):\n" + mine.take(20).jo
 Responda só com JSON: {"textos":["...","..."]}"""
         val arr = parseObj(ask(c, prompt, emptyList())).optJSONArray("textos") ?: throw AiException(-2, "A IA não mandou os textos")
         return (0 until arr.length()).map { arr.optString(it).replace("\\n", "\n").trim() }.filter { it.isNotEmpty() }
+    }
+
+    /**
+     * Separa vídeos crus por contexto olhando um quadro de cada um (várias imagens num pedido só).
+     * Devolve o contexto de cada imagem, na ordem; pode sugerir um contexto novo curto.
+     */
+    fun classify(c: Context, frames: List<File>, contexts: List<Pair<String, String>>): List<String> {
+        val opts = if (contexts.isEmpty()) "(nenhum ainda)" else contexts.joinToString("\n") { "- ${it.first}" + if (it.second.isNotBlank()) ": ${it.second}" else "" }
+        val prompt = """São ${frames.size} quadros de vídeos curtos, numerados de 1 a ${frames.size} na ordem.
+Pra cada um, escolha o CONTEXTO da cena (o lugar ou a situação: academia, praia, espelho, quarto, dança, carro, festa…), não a pessoa.
+Contextos que já existem (prefira estes):
+$opts
+Se nenhum servir, invente um nome curto novo (1 ou 2 palavras, em português).
+Responda só com JSON: {"r":[{"n":1,"ctx":"..."}]}"""
+        val txt = ask(c, prompt, frames.map { Base64.encodeToString(shrink(it), Base64.NO_WRAP) })
+        val arr = parseObj(txt).optJSONArray("r") ?: throw AiException(-2, "A IA não separou")
+        val out = MutableList(frames.size) { "" }
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val k = o.optInt("n", i + 1) - 1
+            if (k in out.indices) out[k] = o.optString("ctx").trim()
+        }
+        return out
     }
 
     /** Pedido mínimo pra conferir chave e modelo. */
