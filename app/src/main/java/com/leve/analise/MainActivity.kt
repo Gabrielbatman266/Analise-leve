@@ -11,6 +11,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -106,8 +107,11 @@ class MainActivity : Activity() {
         handleShare(intent)
     }
 
+    private var keysRedraw: (() -> Unit)? = null
+
     override fun onResume() {
         super.onResume()
+        PostBar.update(this); keysRedraw?.invoke()
         ui.postDelayed({ askPending() }, 600)
         ui.postDelayed({ if (::insta.isInitialized) insta.maybeRefill() }, 2500)
         Updater.schedule(this)
@@ -175,6 +179,38 @@ class MainActivity : Activity() {
 
         // ===== Postar
         page = pages["Postar"]!!
+        // atalhos sempre à mão
+        val ck = card("📌 Botão de postar sempre à mão")
+        val rk = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        ck.addView(rk, lpMatch())
+        val bBar = button("", rk, weight = true) { }
+        val bBub = button("", rk, weight = true) { }
+        fun keysUi() {
+            val bar = PostBar.barOn(this); val bub = PostBar.bubbleOn(this) && PostBar.canBubble(this)
+            bBar.text = (if (bar) "✓ " else "") + "🔔 Na notificação"
+            bBub.text = (if (bub) "✓ " else "") + "🫧 Botão flutuante"
+            for ((b, on) in listOf(bBar to bar, bBub to bub)) {
+                b.setTextColor(if (on) 0xFF1A0A10.toInt() else FG)
+                b.background = GradientDrawable().apply { setColor(if (on) ACCENT else 0xFF1C1C24.toInt()); cornerRadius = dp(10).toFloat() }
+            }
+        }
+        bBar.setOnClickListener {
+            if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 41)
+            PostBar.setBar(this, !PostBar.barOn(this)); keysUi()
+        }
+        bBub.setOnClickListener {
+            if (PostBar.bubbleOn(this) && PostBar.canBubble(this)) { PostBar.setBubble(this, false); keysUi(); return@setOnClickListener }
+            if (!PostBar.canBubble(this)) {
+                Store.prefs(this).edit().putBoolean("bubble_on", true).apply()
+                toast("Ative \"Mostrar sobre outros apps\" pro Post Leve e volte. No Xiaomi, permita também \"Janelas pop-up em segundo plano\".")
+                try { startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) } catch (e: Exception) { }
+            } else { PostBar.setBubble(this, true); keysUi() }
+        }
+        keysUi()
+        keysRedraw = { keysUi() }
+        text("Notificação fixa com 📸 Threads · 🎬 Instagram · 🤖 Produzir. O botão flutuante fica por cima de qualquer app: toque pra abrir o menu, arraste pra mudar de lugar, segure pra esconder. Ele pisca ⏰ quando é hora de postar e mostra quantos faltam hoje.", 12f, MUTED, parent = ck)
+
         val cp = card("Fila de posts")
         text("Adicione fotos: cada uma sai sem metadados e ganha legendas. Toque em Postar e o Threads abre com a foto e a legenda juntas. É só publicar.", 13f, MUTED, parent = cp)
         button("＋ Adicionar fotos pra postar", cp, primary = true) { pickPosts() }
@@ -184,11 +220,16 @@ class MainActivity : Activity() {
             else startActivity(Intent(this, PostActivity::class.java).putExtra("id", pk.first).putExtra("caption", pk.second))
         }
         text("Lembrete pra postar: a notificação já vem com foto e legenda sorteadas. Toque em Postar e depois em Publicar no Threads.", 12f, MUTED, parent = cp)
-        everyRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        everyRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         cp.addView(everyRow, lpMatch())
-        listOf(Triple(0, 0, "Off"), Triple(30, 50, "30–50m"), Triple(60, 120, "1–2h"), Triple(120, 180, "2–3h")).forEach { (mn, mx, t) ->
-            button(t, everyRow, weight = true) { Reminder.setRange(this, mn, mx); styleEvery(); refresh()
-                toast(if (mn == 0) "Lembrete desligado" else "Vou avisar num horário diferente a cada vez, entre $t") }.tag = mn
+        listOf(Triple(0, 0, "Off"), Triple(15, 15, "15 em 15"), Triple(15, 30, "15–30m"),
+            Triple(30, 50, "30–50m"), Triple(60, 120, "1–2h"), Triple(120, 180, "2–3h")).chunked(3).forEach { row ->
+            val rr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            everyRow.addView(rr, lpMatch())
+            row.forEach { (mn, mx, t) ->
+                button(t, rr, weight = true) { Reminder.setRange(this, mn, mx); styleEvery(); refresh()
+                    toast(when { mn == 0 -> "Lembrete desligado"; mn == mx -> "Vou avisar a cada $mn minutos"; else -> "Vou avisar num horário diferente a cada vez, entre $t" }) }.tag = "$mn-$mx"
+            }
         }
         val day = button("", cp) { }
         fun dayText() { day.text = if (Reminder.dayOnly(this)) "Só entre 8h e 23h: ligado" else "Só entre 8h e 23h: desligado" }
@@ -682,9 +723,10 @@ class MainActivity : Activity() {
     }
 
     private fun styleEvery() {
-        val cur = Reminder.every(this)
-        for (k in 0 until everyRow.childCount) {
-            val b = everyRow.getChildAt(k) as Button
+        val (mn, mx) = Reminder.range(this)
+        val cur = if (mn == 0) "0-0" else "$mn-$mx"
+        val all = (0 until everyRow.childCount).flatMap { r -> val g = everyRow.getChildAt(r) as LinearLayout; (0 until g.childCount).map { g.getChildAt(it) as Button } }
+        for (b in all) {
             val on = b.tag == cur
             b.setTextColor(if (on) 0xFF1A0A10.toInt() else FG)
             b.background = GradientDrawable().apply { setColor(if (on) ACCENT else 0xFF1C1C24.toInt()); cornerRadius = dp(10).toFloat() }

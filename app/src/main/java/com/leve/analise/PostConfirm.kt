@@ -61,6 +61,7 @@ object PostConfirm {
             "fotoIg" -> PostQueue.update(c, id) { it.put("ig", it.optInt("ig") + 1) }
         }
         if (cap.isNotBlank()) CaptionDB.used(c, cap)
+        Store.prefs(c).edit().putBoolean("bubble_alert", false).apply()
         QuickPost.updateWidgets(c)
     }
 

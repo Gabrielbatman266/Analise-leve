@@ -96,6 +96,7 @@ object Daily {
         n.addAction(Notification.Action.Builder(null, "Daqui 30 min", pi(c, "adiar", 54)).build())
         try { nm.notify(NID, n.build()) } catch (e: SecurityException) { }
         if (ready == 0) AutoProducer.refillIfNeeded(c)
+        PostBar.alert(c, true)
     }
 }
 

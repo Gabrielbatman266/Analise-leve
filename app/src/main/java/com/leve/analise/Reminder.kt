@@ -104,16 +104,17 @@ object Reminder {
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build())
         }
         try { nm.notify(NID, b.build()) } catch (e: SecurityException) { }
+        if (pick != null) PostBar.alert(c, true)
     }
 }
 
 class ReminderReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
-        if (i.action == Intent.ACTION_BOOT_COMPLETED) { Reminder.schedule(c); FolderScan.schedule(c); Daily.schedule(c); return }
+        if (i.action == Intent.ACTION_BOOT_COMPLETED) { Reminder.schedule(c); FolderScan.schedule(c); Daily.schedule(c); PostBar.update(c); return }
         if (i.action == "com.leve.analise.REROLL") { Reminder.notifyNow(c); return }
         PostQueue.cleanGallery(c, false)
-        Reminder.notifyNow(c)
         Reminder.schedule(c)
+        Reminder.notifyNow(c)
     }
 }
 

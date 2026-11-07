@@ -55,6 +55,7 @@ object QuickPost {
             val ids = m.getAppWidgetIds(ComponentName(c, PostWidget::class.java))
             if (ids.isNotEmpty()) PostWidget().onUpdate(c, m, ids)
         } catch (e: Exception) { }
+        PostBar.update(c)
     }
 }
 
