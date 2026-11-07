@@ -155,6 +155,24 @@ Responda só com JSON: {"regras":["...","..."]}"""
         return (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotBlank() }.take(10)
     }
 
+    /** 🧠 Vídeos: quadro de cada vídeo + o que tinha nele + como foi → regras. */
+    fun learnVideos(c: Context, items: List<Triple<File, String, String>>): List<String> {
+        val list = items.mapIndexed { i, (_, d, k) ->
+            "${i + 1}. " + (when (k) { "good" -> "🔥 BOMBOU"; "bad" -> "👎 FLOPOU"; else -> "😐 normal" }) + " — " + d
+        }.joinToString("\n")
+        val prompt = """Você é analista de Reels/Instagram. Estão anexados ${items.size} quadros (um de cada vídeo postado por uma criadora), na ordem, com o que tinha em cada vídeo e como foi:
+$list
+
+Compare os que bombaram com os que floparam e descubra o que funciona na COMBINAÇÃO:
+tipo de cena (o que ela está fazendo, enquadramento, cenário, roupa, luz — sem descrever rosto nem identidade) × texto no vídeo (tom, tamanho, gancho) × categoria × música × edição × legenda.
+Escreva de 4 a 8 regras curtas, práticas e específicas (ex.: "cena X + texto curto provocante = bomba"; "sem texto em vídeo Y flopa").
+Se houver poucos dados, diga o que parece mais provável, sem inventar certeza.
+Responda só com JSON: {"regras":["...","..."]}"""
+        val imgs = items.map { Base64.encodeToString(small(it.first), Base64.NO_WRAP) }
+        val arr = parseObj(ask(c, prompt, imgs)).optJSONArray("regras") ?: throw AiException(-2, "Resposta que não entendi")
+        return (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotBlank() }.take(10)
+    }
+
     /** Prompt pro Flow a partir de uma foto de referência: pose, roupa, cenário, luz e câmera, sem identificar a pessoa. */
     fun flowPrompt(c: Context, img: File): String {
         val prompt = """Look at this reference photo and write ONE prompt in English for an AI image/video generator (Google Flow).
@@ -171,6 +189,7 @@ Reply only with JSON: {"prompt":"..."}"""
         val ctxLine = if (ctxName.isEmpty()) "Os textos devem servir pra qualquer vídeo (genéricos)."
             else "TODOS os textos são pra vídeos do contexto \"$ctxName\"" + (if (ctxDesc.isNotBlank()) ": $ctxDesc" else "") + ". O texto tem que combinar com esse tipo de cena."
         val prompt = """Crie $n textos curtos pra aparecer ESCRITOS DENTRO de vídeos curtos (Reels/Threads) de uma criadora de conteúdo, em português do Brasil.
+${Learn.videoRulesText(c)}
 $ctxLine
 Estilo viral: gancho, "pov:", frase de efeito, curiosidade, pergunta que faz comentar. De 3 a 12 palavras. Pode quebrar em 2 linhas com \n. No máximo 1 emoji. Sem hashtags.
 Nada explícito, nada que finja ser outra pessoa real, nada enganoso.

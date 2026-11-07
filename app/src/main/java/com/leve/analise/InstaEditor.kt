@@ -352,8 +352,8 @@ class InstaEditor(private val a: MainActivity) {
 
     private fun updateCycle() {
         if (!::tvCycle.isInitialized) return
-        val (done, total, rounds) = VideoExport.cycleStatus(a)
-        tvCycle.text = if (total == 0) "" else "Rodada: $done de $total postados" + (if (rounds > 0) " · $rounds rodada(s) completa(s)" else "") + ". Quando todos saírem, recomeça sozinho."
+        val lib = VideoExport.library(a)
+        tvCycle.text = if (lib.isEmpty()) "" else "${lib.size} vídeo(s) · ${lib.count { it.optInt("posts") == 0 }} nunca postado(s) · ${lib.count { Learn.verdict(it) == "good" }} 🔥"
     }
 
     /** Sorteia um vídeo que ainda não saiu nesta rodada e uma legenda do banco. */
@@ -705,7 +705,7 @@ class InstaEditor(private val a: MainActivity) {
         tvImport = a.text("", 13f, a.OK, parent = cf0)
         a.text("📥 = vídeos que você já editou (no CapCut, no Flow…): entram direto na fila, sem metadados, pode marcar vários. Meta diária e IA: em ⚙ Auto.", 11f, a.MUTED, parent = cf0)
         val cl = a.card("Fila de vídeos prontos")
-        a.text("Saem um de cada vez em ordem aleatória; quando todos saem, a rodada recomeça. Depois de postar, marque 🔥/😐/👎.", 12f, a.MUTED, parent = cl)
+        a.text("Sorteio com peso: o que bombou sai muito mais, vídeo novo tem prioridade, o que flopou quase não volta — e nunca o mesmo vídeo, o mesmo vídeo cru ou o mesmo texto em seguida. 12 h depois de cada post o app pergunta como foi.", 12f, a.MUTED, parent = cl)
         tvCycle = a.text("", 13f, a.OK, parent = cl)
         libBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         cl.addView(libBox, a.lpMatch())
@@ -1963,48 +1963,135 @@ class InstaEditor(private val a: MainActivity) {
         a.startActivity(VideoExport.shareToInstagram(a, PostQueue.uri(id).buildUpon().path("/$id.mp4").build(), "video/mp4"))
     }
 
+    private fun sub(title: String): LinearLayout = LinearLayout(a).apply {
+        orientation = LinearLayout.VERTICAL; setPadding(a.dp(12), a.dp(10), a.dp(12), a.dp(10))
+        background = GradientDrawable().apply { setColor(a.BG); cornerRadius = a.dp(12).toFloat(); setStroke(a.dp(1), a.LINE) }
+    }.also { libBox.addView(it, a.lpMatch().apply { topMargin = a.dp(10) }); a.text(title, 15f, a.FG, parent = it, bold = true) }
+
+    private fun thumbV(id: String, w: Int, h: Int) = ImageView(a).apply {
+        scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF1C1C24.toInt())
+        File(VideoExport.videoDir(a), "$id.jpg").takeIf { it.exists() }?.let { setImageBitmap(BitmapFactory.decodeFile(it.path)) }
+    }.also { it.layoutParams = LinearLayout.LayoutParams(a.dp(w), a.dp(h)).apply { rightMargin = a.dp(8) } }
+
     private fun renderLibrary() {
         updateCycle(); updateNav(); updateDaily()
         libBox.removeAllViews()
         val all = VideoExport.library(a)
-        if (all.isEmpty()) { a.text("Nenhum vídeo pronto ainda. Toque em 🤖 Produzir mais ou ponha na fila vídeos que você já tem.", 12f, a.MUTED, parent = libBox); return }
-        // próximos a sair: nunca dois do mesmo vídeo cru em seguida
+        if (all.isEmpty()) { a.text("Nenhum vídeo pronto ainda. Toque em 🤖 Produzir mais ou 📥 Adicionar vídeos prontos.", 12f, a.MUTED, parent = libBox); return }
+        val tag = groupTags(all)
+        val posted = all.filter { it.optInt("posts") > 0 }
+        val rated = posted.filter { Learn.rated(it) > 0 }
+        val waitNota = posted.filter { it.optLong("notaAt") != it.optLong("lastPost") || it.optString("nota").isEmpty() }
+
+        // 📊 resultados
+        val rs = sub("📊 Resultados dos vídeos")
+        a.text("🔥 ${rated.count { Learn.verdict(it) == "good" }} bombaram  ·  😐 ${rated.count { Learn.verdict(it) == "meh" }}  ·  👎 ${rated.count { Learn.verdict(it) == "bad" }} floparam  ·  ⏳ ${waitNota.size} sem nota", 13f, a.FG, parent = rs)
+        if (waitNota.isNotEmpty()) {
+            a.text("⭐ Como foram? (1 toque ensina texto, música, edição, legenda e o vídeo cru)", 12f, a.MUTED, parent = rs)
+            waitNota.sortedByDescending { it.optLong("lastPost") }.take(4).forEach { o ->
+                val id = o.optString("id")
+                val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                rs.addView(row, a.lpMatch().apply { topMargin = a.dp(6) })
+                row.addView(thumbV(id, 34, 60))
+                val side = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+                row.addView(side, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                a.text("${tag[VideoExport.origin(o)] ?: ""} · " + o.optString("texto").replace('\n', ' ').ifBlank { "sem texto" }.take(40), 12f, a.FG, parent = side)
+                val rr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+                side.addView(rr, a.lpMatch())
+                listOf("good" to "🔥", "meh" to "😐", "bad" to "👎").forEach { (k, e) ->
+                    a.button(e, rr, weight = true) { RateLater.apply(a, id, k); renderLibrary(); renderStats() }
+                }
+            }
+        }
+        // 🏆 o que deu certo / 👎 o que não deu
+        if (rated.isNotEmpty()) {
+            fun <K> best(key: (org.json.JSONObject) -> K?, worst: Boolean): Pair<K, Int>? = rated.groupBy(key).filterKeys { it != null && it.toString().isNotBlank() }
+                .mapValues { (_, v) -> (v.map { Learn.mean(it) }.average() * 100).toInt() }.entries
+                .let { if (worst) it.minByOrNull { e -> e.value }?.takeIf { e -> e.value < 45 } else it.maxByOrNull { e -> e.value }?.takeIf { e -> e.value > 55 } }
+                ?.let { it.key!! to it.value }
+            val good = buildString {
+                best({ it.optString("ctx") }, false)?.let { append("\n• Categoria: ${Contexts.label(a, it.first)} (${it.second}%)") }
+                best({ VideoExport.origin(it) }, false)?.let { append("\n• Vídeo cru: ${tag[it.first]} (${it.second}%)") }
+                best({ it.optString("texto").replace('\n', ' ').take(40).ifBlank { null } }, false)?.let { append("\n• Texto: ${it.first} (${it.second}%)") }
+                best({ it.optString("musica").takeIf { m -> m.isNotBlank() }?.let { m -> File(m).nameWithoutExtension.take(30) } }, false)?.let { append("\n• Música: ${it.first} (${it.second}%)") }
+                best({ it.optString("modelo").ifBlank { null } }, false)?.let { append("\n• Edição: ★ ${it.first} (${it.second}%)") }
+            }
+            val bad = buildString {
+                best({ it.optString("ctx") }, true)?.let { append("\n• Categoria: ${Contexts.label(a, it.first)} (${it.second}%)") }
+                best({ it.optString("texto").replace('\n', ' ').take(40).ifBlank { null } }, true)?.let { append("\n• Texto: ${it.first} (${it.second}%)") }
+                best({ it.optString("musica").takeIf { m -> m.isNotBlank() }?.let { m -> File(m).nameWithoutExtension.take(30) } }, true)?.let { append("\n• Música: ${it.first} (${it.second}%)") }
+            }
+            if (good.isNotEmpty()) a.text("🏆 O que deu certo$good", 12f, a.OK, parent = rs)
+            if (bad.isNotEmpty()) a.text("👎 O que não deu$bad", 12f, a.ACCENT, parent = rs)
+        }
+
+        // 🧠 IA
+        val ia = sub("🧠 IA que aprende com os vídeos")
+        val rules = Learn.videoRules(a)
+        a.text(if (rules.isEmpty()) "Ainda sem análise. Avalie alguns vídeos e toque em Analisar." else rules.joinToString("\n") { "• $it" }, 12f, if (rules.isEmpty()) a.MUTED else a.FG, parent = ia)
+        a.chips(ia, listOf("🤖 Analisa sozinha", "Só quando eu pedir"), { if (Learn.autoOn(a)) "🤖 Analisa sozinha" else "Só quando eu pedir" }) { Learn.setAuto(a, it.startsWith("🤖")) }
+        a.text(if (Learn.autoOn(a)) "A cada ${Learn.EVERY} notas novas a IA compara tudo de novo (1 pedido). Faltam ${Learn.EVERY - Learn.pending(a, "v")}." else "A IA só analisa quando você tocar no botão.", 11f, a.MUTED, parent = ia)
+        val st = TextView(a).apply { textSize = 12f; setTextColor(a.OK) }
+        val ir = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        ia.addView(ir, a.lpMatch())
+        a.button("🧠 Analisar agora", ir, primary = true, weight = true) {
+            st.setTextColor(a.MUTED); st.text = "A IA está comparando os vídeos…"
+            Thread { val m = try { "✓ ${Learn.learnVideos(a).size} regras. Os próximos textos da IA já seguem elas." } catch (e: Exception) { "⚠ " + (e.message ?: "erro") }
+                ui.post { renderLibrary(); a.toast(m) } }.start()
+        }
+        a.button("✨ Textos parecidos com os 🔥", ir, weight = true) {
+            val topCtx = rated.filter { Learn.verdict(it) == "good" }.groupBy { it.optString("tctx").ifEmpty { it.optString("ctx") } }.maxByOrNull { it.value.size }?.key ?: ""
+            st.setTextColor(a.MUTED); st.text = "Criando textos no estilo dos que bombaram" + (if (topCtx.isNotEmpty()) " ($topCtx)" else "") + "…"
+            Thread { val m = AutoProducer.genTexts(a, 10, topCtx); ui.post { st.setTextColor(a.OK); st.text = m } }.start()
+        }
+        ia.addView(st)
+
+        // próximos a sair
         val next = VideoExport.upcoming(a, 6)
         if (next.isNotEmpty()) {
-            a.text("Próximos a sair (o mesmo vídeo cru nunca sai em seguida)", 12f, a.MUTED, parent = libBox, bold = true)
+            a.text("Próximos a sair (o que bombou volta mais, nunca em seguida)", 12f, a.MUTED, parent = libBox, bold = true)
             val hs = android.widget.HorizontalScrollView(a)
             val strip = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
             hs.addView(strip); libBox.addView(hs, a.lpMatch().apply { topMargin = a.dp(4) })
-            val tag = groupTags(all)
             next.forEachIndexed { k, o ->
                 val cell = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
                 strip.addView(cell, LinearLayout.LayoutParams(a.dp(60), ViewGroup.LayoutParams.WRAP_CONTENT).apply { rightMargin = a.dp(6) })
-                val th = File(VideoExport.videoDir(a), "${o.optString("id")}.jpg")
-                cell.addView(ImageView(a).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF1C1C24.toInt()); if (th.exists()) setImageBitmap(BitmapFactory.decodeFile(th.path)) },
-                    LinearLayout.LayoutParams(a.dp(54), a.dp(96)))
-                cell.addView(TextView(a).apply { text = "${k + 1}º · ${tag[VideoExport.origin(o)] ?: ""}"; textSize = 10f; setTextColor(a.MUTED); gravity = Gravity.CENTER })
+                cell.addView(thumbV(o.optString("id"), 54, 96).apply { (layoutParams as LinearLayout.LayoutParams).rightMargin = 0 })
+                val v = when (Learn.verdict(o)) { "good" -> "🔥"; "bad" -> "👎"; else -> "" }
+                cell.addView(TextView(a).apply { text = "${k + 1}º ${tag[VideoExport.origin(o)] ?: ""} $v"; textSize = 10f; setTextColor(a.MUTED); gravity = Gravity.CENTER })
             }
         }
-        // agrupados pelo vídeo cru de origem
-        val tag = groupTags(all)
-        val groups = all.groupBy { VideoExport.origin(it) }.entries.sortedByDescending { e -> e.value.count { it.optInt("posts") == 0 } }
-        groups.forEach { (orig, vids) ->
-            val p = if (orig.startsWith("solo:")) null else Projects.list(a).firstOrNull { it.optString("id") == orig }
-            val waiting = vids.count { it.optInt("posts") == 0 }
-            val head = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-            libBox.addView(head, a.lpMatch().apply { topMargin = a.dp(16) })
-            if (p != null) head.addView(ImageView(a).apply { scaleType = ImageView.ScaleType.CENTER_CROP; thumbOf(orig)?.let { setImageBitmap(it) } },
-                LinearLayout.LayoutParams(a.dp(28), a.dp(50)).apply { rightMargin = a.dp(8) })
-            val title = when {
-                p != null -> "${tag[orig]} · " + p.optString("desc").ifBlank { "Vídeo cru" }.take(40)
-                vids.size == 1 && orig.startsWith("solo:") -> "${tag[orig]} · Vídeo importado"
-                else -> "${tag[orig]} · Vídeo cru apagado"
+
+        // lista
+        val byRes = Store.prefs(a).getString("lib_group", "res") == "res"
+        val gr = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        libBox.addView(gr, a.lpMatch().apply { topMargin = a.dp(12) })
+        a.chips(gr, listOf("Por resultado", "Por vídeo cru"), { if (Store.prefs(a).getString("lib_group", "res") == "res") "Por resultado" else "Por vídeo cru" }) {
+            Store.prefs(a).edit().putString("lib_group", if (it == "Por resultado") "res" else "cru").apply(); renderLibrary()
+        }
+        fun header(t: String) { libBox.addView(TextView(a).apply { text = t; textSize = 14f; setTextColor(a.FG); typeface = android.graphics.Typeface.DEFAULT_BOLD }, a.lpMatch().apply { topMargin = a.dp(16) }) }
+        if (byRes) {
+            val sec = listOf(
+                "🔥 Bombaram (voltam mais vezes)" to all.filter { Learn.verdict(it) == "good" },
+                "🆕 Na fila, nunca postados" to all.filter { it.optInt("posts") == 0 },
+                "😐 Normais / esperando nota" to all.filter { it.optInt("posts") > 0 && Learn.verdict(it).let { v -> v == "meh" || v == "" } },
+                "👎 Floparam (saem bem menos)" to all.filter { Learn.verdict(it) == "bad" })
+            sec.forEach { (t, l) ->
+                if (l.isEmpty()) return@forEach
+                header("$t · ${l.size}")
+                val key = "lib:$t"; val shown = if (key in expanded) l.size else 5
+                l.take(shown).forEach { libItem(it, tag) }
+                if (l.size > 5) a.button(if (key in expanded) "Mostrar menos" else "Ver todos (${l.size})", libBox) { if (!expanded.add(key)) expanded.remove(key); renderLibrary() }
             }
-            head.addView(TextView(a).apply {
-                text = "$title\n${vids.size} versão(ões) · $waiting na fila" + (p?.optString("ctx")?.takeIf { it.isNotBlank() }?.let { " · " + Contexts.label(a, it) } ?: "")
-                textSize = 13f; setTextColor(a.FG); typeface = android.graphics.Typeface.DEFAULT_BOLD
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            vids.forEach { o -> libItem(o) }
+        } else {
+            val groups = all.groupBy { VideoExport.origin(it) }.entries.sortedByDescending { e -> e.value.count { it.optInt("posts") == 0 } }
+            groups.forEach { (orig, vids) ->
+                val p = if (orig.startsWith("solo:")) null else Projects.list(a).firstOrNull { it.optString("id") == orig }
+                val waiting = vids.count { it.optInt("posts") == 0 }
+                val pr = p?.let { pj -> if (Learn.rated(pj) > 0) " · ${(Learn.mean(pj) * 100).toInt()}%" else "" } ?: ""
+                header("${tag[orig]} · " + (p?.optString("desc")?.ifBlank { null } ?: if (p != null) "Vídeo cru" else "Vídeo importado").take(36) + "\n${vids.size} versão(ões) · $waiting na fila$pr")
+                vids.forEach { libItem(it, tag) }
+            }
         }
     }
 
@@ -2017,7 +2104,7 @@ class InstaEditor(private val a: MainActivity) {
         return m
     }
 
-    private fun libItem(o: org.json.JSONObject) {
+    private fun libItem(o: org.json.JSONObject, tag: Map<String, String> = emptyMap()) {
             run {
             val id = o.optString("id")
             val box = LinearLayout(a).apply {
@@ -2031,7 +2118,8 @@ class InstaEditor(private val a: MainActivity) {
             val side = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
             box.addView(side, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             val posts = o.optInt("posts")
-            a.text((if (o.optBoolean("auto")) "🤖 " else "") + (if (posts > 0) "Postado ${posts}x" else "Ainda não postado"), 12f, if (posts > 0) a.OK else a.ACCENT, parent = side, bold = true)
+            val sc = if (Learn.rated(o) > 0) "  ·  🔥${o.optInt("good")} 😐${o.optInt("meh")} 👎${o.optInt("bad")}" else ""
+            a.text((tag[VideoExport.origin(o)]?.let { "$it  " } ?: "") + (if (posts > 0) "Postado ${posts}x" else "Ainda não postado") + sc, 12f, if (posts > 0) a.OK else a.ACCENT, parent = side, bold = true)
             o.optString("texto").takeIf { it.isNotBlank() }?.let { a.text("T  " + it.replace('\n', ' ').take(60), 12f, a.FG, parent = side) }
                 ?: if (o.optBoolean("auto")) a.text("🎬 sem texto", 12f, a.MUTED, parent = side) else null
             o.optString("modelo").takeIf { it.isNotBlank() }?.let { a.text("★ $it", 12f, a.MUTED, parent = side) }
@@ -2048,9 +2136,10 @@ class InstaEditor(private val a: MainActivity) {
             side.addView(r1, a.lpMatch())
             a.button("🎲", r1, weight = true) { et.setText(Captions.randomCaption(a, listOf(et.text.toString()))) }
             if (posts > 0) {
-                val nota = o.optString("nota")
+                val nota = if (o.optLong("notaAt") == o.optLong("lastPost")) o.optString("nota") else ""
                 val rr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
                 side.addView(rr, a.lpMatch())
+                a.text("Como foi o último post?", 11f, a.MUTED, parent = side).also { side.removeView(it); side.addView(it, side.indexOfChild(rr)) }
                 listOf("good" to "🔥", "meh" to "😐", "bad" to "👎").forEach { (k, e) ->
                     a.button(e, rr, primary = nota == k, weight = true) {
                         RateLater.apply(a, id, k)

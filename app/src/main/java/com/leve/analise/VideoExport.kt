@@ -307,32 +307,57 @@ object VideoExport {
      * (evita as últimas origens enquanto houver opção); texto diferente do último; entre as opções,
      * a origem que está há mais tempo sem sair.
      */
+    private fun pushRec(c: Context, key: String, v: String, max: Int) {
+        val l = (listOf(v) + recent(c, key).filter { it != v }).take(max)
+        Store.prefs(c).edit().putString(key, l.joinToString("\u0001")).apply()
+    }
+
+    /** Peso de um vídeo: bombou ≈ 3x a 8x; nunca postado 2x; vídeo cru que costuma bombar ganha bônus. */
+    private fun weight(c: Context, o: JSONObject, rec: List<String>, projs: Map<String, JSONObject>): Double {
+        val idx = rec.indexOf(o.optString("id"))
+        val pj = projs[o.optString("proj")]
+        val origin = if (pj == null) 1.0 else Math.exp(2.0 * (Learn.mean(pj) - 0.5))
+        return Math.exp(5.0 * (Learn.mean(o) - 0.5)) * (if (o.optInt("posts") == 0) 2.0 else 1.0) * (if (idx < 0) 1.5 else 1.0 + idx / 10.0) * origin
+    }
+
+    /** Candidatos agora: o que saiu há pouco espera (o que bombou espera só 2 posts) e o mesmo vídeo cru não sai em seguida. */
+    private fun candidates(c: Context, lib: List<JSONObject>, rec: List<String>, recentO: List<String>): List<JSONObject> {
+        val k = minOf(lib.size - 1, maxOf(minOf(3, lib.size - 1), (lib.size * 0.6).toInt()), 20)
+        var pool = lib.filter { o ->
+            val idx = rec.indexOf(o.optString("id"))
+            idx < 0 || idx >= (if (Learn.mean(o) > 0.6) minOf(2, k) else k)
+        }.ifEmpty { lib.filter { it.optString("id") != rec.firstOrNull() }.ifEmpty { lib } }
+        val origins = lib.map { origin(it) }.distinct().size
+        val avoid = recentO.take(minOf(3, maxOf(0, origins - 1)))
+        for (n in avoid.size downTo 1) { val f = pool.filter { origin(it) !in avoid.take(n) }; if (f.isNotEmpty()) { pool = f; break } }
+        val lastTxt = recent(c, "vid_last_txt").take(3)
+        return pool.filter { it.optString("texto").trim().lowercase() !in lastTxt || it.optString("texto").isBlank() }.ifEmpty { pool }
+    }
+
+    /**
+     * Próximo vídeo: valoriza MUITO o que bombou, mas nunca repete em seguida
+     * (nem o mesmo vídeo, nem o mesmo vídeo cru, nem o mesmo texto).
+     */
     fun cycleNext(c: Context): String? {
         val lib = library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() }
         if (lib.isEmpty()) return null
-        val done = cycleSet(c)
-        var pool = lib.filter { it.optString("id") !in done }
-        if (pool.isEmpty()) { Store.prefs(c).edit().remove("vid_cycle").apply(); pool = lib }
-        val last = Store.prefs(c).getString("vid_last", "")
-        pool = pool.filter { it.optString("id") != last }.ifEmpty { pool }
-        val origins = lib.map { origin(it) }.distinct().size
+        val rec = recent(c, "vid_rec")
         val recentO = recent(c, "vid_last_orig")
-        // quantas origens anteriores evitar: até 3, mas sempre deixando pelo menos uma livre
-        val avoid = recentO.take(minOf(3, maxOf(0, origins - 1)))
-        var cand = pool
-        for (k in avoid.size downTo 1) { val f = pool.filter { origin(it) !in avoid.take(k) }; if (f.isNotEmpty()) { cand = f; break } }
-        val lastTxt = recent(c, "vid_last_txt").take(3)
-        cand = cand.filter { it.optString("texto").trim().lowercase() !in lastTxt }.ifEmpty { cand }
-        // origem há mais tempo sem sair primeiro (nunca saiu = melhor)
-        val rank = { o: JSONObject -> recentO.indexOf(origin(o)).let { if (it < 0) Int.MAX_VALUE else it } }
-        val best = cand.maxOf(rank)
-        return cand.filter { rank(it) == best }.random().optString("id")
+        val projs = Projects.list(c).associateBy { it.optString("id") }
+        val cand = candidates(c, lib, rec, recentO)
+        val w = cand.map { weight(c, it, rec, projs) }
+        var r = Math.random() * w.sum(); var pick = cand.last()
+        for (i in cand.indices) { r -= w[i]; if (r <= 0) { pick = cand[i]; break } }
+        pushRec(c, "vid_rec", pick.optString("id"), 40)
+        pushRec(c, "vid_last_orig", origin(pick), 20)
+        return pick.optString("id")
     }
 
     fun markPosted(c: Context, id: String) {
         val lib = library(c)
         val ids = lib.map { it.optString("id") }.toSet()
         val s = cycleSet(c); s.add(id); s.retainAll(ids)
+        pushRec(c, "vid_rec", id, 40)
         val e = Store.prefs(c).edit().putString("vid_last", id)
         lib.firstOrNull { it.optString("id") == id }?.let { o ->
             val ro = (listOf(origin(o)) + recent(c, "vid_last_orig").filter { it != origin(o) }).take(20)
@@ -348,18 +373,15 @@ object VideoExport {
     /** Ordem prevista dos próximos [n] (simulação das mesmas regras, sem sorteio). */
     fun upcoming(c: Context, n: Int): List<JSONObject> {
         val lib = library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() }
-        val done = cycleSet(c).toMutableSet()
+        val rec = recent(c, "vid_rec").toMutableList()
         val recentO = recent(c, "vid_last_orig").toMutableList()
-        val origins = lib.map { origin(it) }.distinct().size
+        val projs = Projects.list(c).associateBy { it.optString("id") }
         val out = ArrayList<JSONObject>()
         repeat(minOf(n, lib.size)) {
-            var pool = lib.filter { it.optString("id") !in done && it !in out }
-            if (pool.isEmpty()) return out
-            val avoid = recentO.take(minOf(3, maxOf(0, origins - 1)))
-            var cand = pool
-            for (k in avoid.size downTo 1) { val f = pool.filter { origin(it) !in avoid.take(k) }; if (f.isNotEmpty()) { cand = f; break } }
-            val pick = cand.maxBy { o -> recentO.indexOf(origin(o)).let { if (it < 0) Int.MAX_VALUE else it } }
-            out.add(pick); done.add(pick.optString("id"))
+            val cand = candidates(c, lib, rec, recentO).filter { it !in out }.ifEmpty { return out }
+            val pick = cand.maxBy { weight(c, it, rec, projs) }
+            out.add(pick)
+            rec.remove(pick.optString("id")); rec.add(0, pick.optString("id"))
             recentO.remove(origin(pick)); recentO.add(0, origin(pick))
         }
         return out

@@ -125,7 +125,7 @@ object RateLater {
         val am = c.getSystemService(android.app.AlarmManager::class.java)
         val pi = PendingIntent.getBroadcast(c, ("r" + vid).hashCode(), Intent(c, RateReceiver::class.java).setAction("ask").putExtra("id", vid),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        am.set(android.app.AlarmManager.RTC, System.currentTimeMillis() + 18 * 60 * 60 * 1000L, pi)
+        am.set(android.app.AlarmManager.RTC, System.currentTimeMillis() + 12 * 60 * 60 * 1000L, pi)
     }
 
     /** Foto do Threads: pergunta como foi 5 h depois do post. */
@@ -143,7 +143,7 @@ object RateLater {
         val at = o.optLong("postedAt")
         if (o.optLong("notaAt") == at && o.optString("nota") == k) return
         val prev = if (o.optLong("notaAt") == at) o.optString("nota") else ""
-        CaptionDB.rate(c, PostQueue.captionOf(o), k)
+        if (prev.isEmpty()) { CaptionDB.rate(c, PostQueue.captionOf(o), k); Learn.noteRated(c, "f") }
         Captions.ratePair(c, id, PostQueue.captionOf(o), k, prev)
         PostQueue.update(c, id) {
             if (prev.isNotEmpty()) it.put(prev, maxOf(0, it.optInt(prev) - 1)) // trocou a nota deste post
@@ -154,12 +154,24 @@ object RateLater {
     /** Aplica a nota uma vez só (a mesma do botão em Prontos). */
     fun apply(c: Context, vid: String, k: String) {
         val o = VideoExport.library(c).firstOrNull { it.optString("id") == vid } ?: return
-        if (o.optString("nota") == k) return
-        CaptionDB.rate(c, o.optString("legenda"), k)
-        OverlayDB.rate(c, o.optString("texto"), k, o.optString("tctx").ifEmpty { o.optString("ctx") })
-        ModelScore.rate(c, o.optString("modelo"), k)
-        MusicPick.rate(c, o.optString("musica"), k)
-        VideoExport.updateLib(c, vid) { it.put("nota", k) }
+        val at = o.optLong("lastPost")
+        if (o.optLong("notaAt") == at && o.optString("nota") == k) return
+        val prev = if (o.optLong("notaAt") == at) o.optString("nota") else ""
+        if (prev.isEmpty()) {
+            // primeira nota deste post: ensina texto, legenda, modelo, música e o vídeo cru de origem
+            CaptionDB.rate(c, o.optString("legenda"), k)
+            OverlayDB.rate(c, o.optString("texto"), k, o.optString("tctx").ifEmpty { o.optString("ctx") })
+            ModelScore.rate(c, o.optString("modelo"), k)
+            MusicPick.rate(c, o.optString("musica"), k)
+            o.optString("proj").takeIf { it.isNotEmpty() }?.let { pj -> Projects.update(c, pj) { it.put(k, it.optInt(k) + 1) } }
+            Learn.noteRated(c, "v")
+        }
+        VideoExport.updateLib(c, vid) {
+            if (prev.isNotEmpty()) it.put(prev, maxOf(0, it.optInt(prev) - 1))
+            if (it.optInt("good") + it.optInt("meh") + it.optInt("bad") == 0 && it.optString("nota").isNotEmpty() && prev.isEmpty() && it.optLong("notaAt") == 0L)
+                it.optString("nota").let { old -> it.put(old, 1) } // nota antiga vira contagem
+            it.put(k, it.optInt(k) + 1); it.put("nota", k); it.put("notaAt", at)
+        }
     }
 }
 
@@ -171,7 +183,7 @@ class RateReceiver : android.content.BroadcastReceiver() {
         val nid = ("n" + vid).hashCode()
         if (i.action == "ask") {
             val o = VideoExport.library(c).firstOrNull { it.optString("id") == vid } ?: return
-            if (o.optString("nota").isNotEmpty()) return
+            if (o.optLong("notaAt") == o.optLong("lastPost") && o.optString("nota").isNotEmpty()) return
             nm.createNotificationChannel(android.app.NotificationChannel("nota", "Como foi o post", android.app.NotificationManager.IMPORTANCE_DEFAULT))
             fun act(k: String, label: String, req: Int) = android.app.Notification.Action.Builder(null, label,
                 PendingIntent.getBroadcast(c, req + nid, Intent(c, RateReceiver::class.java).setAction(k).putExtra("id", vid),
