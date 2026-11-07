@@ -103,8 +103,8 @@ class PostVideoActivity : android.app.Activity() {
             AutoProducer.refillIfNeeded(this); finish(); return
         }
         val o = VideoExport.library(this).firstOrNull { it.optString("id") == id }
-        val cap = o?.optString("legenda")?.takeIf { it.isNotBlank() && o.optInt("posts") == 0 } ?: Captions.randomCaption(this, listOfNotNull(o?.optString("legenda")))
-        try { getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("legenda", cap)) } catch (e: Exception) { }
+        val cap = VideoExport.captionFor(this, o, false)
+        if (cap.isNotEmpty()) try { getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("legenda", cap)) } catch (e: Exception) { }
         VideoExport.updateLib(this, id) { it.put("legenda", cap) }
         val uri = PostQueue.uri(id).buildUpon().path("/$id.mp4").build()
         try {

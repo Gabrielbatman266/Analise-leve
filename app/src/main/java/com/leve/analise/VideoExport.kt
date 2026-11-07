@@ -287,6 +287,13 @@ object VideoExport {
     // ---------- rodada aleatória: cada vídeo sai uma vez; quando todos saem, recomeça
     private fun cycleSet(c: Context): MutableSet<String> = HashSet(Store.prefs(c).getStringSet("vid_cycle", emptySet()) ?: emptySet())
 
+    /** Legenda pra postar um vídeo pronto: nenhuma se ele for de categoria sem legenda. */
+    fun captionFor(c: Context, o: JSONObject?, fresh: Boolean): String {
+        if (o != null && (o.optBoolean("semleg") || Contexts.noCaption(c, o.optString("ctx")))) return ""
+        val old = o?.optString("legenda").orEmpty()
+        return if (!fresh && old.isNotBlank() && o?.optInt("posts") == 0) old else Captions.randomCaption(c, listOf(old))
+    }
+
     /** Origem de um vídeo pronto: o vídeo cru de onde ele saiu (vídeos importados contam como origem própria). */
     fun origin(o: JSONObject): String = o.optString("proj").ifBlank { "solo:" + o.optString("id") }
 

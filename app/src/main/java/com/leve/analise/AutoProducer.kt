@@ -29,7 +29,7 @@ object AutoProducer {
     @Volatile var running = false
     private val main = Handler(Looper.getMainLooper())
 
-    data class Plan(val proj: String, val text: String, val tctx: String, val model: JSONObject?, val caption: String, val ctx: String)
+    data class Plan(val proj: String, val text: String, val tctx: String, val model: JSONObject?, val caption: String, val ctx: String, val version: Int = 0)
 
     fun quality(c: Context) = Store.prefs(c).getString("quality", "1080p") ?: "1080p"
     fun styleOf(st: JSONObject) = TextStyle(st.optInt("size", 52), st.optString("color", "Branco"), st.optString("bg", "Faixa escura"),
@@ -74,10 +74,10 @@ object AutoProducer {
 
     private fun ensureTexts(c: Context, projs: List<JSONObject>, progress: (String) -> Unit) {
         if (Ai.key(c).isEmpty() || !textAiAuto(c)) return // sem automático: usa só o que já tem no banco
-        projs.filter { it.optString("desc").isNotBlank() && OverlayDB.count(c, vidKey(it.optString("id"))) < 4 }.forEach { p ->
+        projs.filter { !Contexts.noText(c, it.optString("ctx")) && it.optString("desc").isNotBlank() && OverlayDB.count(c, vidKey(it.optString("id"))) < 4 }.forEach { p ->
             progress("Criando textos pro vídeo \"${p.optString("desc").take(30)}\"…"); genTexts(c, 8, vidKey(p.optString("id")))
         }
-        projs.map { it.optString("ctx") }.distinct().filter { cx -> OverlayDB.count(c, cx) + (if (cx.isEmpty()) 0 else OverlayDB.count(c, "")) < 6 }.forEach { cx ->
+        projs.map { it.optString("ctx") }.distinct().filter { cx -> !Contexts.noText(c, cx) }.filter { cx -> OverlayDB.count(c, cx) + (if (cx.isEmpty()) 0 else OverlayDB.count(c, "")) < 6 }.forEach { cx ->
             progress("Criando textos pra ${Contexts.label(c, cx)}…"); genTexts(c, 10, cx)
         }
     }
@@ -94,11 +94,18 @@ object AutoProducer {
         while (out.size < n && k < n * 4) {
             val p = order[k % order.size]; k++
             val pid = p.optString("id"); val cx = p.optString("ctx")
+            val cap = if (Contexts.noCaption(c, cx)) "" else Captions.randomCaption(c)
+            if (Contexts.noText(c, cx)) {
+                // sem texto: o vídeo já está pronto; cada versão sai com um corte diferente, até o limite da categoria
+                val made = VideoExport.library(c).count { it.optString("proj") == pid } + out.count { it.proj == pid }
+                if (made >= Contexts.versions(c, cx)) continue
+                out.add(Plan(pid, "", "", if (useModel) ModelScore.pick(ms) else null, cap, cx, made)); continue
+            }
             val avoid = usedCombo.filter { it.startsWith("$pid|") }.map { it.substringAfter('|') } + out.map { it.text }
             val pick = OverlayDB.pickFor(c, avoid, vidKey(pid), cx)
                 ?: OverlayDB.STARTERS.filter { s -> avoid.none { it == s.lowercase() } }.randomOrNull()?.let { it to "" } ?: continue
             usedCombo.add(pid + "|" + pick.first.trim().lowercase())
-            out.add(Plan(pid, pick.first, pick.second, if (useModel) ModelScore.pick(ms) else null, Captions.randomCaption(c), cx))
+            out.add(Plan(pid, pick.first, pick.second, if (useModel) ModelScore.pick(ms) else null, cap, cx))
         }
         return out
     }
@@ -130,13 +137,21 @@ object AutoProducer {
         val msStart = if (m != null && m.optString("music").isNotEmpty()) m.optLong("musicStart") else p.optLong("musicStart")
         val secs = if (m != null) m.optInt("secs", 8) else p.optInt("secs", 8)
         val q = m?.optString("quality")?.ifEmpty { null } ?: quality(c)
-        val cs = p.optLong("cutStart"); val ce = p.optLong("cutEnd")
+        var cs = p.optLong("cutStart"); var ce = p.optLong("cutEnd")
         val dur = if (photo) 0L else VideoExport.durationMs(f)
+        if (!photo && pl.text.isEmpty() && pl.version > 0 && dur > 6000) {
+            // versões sem texto: um trecho diferente do vídeo (70–95% do tamanho), pra não sair igual
+            val base0 = cs.coerceIn(0, dur); val base1 = if (ce <= 0 || ce > dur) dur else ce
+            val len = base1 - base0
+            val seg = (len * (0.70 + Math.random() * 0.25)).toLong().coerceAtLeast(minOf(len, 4000))
+            val st0 = base0 + ((len - seg) * Math.random()).toLong()
+            cs = st0; ce = st0 + seg
+        }
         val job = VideoExport.Job(Uri.fromFile(f), photo, secs, pl.text, st, mus, mt, q,
             if (photo) 0 else cs, if (photo || ce <= 0 || ce >= dur) 0 else ce, msStart,
             if (photo) 0 else p.optLong("textStart"), if (photo) 0 else p.optLong("textEnd"), 0)
         val label = "Produzindo ${i + 1} de ${plans.size}"
-        val info = "\nT: ${pl.text.replace('\n', ' ').take(40)}" + (m?.let { "  ★ ${it.optString("name")}" } ?: "")
+        val info = (if (pl.text.isEmpty()) "\n🎬 sem texto" + (if (pl.version > 0) " · corte ${pl.version + 1}" else "") else "\nT: ${pl.text.replace('\n', ' ').take(40)}") + (m?.let { "  ★ ${it.optString("name")}" } ?: "")
         progress("$label…$info")
         VideoExport.export(c, job, { pr -> progress("$label… $pr%$info") }) { out, _ ->
             if (out == null) { step(c, plans, i + 1, ok, progress, done); return@export }
@@ -145,9 +160,10 @@ object AutoProducer {
                 VideoExport.updateLib(c, vid) {
                     it.put("proj", pl.proj); it.put("texto", pl.text); it.put("tctx", pl.tctx); it.put("ctx", pl.ctx)
                     it.put("modelo", m?.optString("name") ?: ""); it.put("auto", true)
+                    if (pl.caption.isEmpty() && Contexts.noCaption(c, pl.ctx)) it.put("semleg", true)
                 }
                 Projects.update(c, pl.proj) { it.put("versoes", it.optInt("versoes") + 1) }
-                OverlayDB.used(c, pl.text, pl.tctx)
+                if (pl.text.isNotEmpty()) OverlayDB.used(c, pl.text, pl.tctx)
                 main.post { step(c, plans, i + 1, ok + 1, progress, done) }
             }.start()
         }

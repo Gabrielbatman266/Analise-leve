@@ -39,6 +39,13 @@ object Contexts {
         OverlayDB.moveCtx(c, name, GERAL)
     }
 
+    /** Categoria "sem texto": o vídeo já está pronto, o app só edita (cortes diferentes, modelo, sem metadados). */
+    fun noText(c: Context, name: String) = name.isNotEmpty() && list(c).firstOrNull { it.optString("name") == name }?.optBoolean("semtexto") == true
+    /** Post sem legenda nenhuma. */
+    fun noCaption(c: Context, name: String) = name.isNotEmpty() && list(c).firstOrNull { it.optString("name") == name }?.optBoolean("semlegenda") == true
+    /** Quantas versões (cortes diferentes) de cada vídeo cru numa categoria sem texto. */
+    fun versions(c: Context, name: String) = list(c).firstOrNull { it.optString("name") == name }?.optInt("versoes", 1)?.coerceIn(1, 5) ?: 1
+
     fun desc(c: Context, name: String) = list(c).firstOrNull { it.optString("name") == name }?.optString("desc").orEmpty()
     fun emoji(c: Context, name: String) = if (name.isEmpty()) "🌐" else list(c).firstOrNull { it.optString("name") == name }?.optString("emoji")?.ifEmpty { null } ?: "🏷"
     fun label(c: Context, name: String) = emoji(c, name) + " " + name.ifEmpty { "Geral" }

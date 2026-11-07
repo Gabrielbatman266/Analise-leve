@@ -358,8 +358,7 @@ class InstaEditor(private val a: MainActivity) {
     /** Sorteia um vídeo que ainda não saiu nesta rodada e uma legenda do banco. */
     private fun postRandomVideo() {
         val id = VideoExport.cycleNext(a) ?: run { a.toast("Nenhum vídeo pronto ainda. Exporte ou importe alguns."); return }
-        val old = VideoExport.library(a).firstOrNull { it.optString("id") == id }?.optString("legenda").orEmpty()
-        post(id, Captions.randomCaption(a, listOf(old)))
+        post(id, VideoExport.captionFor(a, VideoExport.library(a).firstOrNull { it.optString("id") == id }, true))
     }
 
     /** Importa vários vídeos prontos, um depois do outro, cada um vira arquivo novo sem metadados. */
@@ -1169,7 +1168,8 @@ class InstaEditor(private val a: MainActivity) {
             a.text(if (n.isEmpty()) "📥  Sem categoria · textos gerais" else Contexts.label(a, n), 17f, a.FG, parent = card, bold = true)
             val rated = OverlayDB.all(a, n).filter { OverlayDB.rated(it) > 0 }
             val nota = if (rated.isEmpty()) "" else "  ·  🔥 ${(rated.map { OverlayDB.mean(it) }.average() * 100).toInt()}%"
-            a.text("${crus.size} vídeo(s) cru(s)  ·  ${OverlayDB.count(a, n)} texto(s)$nota", 13f, a.MUTED, parent = card)
+            a.text(if (Contexts.noText(a, n)) "${crus.size} vídeo(s) cru(s)  ·  🎬 sem texto, o app só edita" + (if (Contexts.noCaption(a, n)) " · sem legenda" else "")
+                else "${crus.size} vídeo(s) cru(s)  ·  ${OverlayDB.count(a, n)} texto(s)$nota", 13f, a.MUTED, parent = card)
             if (n.isNotEmpty()) Contexts.desc(a, n).takeIf { it.isNotBlank() }?.let { a.text(it.take(90), 12f, a.MUTED, parent = card) }
             if (crus.isNotEmpty()) {
                 val strip = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
@@ -1212,6 +1212,25 @@ class InstaEditor(private val a: MainActivity) {
         }
         if (n.isNotEmpty()) a.text(Contexts.desc(a, n).ifBlank { "Sem descrição. Toque em ✏ e conte como são esses vídeos: a IA usa isso." }, 12f, a.MUTED, parent = catBox)
 
+        // 0) como o app produz esta categoria
+        val noTxt = Contexts.noText(a, n)
+        if (n.isNotEmpty()) {
+            val cm = catCard()
+            a.text("Como o app produz esta categoria", 15f, a.FG, parent = cm, bold = true)
+            a.chips(cm, listOf("T Com texto no vídeo", "🎬 Sem texto (só edita)"), { if (Contexts.noText(a, n)) "🎬 Sem texto (só edita)" else "T Com texto no vídeo" }) { o ->
+                Contexts.update(a, n) { it.put("semtexto", o.startsWith("🎬")) }; renderProjects()
+            }
+            if (noTxt) {
+                a.text("O vídeo já está pronto: o app não gera texto nem gasta IA. Ele só edita sozinho: aplica um modelo de edição (música/qualidade), tira os metadados e, em cada versão, usa um trecho diferente do vídeo pra não sair igual.", 12f, a.MUTED, parent = cm)
+                a.text("Versões de cada vídeo cru", 12f, a.MUTED, parent = cm)
+                a.chips(cm, listOf("1", "2", "3", "5"), { Contexts.versions(a, n).toString() }) { v -> Contexts.update(a, n) { it.put("versoes", v.toInt()) } }
+            }
+            a.text("Legenda do post", 12f, a.MUTED, parent = cm)
+            a.chips(cm, listOf("Sorteada do banco", "Sem legenda"), { if (Contexts.noCaption(a, n)) "Sem legenda" else "Sorteada do banco" }) { o ->
+                Contexts.update(a, n) { it.put("semlegenda", o == "Sem legenda") }
+            }
+        }
+
         // 1) vídeos crus
         val cv = catCard()
         val crus = Projects.list(a).filter { it.optString("ctx") == n }
@@ -1244,7 +1263,22 @@ class InstaEditor(private val a: MainActivity) {
             }
         }
 
-        // 2) textos da categoria
+        // 2) textos da categoria (não aparece em categoria sem texto)
+        if (!noTxt) catTexts(n, key)
+
+        // 3) produzir desta categoria
+        if (crus.isNotEmpty()) {
+            val cp2 = catCard()
+            val nn = if (noTxt) crus.size * Contexts.versions(a, n) - VideoExport.library(a).count { o -> crus.any { it.optString("id") == o.optString("proj") } } else Store.prefs(a).getInt("auto_n", 5)
+            if (noTxt && nn <= 0) a.text("✓ Todos os vídeos desta categoria já foram produzidos (${Contexts.versions(a, n)} versão(ões) cada). Aumente as versões ou adicione mais vídeos crus.", 12f, a.OK, parent = cp2)
+            else {
+                a.button(if (noTxt) "🎬 Editar e pôr na fila ($nn)" else "🤖 Produzir $nn vídeos desta categoria", cp2, primary = true) { produceNow(maxOf(1, nn), n) }
+                a.text("Os vídeos vão pra 🎬 Fila." + if (noTxt) "" else " Quantos: mude em ⚙ Auto.", 11f, a.MUTED, parent = cp2)
+            }
+        }
+    }
+
+    private fun catTexts(n: String, key: String) {
         val ct = catCard()
         a.text(if (n.isEmpty()) "T Textos gerais (servem pra qualquer vídeo)" else "T Textos de $n (${OverlayDB.count(a, key)})", 15f, a.FG, parent = ct, bold = true)
         a.text("Escreva do seu jeito: a IA aprende com os seus textos e gera parecidos. Enter = nova linha.", 12f, a.MUTED, parent = ct)
@@ -1282,12 +1316,6 @@ class InstaEditor(private val a: MainActivity) {
             small(row, "✕") { OverlayDB.remove(a, o.optString("t")); renderProjects() }
         }
 
-        // 3) produzir desta categoria
-        if (crus.isNotEmpty()) {
-            val cp2 = catCard()
-            a.button("🤖 Produzir ${Store.prefs(a).getInt("auto_n", 5)} vídeos desta categoria", cp2, primary = true) { produceNow(Store.prefs(a).getInt("auto_n", 5), n) }
-            a.text("Os vídeos vão pra 🎬 Fila. Quantos: mude em ⚙ Auto.", 11f, a.MUTED, parent = cp2)
-        }
     }
 
     // ------------------------------------------------------------------ prévia
@@ -1798,6 +1826,7 @@ class InstaEditor(private val a: MainActivity) {
             val posts = o.optInt("posts")
             a.text((if (o.optBoolean("auto")) "🤖 " else "") + (if (posts > 0) "Postado ${posts}x" else "Ainda não postado"), 12f, if (posts > 0) a.OK else a.ACCENT, parent = side, bold = true)
             o.optString("texto").takeIf { it.isNotBlank() }?.let { a.text("T  " + it.replace('\n', ' ').take(60), 12f, a.FG, parent = side) }
+                ?: if (o.optBoolean("auto")) a.text("🎬 sem texto", 12f, a.MUTED, parent = side) else null
             o.optString("modelo").takeIf { it.isNotBlank() }?.let { a.text("★ $it", 12f, a.MUTED, parent = side) }
             o.optString("ctx").takeIf { it.isNotBlank() }?.let { a.text(Contexts.label(a, it), 12f, a.MUTED, parent = side) }
             val et = EditText(a).apply {
