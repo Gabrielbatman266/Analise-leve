@@ -2025,6 +2025,14 @@ class InstaEditor(private val a: MainActivity) {
             if (bad.isNotEmpty()) a.text("👎 O que não deu$bad", 12f, a.ACCENT, parent = rs)
         }
 
+        // 🔁 2ª chance + horários
+        val sc = sub("🔁 2ª chance e horários")
+        a.text("O mesmo vídeo pode ir mal numa vez e bem na outra (horário, dia, algoritmo).", 12f, a.MUTED, parent = sc)
+        a.chips(sc, listOf("🔁 Dar 2ª chance", "Flopou, sai menos"), { if (Learn.secondChance(a)) "🔁 Dar 2ª chance" else "Flopou, sai menos" }) { Learn.setSecondChance(a, it.startsWith("🔁")); renderLibrary() }
+        a.text(if (Learn.secondChance(a)) "Um flop só não conta: o vídeo volta normal pro sorteio. Se flopar de novo, aí sai bem menos." else "Um flop já faz o vídeo sair bem menos.", 11f, a.MUTED, parent = sc)
+        a.text(Learn.repostStats(posted), 12f, a.FG, parent = sc)
+        a.text(Learn.hourStats(posted), 12f, a.FG, parent = sc)
+
         // 🧠 IA
         val ia = sub("🧠 IA que aprende com os vídeos")
         val rules = Learn.videoRules(a)
@@ -2075,7 +2083,8 @@ class InstaEditor(private val a: MainActivity) {
                 "🔥 Bombaram (voltam mais vezes)" to all.filter { Learn.verdict(it) == "good" },
                 "🆕 Na fila, nunca postados" to all.filter { it.optInt("posts") == 0 },
                 "😐 Normais / esperando nota" to all.filter { it.optInt("posts") > 0 && Learn.verdict(it).let { v -> v == "meh" || v == "" } },
-                "👎 Floparam (saem bem menos)" to all.filter { Learn.verdict(it) == "bad" })
+                "🔁 2ª chance (flopou 1 vez, vai tentar de novo)" to all.filter { Learn.onSecondChance(a, it) },
+                "👎 Floparam (saem bem menos)" to all.filter { Learn.verdict(it) == "bad" && !Learn.onSecondChance(a, it) })
             sec.forEach { (t, l) ->
                 if (l.isEmpty()) return@forEach
                 header("$t · ${l.size}")
@@ -2118,7 +2127,7 @@ class InstaEditor(private val a: MainActivity) {
             val side = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
             box.addView(side, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             val posts = o.optInt("posts")
-            val sc = if (Learn.rated(o) > 0) "  ·  🔥${o.optInt("good")} 😐${o.optInt("meh")} 👎${o.optInt("bad")}" else ""
+            val sc = if (Learn.rated(o) > 0) "  ·  " + Learn.hist(o).joinToString(" → ") { when (it.second) { "good" -> "🔥"; "bad" -> "👎"; else -> "😐" } } else ""
             a.text((tag[VideoExport.origin(o)]?.let { "$it  " } ?: "") + (if (posts > 0) "Postado ${posts}x" else "Ainda não postado") + sc, 12f, if (posts > 0) a.OK else a.ACCENT, parent = side, bold = true)
             o.optString("texto").takeIf { it.isNotBlank() }?.let { a.text("T  " + it.replace('\n', ' ').take(60), 12f, a.FG, parent = side) }
                 ?: if (o.optBoolean("auto")) a.text("🎬 sem texto", 12f, a.MUTED, parent = side) else null

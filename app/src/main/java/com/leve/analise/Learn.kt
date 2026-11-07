@@ -27,6 +27,75 @@ object Learn {
     fun rated(o: JSONObject) = o.optInt("good") + o.optInt("meh") + o.optInt("bad") + (if (o.optInt("good") + o.optInt("meh") + o.optInt("bad") == 0 && o.optString("nota").isNotEmpty()) 1 else 0)
     fun verdict(o: JSONObject) = when { rated(o) == 0 -> ""; mean(o) > 0.6 -> "good"; mean(o) < 0.45 -> "bad"; else -> "meh" }
 
+    // ---------- histórico de cada post (a mesma foto/vídeo pode ir mal numa vez e bem na outra)
+    fun secondChance(c: Context) = p(c).getBoolean("second_chance", true)
+    fun setSecondChance(c: Context, v: Boolean) = p(c).edit().putBoolean("second_chance", v).apply()
+
+    /** [(quando postou, nota)] em ordem. */
+    fun hist(o: JSONObject): List<Pair<Long, String>> {
+        val a = o.optJSONArray("hist")
+        if (a != null && a.length() > 0) return (0 until a.length()).mapNotNull { a.optJSONObject(it) }.map { it.optLong("at") to it.optString("k") }.sortedBy { it.first }
+        val k = o.optString("nota")
+        return if (k.isNotEmpty()) listOf(o.optLong("notaAt").takeIf { it > 0 }.let { it ?: o.optLong("lastPost", o.optLong("postedAt")) } to k) else emptyList()
+    }
+
+    /** Grava a nota de um post no histórico (troca se já tinha nota pra esse post). */
+    fun addHist(o: JSONObject, at: Long, k: String) {
+        val l = hist(o).filter { it.first != at } + (at to k)
+        o.put("hist", JSONArray().apply { l.sortedBy { it.first }.takeLast(30).forEach { (t, n) -> put(JSONObject().put("at", t).put("k", n)) } })
+    }
+
+    /** Média usada no sorteio: com a 2ª chance ligada, um flop só não derruba (volta a ser neutro). */
+    fun chanceMean(c: Context, o: JSONObject): Double {
+        val m = mean(o)
+        return if (secondChance(c) && rated(o) <= 1 && m < 0.5) 0.5 else m
+    }
+    fun onSecondChance(c: Context, o: JSONObject) = secondChance(c) && rated(o) == 1 && verdict(o) == "bad"
+
+    private fun score(k: String) = when (k) { "good" -> 1.0; "meh" -> 0.5; else -> 0.0 }
+
+    /** Repostagens: quantos flopparam e depois bombaram, e o contrário. */
+    fun repostStats(items: List<JSONObject>): String {
+        val multi = items.map { hist(it) }.filter { it.size >= 2 }
+        if (multi.isEmpty()) return "🔁 Repostagens: ainda nenhum post avaliado 2 vezes."
+        var up = 0; var down = 0; var same = 0
+        multi.forEach { h ->
+            val ks = h.map { it.second }
+            val fu = ks.indices.any { i -> ks[i] == "bad" && ks.drop(i + 1).contains("good") }
+            val fd = ks.indices.any { i -> ks[i] == "good" && ks.drop(i + 1).contains("bad") }
+            when { fu -> up++; fd -> down++; else -> same++ }
+        }
+        val pct = (up * 100) / multi.size
+        return "🔁 Repostagens (${multi.size} com 2+ notas): $up flopparam e depois bombaram · $down bombaram e depois flopparam · $same iguais." +
+            if (up > 0) "\n→ $pct% dos flops viraram 🔥 na repostagem: vale dar 2ª chance." else ""
+    }
+
+    private val BUCKETS = listOf(0..5 to "madrugada", 6..10 to "manhã", 11..13 to "almoço", 14..17 to "tarde", 18..20 to "começo da noite", 21..23 to "noite")
+    private fun bucket(at: Long): String {
+        val h = java.util.Calendar.getInstance().apply { timeInMillis = at }.get(java.util.Calendar.HOUR_OF_DAY)
+        return BUCKETS.first { h in it.first }.second
+    }
+
+    /** Em que horário os posts vão melhor (pelo histórico de notas). */
+    fun hourStats(items: List<JSONObject>): String {
+        val all = items.flatMap { hist(it) }.filter { it.first > 0 }
+        if (all.size < 3) return "⏰ Horários: precisa de mais notas pra comparar."
+        val g = all.groupBy { bucket(it.first) }.mapValues { (_, v) -> Triple((v.map { score(it.second) }.average() * 100).toInt(), v.size, v.count { it.second == "good" }) }
+            .filter { it.value.second >= 2 }
+        if (g.isEmpty()) return "⏰ Horários: precisa de mais notas pra comparar."
+        val best = g.maxBy { it.value.first }; val worst = g.minBy { it.value.first }
+        return "⏰ Melhor horário: ${best.key} (${best.value.first}%, ${best.value.second} posts)" +
+            if (worst.key != best.key) " · pior: ${worst.key} (${worst.value.first}%)" else ""
+    }
+
+    /** Histórico de um post em texto (pra IA). */
+    fun histText(o: JSONObject): String {
+        val h = hist(o)
+        if (h.isEmpty()) return ""
+        val fmt = java.text.SimpleDateFormat("EEE HH'h'", java.util.Locale("pt", "BR"))
+        return "histórico: " + h.mapIndexed { i, (at, k) -> "${i + 1}ª " + (when (k) { "good" -> "🔥"; "bad" -> "👎"; else -> "😐" }) + (if (at > 0) " " + fmt.format(java.util.Date(at)) else "") }.joinToString(", ")
+    }
+
     // ---------- regras dos vídeos
     fun videoRules(c: Context): List<String> = try { val a = JSONArray(p(c).getString("combo_regras_v", "[]")); (0 until a.length()).map { a.optString(it) } } catch (e: Exception) { emptyList() }
     fun videoRulesText(c: Context) = videoRules(c).takeIf { it.isNotEmpty() }?.let { "🧠 O QUE JÁ SE APRENDEU NOS VÍDEOS DESTE PERFIL — siga:\n" + it.joinToString("\n") { r -> "- $r" } } ?: ""
@@ -44,10 +113,11 @@ object Learn {
                 o.optString("musica").takeIf { it.isNotBlank() }?.let { append(" · música: ").append(File(it).nameWithoutExtension.take(30)) }
                 o.optString("modelo").takeIf { it.isNotBlank() }?.let { append(" · edição: ").append(it) }
                 o.optString("legenda").takeIf { it.isNotBlank() }?.let { append(" · legenda: ").append(it.replace('\n', ' ').take(80)) }
+                histText(o).takeIf { it.isNotEmpty() }?.let { append(" · ").append(it) }
             }
             Triple(File(VideoExport.videoDir(c), "${o.optString("id")}.jpg"), desc, verdict(o))
         }
-        val r = Ai.learnVideos(c, items)
+        val r = Ai.learnVideos(c, items, repostStats(lib) + "\n" + hourStats(lib))
         if (r.isNotEmpty()) p(c).edit().putString("combo_regras_v", JSONArray(r).toString()).putLong("combo_v_at", System.currentTimeMillis()).apply()
         return r
     }

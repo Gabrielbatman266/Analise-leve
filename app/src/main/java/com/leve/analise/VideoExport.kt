@@ -317,7 +317,7 @@ object VideoExport {
         val idx = rec.indexOf(o.optString("id"))
         val pj = projs[o.optString("proj")]
         val origin = if (pj == null) 1.0 else Math.exp(2.0 * (Learn.mean(pj) - 0.5))
-        return Math.exp(5.0 * (Learn.mean(o) - 0.5)) * (if (o.optInt("posts") == 0) 2.0 else 1.0) * (if (idx < 0) 1.5 else 1.0 + idx / 10.0) * origin
+        return Math.exp(5.0 * (Learn.chanceMean(c, o) - 0.5)) * (if (o.optInt("posts") == 0) 2.0 else 1.0) * (if (idx < 0) 1.5 else 1.0 + idx / 10.0) * origin
     }
 
     /** Candidatos agora: o que saiu há pouco espera (o que bombou espera só 2 posts) e o mesmo vídeo cru não sai em seguida. */

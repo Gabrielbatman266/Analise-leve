@@ -138,12 +138,16 @@ Responda só com JSON: {"legendas":["..."]}"""
      * 🧠 Analisa COMBINAÇÕES: posts avaliados (foto + legenda + nota) → regras do que combina com o quê.
      * pairs: (foto, legenda, "good"/"meh"/"bad")
      */
-    fun learnCombos(c: Context, pairs: List<Triple<File, String, String>>): List<String> {
+    fun learnCombos(c: Context, pairs: List<Triple<File, String, String>>, extra: String = ""): List<String> {
         val list = pairs.mapIndexed { i, (_, cap, k) ->
             "${i + 1}. nota: " + (when (k) { "good" -> "🔥 BOMBOU"; "bad" -> "👎 FLOPOU"; else -> "😐 normal" }) + " — legenda: \"" + cap.replace('\n', ' ') + "\""
         }.joinToString("\n")
         val prompt = """Você é analista de conteúdo do Threads. Estão anexadas ${pairs.size} fotos de posts de uma criadora, na ordem, cada uma com a legenda usada e como foi:
 $list
+
+$extra
+IMPORTANTE: a mesma foto pode ir mal numa postagem e bem em outra (horário, dia, algoritmo). Use o histórico pra separar o que é do
+CONTEÚDO do que é do HORÁRIO/SORTE, e diga se vale repostar o que flopou e em que horário.
 
 Compare as que bombaram com as que floparam e descubra o que funciona na COMBINAÇÃO foto + legenda:
 tipo de foto (pose, enquadramento, cenário, roupa, luz, clima — sem descrever rosto nem identidade) × tipo de legenda (tom, tamanho, gancho, pergunta, humor…).
@@ -156,12 +160,16 @@ Responda só com JSON: {"regras":["...","..."]}"""
     }
 
     /** 🧠 Vídeos: quadro de cada vídeo + o que tinha nele + como foi → regras. */
-    fun learnVideos(c: Context, items: List<Triple<File, String, String>>): List<String> {
+    fun learnVideos(c: Context, items: List<Triple<File, String, String>>, extra: String = ""): List<String> {
         val list = items.mapIndexed { i, (_, d, k) ->
             "${i + 1}. " + (when (k) { "good" -> "🔥 BOMBOU"; "bad" -> "👎 FLOPOU"; else -> "😐 normal" }) + " — " + d
         }.joinToString("\n")
         val prompt = """Você é analista de Reels/Instagram. Estão anexados ${items.size} quadros (um de cada vídeo postado por uma criadora), na ordem, com o que tinha em cada vídeo e como foi:
 $list
+
+$extra
+IMPORTANTE: o mesmo vídeo pode ir mal numa postagem e bem em outra (horário, dia, momento do algoritmo). Use o histórico de cada um
+pra separar o que é do CONTEÚDO do que é do HORÁRIO/SORTE, e diga se vale repostar o que flopou e em que horário.
 
 Compare os que bombaram com os que floparam e descubra o que funciona na COMBINAÇÃO:
 tipo de cena (o que ela está fazendo, enquadramento, cenário, roupa, luz — sem descrever rosto nem identidade) × texto no vídeo (tom, tamanho, gancho) × categoria × música × edição × legenda.

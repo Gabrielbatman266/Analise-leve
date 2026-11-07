@@ -488,9 +488,14 @@ class MainActivity : Activity() {
         val tvRules = text("", 13f, FG, parent = cs)
         fun rulesT() {
             val r = Captions.learned(this)
-            tvRules.text = if (r.isEmpty()) "🧠 A IA ainda não analisou as combinações." else "🧠 O que a IA aprendeu (foto + legenda):\n" + r.joinToString("\n") { "• $it" }
+            val fotos = PostQueue.load(this).filter { it.optInt("usos") > 0 || it.optString("status") == "postada" }
+            tvRules.text = Learn.repostStats(fotos) + "\n" + Learn.hourStats(fotos) + "\n\n" +
+                (if (r.isEmpty()) "🧠 A IA ainda não analisou as combinações." else "🧠 O que a IA aprendeu (foto + legenda):\n" + r.joinToString("\n") { "• $it" })
         }
         rulesT()
+        chips(cs, listOf("🔁 Dar 2ª chance", "Flopou, sai menos"), { if (Learn.secondChance(this)) "🔁 Dar 2ª chance" else "Flopou, sai menos" }) { Learn.setSecondChance(this, it.startsWith("🔁")) }
+        text("2ª chance: uma foto que flopou 1 vez volta normal pro sorteio (às vezes foi o horário). Se flopar de novo, sai bem menos. Vale pros vídeos também.", 11f, MUTED, parent = cs)
+        chips(cs, listOf("🤖 IA analisa sozinha", "Só quando eu pedir"), { if (Learn.autoOn(this)) "🤖 IA analisa sozinha" else "Só quando eu pedir" }) { Learn.setAuto(this, it.startsWith("🤖")) }
         val tvLearnSt = TextView(this).apply { textSize = 12f; setTextColor(OK) }
         button("🧠 Analisar fotos + legendas que bombaram (IA)", cs, primary = true) {
             tvLearnSt.setTextColor(MUTED); tvLearnSt.text = "A IA está comparando as fotos e legendas…"

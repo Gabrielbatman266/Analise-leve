@@ -173,9 +173,10 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         val pick = (sorted.take(6) + sorted.takeLast(4)).distinct().take(10)
         val list = pick.map { o ->
             val k = when { photoMean(o) > 0.6 -> "good"; photoMean(o) < 0.45 -> "bad"; else -> "meh" }
-            Triple(PostQueue.imageFile(c, o.optString("id")), PostQueue.captionOf(o), k)
+            val h = Learn.histText(o)
+            Triple(PostQueue.imageFile(c, o.optString("id")), PostQueue.captionOf(o) + (if (h.isNotEmpty()) "  [$h]" else ""), k)
         }
-        val regras = Ai.learnCombos(c, list)
+        val regras = Ai.learnCombos(c, list, Learn.repostStats(rated) + "\n" + Learn.hourStats(rated))
         if (regras.isNotEmpty()) p(c).edit().putString("combo_regras", JSONArray(regras).toString()).putLong("combo_at", System.currentTimeMillis()).apply()
         return regras
     }
@@ -211,7 +212,7 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         val w = cand.map { o ->
             val posted = o.optString("status") == "postada"
             val idx = rec.indexOf(o.optString("id"))
-            val score = Math.exp(5.0 * (photoMean(o) - 0.5))
+            val score = Math.exp(5.0 * (Learn.chanceMean(c, o) - 0.5))
             score * (if (!posted) 2.0 else 1.0) * (if (idx < 0) 1.5 else 1.0 + idx / 10.0)
         }
         var r = Math.random() * w.sum(); var o = cand.last()

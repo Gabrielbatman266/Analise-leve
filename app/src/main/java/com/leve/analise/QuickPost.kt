@@ -148,6 +148,7 @@ object RateLater {
         PostQueue.update(c, id) {
             if (prev.isNotEmpty()) it.put(prev, maxOf(0, it.optInt(prev) - 1)) // trocou a nota deste post
             it.put(k, it.optInt(k) + 1); it.put("nota", k); it.put("notaAt", at)
+            Learn.addHist(it, at, k)
         }
     }
 
@@ -171,6 +172,7 @@ object RateLater {
             if (it.optInt("good") + it.optInt("meh") + it.optInt("bad") == 0 && it.optString("nota").isNotEmpty() && prev.isEmpty() && it.optLong("notaAt") == 0L)
                 it.optString("nota").let { old -> it.put(old, 1) } // nota antiga vira contagem
             it.put(k, it.optInt(k) + 1); it.put("nota", k); it.put("notaAt", at)
+            Learn.addHist(it, at, k)
         }
     }
 }
