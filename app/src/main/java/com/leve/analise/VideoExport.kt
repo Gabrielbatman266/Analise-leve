@@ -433,15 +433,29 @@ object VideoExport {
     }
 
     /** Abre o Instagram com o arquivo; a legenda vai pra área de transferência pra colar. */
-    fun shareToInstagram(c: Context, uri: Uri, mime: String): Intent {
+    /**
+     * Abre o Instagram já na tela certa (Reels pra vídeo, Feed pra foto) com o arquivo.
+     * Libera a leitura do arquivo pro Instagram inteiro antes, porque na primeira abertura
+     * (app fechado) ele lê o arquivo depois, em outra tela, e sem isso chegava vazio.
+     */
+    fun shareToInstagram(c: Context, uri: Uri, mime: String): Intent = shareTo(c, uri, mime, INSTAGRAM,
+        if (mime.startsWith("video")) listOf("reel", "clips") else listOf("sharehandler"))
+
+    fun shareTo(c: Context, uri: Uri, mime: String, pkg: String, prefer: List<String>, text: String? = null): Intent {
         val i = Intent(Intent.ACTION_SEND).apply {
             type = mime
             putExtra(Intent.EXTRA_STREAM, uri)
+            if (text != null) putExtra(Intent.EXTRA_TEXT, text)
             clipData = ClipData.newUri(c.contentResolver, "post", uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        val direct = Intent(i).setPackage(INSTAGRAM)
-        return if (direct.resolveActivity(c.packageManager) != null) direct
-               else Intent.createChooser(i, "Postar em…").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try { c.grantUriPermission(pkg, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (e: Exception) { }
+        val acts = try { c.packageManager.queryIntentActivities(Intent(i).setPackage(pkg), 0) } catch (e: Exception) { emptyList() }
+        if (acts.isEmpty()) return Intent.createChooser(i, "Postar em…").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val names = acts.map { it.activityInfo.name }
+        val bad = listOf("direct", "story", "stories", "thread", "message", "chat")
+        val pick = prefer.firstNotNullOfOrNull { w -> names.firstOrNull { n -> n.lowercase().contains(w) && bad.none { n.lowercase().contains(it) } } }
+            ?: names.firstOrNull { n -> bad.none { n.lowercase().contains(it) } } ?: names.first()
+        return i.setClassName(pkg, pick)
     }
 }

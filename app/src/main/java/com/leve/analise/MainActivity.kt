@@ -108,6 +108,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        ui.postDelayed({ askPending() }, 600)
         Updater.schedule(this)
         Updater.checkOnOpen(this)
         QuickPost.publishShortcut(this)
@@ -300,6 +301,27 @@ class MainActivity : Activity() {
         showTab((Store.prefs(this).getString("tab", "Postar") ?: "Postar").let { if (it == "Analisar") "Postar" else it })
     }
 
+    private var asking = false
+    /** Na volta do Instagram/Threads: "Publicou?" — só marca como postado se você confirmar. */
+    private fun askPending() {
+        if (asking || isFinishing) return
+        val p = PostConfirm.first(this) ?: return
+        asking = true
+        AlertDialog.Builder(this).setTitle("Publicou ${PostConfirm.label(p)}?")
+            .setMessage(p.optString("cap").take(140).ifBlank { "(sem legenda)" })
+            .setPositiveButton("✓ Publiquei") { _, _ -> PostConfirm.answer(this, p.optString("kind"), p.optString("id"), true); after() }
+            .setNegativeButton("Não publiquei") { _, _ -> PostConfirm.answer(this, p.optString("kind"), p.optString("id"), false); after() }
+            .setNeutralButton("Depois", null)
+            .setOnDismissListener { asking = false }
+            .show()
+    }
+    private fun after() {
+        postStamp = -1L; refresh()
+        if (::insta.isInitialized) insta.refreshLists()
+        QuickPost.updateWidgets(this)
+        ui.postDelayed({ askPending() }, 400)
+    }
+
     private fun showTab(name: String) {
         Store.prefs(this).edit().putString("tab", name).apply()
         if (name == "Legendas") { renderLearn(); renderMine(); renderRefs() }
@@ -336,7 +358,7 @@ class MainActivity : Activity() {
 
     private fun postPhotoIg(id: String, cap: String) {
         copyCaption(cap)
-        CaptionDB.used(this, cap)
+        PostConfirm.start(this, "fotoIg", id, cap, "Instagram")
         toast("Legenda copiada: no Instagram é só colar e postar")
         startActivity(VideoExport.shareToInstagram(this, PostQueue.uri(id), "image/jpeg"))
     }

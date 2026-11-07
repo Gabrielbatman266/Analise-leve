@@ -112,19 +112,8 @@ object PostQueue {
     fun uri(id: String): Uri = Uri.parse("content://$AUTH/$id.jpg")
 
     /** Foto + legenda juntas. Vai direto pro Threads quando ele está instalado. */
-    fun shareIntent(c: Context, id: String, caption: String): Intent {
-        val u = uri(id)
-        val i = Intent(Intent.ACTION_SEND).apply {
-            type = "image/jpeg"
-            putExtra(Intent.EXTRA_STREAM, u)
-            putExtra(Intent.EXTRA_TEXT, caption)
-            clipData = ClipData.newUri(c.contentResolver, "foto", u)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        val direct = Intent(i).setPackage(THREADS)
-        return if (direct.resolveActivity(c.packageManager) != null) direct
-               else Intent.createChooser(i, "Postar em…").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    }
+    fun shareIntent(c: Context, id: String, caption: String): Intent =
+        VideoExport.shareTo(c, uri(id), "image/jpeg", THREADS, listOf("share", "compose", "post"), caption)
 
     // ---------- galeria: só uma cópia, sempre a mais recente ----------
     fun galleryOn(c: Context) = Store.prefs(c).getBoolean("gallery_first", true)

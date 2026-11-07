@@ -140,11 +140,8 @@ class PostActivity : Activity() {
         PostQueue.putInGallery(this, id) // fica em primeiro na galeria; a cópia anterior é apagada
         try {
             startActivity(PostQueue.shareIntent(this, id, cap))
-            CaptionDB.used(this, cap)
-            PostQueue.update(this, id) {
-                it.put("status", "postada"); it.put("postedAt", System.currentTimeMillis())
-                it.put("escolhida", cap); it.put("usos", it.optInt("usos") + 1)
-            }
+            PostQueue.update(this, id) { it.put("escolhida", cap) }
+            PostConfirm.start(this, "fila", id, cap, "Threads") // só vira "postada" quando você confirmar
             getSystemService(android.app.NotificationManager::class.java).cancel(9)
             if (Reminder.every(this) > 0) Reminder.schedule(this)
             Toast.makeText(this, "Legenda também copiada, se precisar colar", Toast.LENGTH_SHORT).show()

@@ -387,7 +387,7 @@ class InstaEditor(private val a: MainActivity) {
         }
     }
 
-    fun refreshLists() { renderProjects(); renderLibrary() }
+    fun refreshLists() { if (::projBox.isInitialized) { renderProjects(); renderLibrary() } }
 
     private val ui get() = a.ui
 
@@ -1252,9 +1252,8 @@ class InstaEditor(private val a: MainActivity) {
         // posta direto do app: nada é baixado nem copiado pra galeria
         val f = File(VideoExport.videoDir(a), "$id.mp4")
         if (!f.exists()) { a.toast("Esse vídeo não está mais no app"); return }
-        VideoExport.updateLib(a, id) { it.put("legenda", cap); it.put("posts", it.optInt("posts") + 1); it.put("lastPost", System.currentTimeMillis()) }
-        VideoExport.markPosted(a, id)
-        CaptionDB.used(a, cap)
+        VideoExport.updateLib(a, id) { it.put("legenda", cap) }
+        PostConfirm.start(a, "video", id, cap, "Instagram") // só conta como postado quando você confirmar
         renderLibrary()
         a.toast(if (cap.isEmpty()) "Abrindo o Instagram" else "Legenda copiada: no Instagram é só colar e postar")
         a.startActivity(VideoExport.shareToInstagram(a, PostQueue.uri(id).buildUpon().path("/$id.mp4").build(), "video/mp4"))
