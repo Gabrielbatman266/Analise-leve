@@ -33,6 +33,7 @@ class InstaEditor(private val a: MainActivity) {
         const val REQ_MUSIC = 33
         const val REQ_MULTI = 34
         const val REQ_IMPORT = 35
+        const val REQ_RAW_MANY = 36
     }
 
     private var src: Uri? = null
@@ -409,6 +410,7 @@ class InstaEditor(private val a: MainActivity) {
         catHead.addView(rr0, a.lpMatch())
         a.button("＋ Nova categoria", rr0, primary = true, weight = true) { newCtxDialog { openCat = it; renderProjects() } }
         a.button("✨ Separar vídeos com IA", rr0, weight = true) { classifyRaw() }
+        a.button("＋＋ Adicionar vários vídeos crus", catHead) { chooseRawMany(openCat) }
         tvRaw = a.text("", 12f, a.OK, parent = catHead)
         catBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         a.page.addView(catBox, a.lpMatch())
@@ -1214,7 +1216,10 @@ class InstaEditor(private val a: MainActivity) {
         val cv = catCard()
         val crus = Projects.list(a).filter { it.optString("ctx") == n }
         a.text("🎬 Vídeos crus (${crus.size})", 15f, a.FG, parent = cv, bold = true)
-        a.button("＋ Adicionar vídeo nesta categoria", cv) { pendingCat = n; chooseMyVideo() }
+        val ar = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        cv.addView(ar, a.lpMatch())
+        a.button("＋ 1 vídeo", ar, weight = true) { pendingCat = n; chooseMyVideo() }
+        a.button("＋＋ Vários de uma vez", ar, primary = true, weight = true) { chooseRawMany(n) }
         if (crus.isEmpty()) a.text("Nenhum vídeo aqui ainda.", 12f, a.MUTED, parent = cv)
         crus.forEach { o ->
             val id = o.optString("id")
@@ -1350,7 +1355,16 @@ class InstaEditor(private val a: MainActivity) {
 
     /** Devolve true se o resultado era deste editor. */
     fun onResult(req: Int, res: Int, data: Intent?): Boolean {
-        if (req != REQ_VIDEO && req != REQ_PHOTO && req != REQ_MUSIC && req != REQ_MULTI && req != REQ_IMPORT) return false
+        if (req != REQ_VIDEO && req != REQ_PHOTO && req != REQ_MUSIC && req != REQ_MULTI && req != REQ_IMPORT && req != REQ_RAW_MANY) return false
+        if (req == REQ_RAW_MANY) {
+            val cat = pendingCat; pendingCat = null
+            if (res != android.app.Activity.RESULT_OK || data == null) return true
+            val uris = ArrayList<Uri>()
+            data.clipData?.let { cd -> for (k in 0 until cd.itemCount) uris.add(cd.getItemAt(k).uri) }
+            if (uris.isEmpty()) data.data?.let { uris.add(it) }
+            if (uris.isNotEmpty()) addRawMany(uris, cat)
+            return true
+        }
         if (req == REQ_IMPORT) {
             if (res != android.app.Activity.RESULT_OK || data == null) return true
             val uris = ArrayList<Uri>()
@@ -1441,6 +1455,40 @@ class InstaEditor(private val a: MainActivity) {
                 cutStart = 0; cutEnd = 0
                 pendingCat?.let { cx -> Projects.update(a, pid) { it.put("ctx", cx) } }; pendingCat = null
                 loadBase("Vídeo salvo no projeto"); saveNow(); renderProjects()
+            }
+        }.start()
+    }
+
+    /** Vários vídeos crus de uma vez: cada um vira um vídeo cru (na categoria escolhida), sem abrir o editor. */
+    private fun chooseRawMany(cat: String?) {
+        AlertDialog.Builder(a).setTitle("Adicionar vários vídeos crus")
+            .setItems(arrayOf("🖼  Galeria (marque vários)", "📁  Arquivos (segure pra marcar vários)")) { _, i ->
+                pendingCat = cat
+                if (i == 0) openGallery("video/*", REQ_RAW_MANY, true) else openFiles("video/*", REQ_RAW_MANY, true)
+            }.show()
+    }
+
+    private fun addRawMany(uris: List<Uri>, cat: String?) {
+        tvRaw.setTextColor(a.MUTED); tvRaw.text = "Adicionando ${uris.size} vídeo(s)…"
+        a.scrollTo(catHead)
+        Thread {
+            var ok = 0
+            uris.forEachIndexed { i, u ->
+                ui.post { tvRaw.text = "Adicionando ${i + 1} de ${uris.size}…" }
+                try { Thread.sleep(5) } catch (e: Exception) { } // ids diferentes
+                val pid = Projects.create(a, false)
+                val f = Projects.srcFile(a, pid, false)
+                val good = try { a.contentResolver.openInputStream(u)?.use { inp -> f.outputStream().use { inp.copyTo(it) } }; f.length() > 0 } catch (e: Exception) { false }
+                if (!good) { Projects.remove(a, pid); return@forEachIndexed }
+                VideoExport.baseFrame(a, Uri.fromFile(f), false)?.let { Projects.saveThumb(a, pid, it) }
+                if (cat != null) Projects.update(a, pid) { it.put("ctx", cat) }
+                ok++
+            }
+            ui.post {
+                tvRaw.setTextColor(a.OK)
+                tvRaw.text = "✓ $ok de ${uris.size} vídeo(s) cru(s) adicionados" + (cat?.let { " em " + (if (it.isEmpty()) "Sem categoria" else Contexts.label(a, it)) } ?: "") +
+                    if (cat == null && Contexts.list(a).isNotEmpty()) ". Toque em ✨ Separar vídeos com IA ou mova com ⇄." else ""
+                renderProjects()
             }
         }.start()
     }
@@ -1683,9 +1731,59 @@ class InstaEditor(private val a: MainActivity) {
     private fun renderLibrary() {
         updateCycle(); updateNav(); updateDaily()
         libBox.removeAllViews()
-        val l = VideoExport.library(a)
-        if (l.isEmpty()) { a.text("Nenhum vídeo pronto ainda. Exporte um esboço ou importe os que você já tem.", 12f, a.MUTED, parent = libBox); return }
-        l.take(30).forEach { o ->
+        val all = VideoExport.library(a)
+        if (all.isEmpty()) { a.text("Nenhum vídeo pronto ainda. Toque em 🤖 Produzir mais ou ponha na fila vídeos que você já tem.", 12f, a.MUTED, parent = libBox); return }
+        // próximos a sair: nunca dois do mesmo vídeo cru em seguida
+        val next = VideoExport.upcoming(a, 6)
+        if (next.isNotEmpty()) {
+            a.text("Próximos a sair (o mesmo vídeo cru nunca sai em seguida)", 12f, a.MUTED, parent = libBox, bold = true)
+            val hs = android.widget.HorizontalScrollView(a)
+            val strip = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+            hs.addView(strip); libBox.addView(hs, a.lpMatch().apply { topMargin = a.dp(4) })
+            val tag = groupTags(all)
+            next.forEachIndexed { k, o ->
+                val cell = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
+                strip.addView(cell, LinearLayout.LayoutParams(a.dp(60), ViewGroup.LayoutParams.WRAP_CONTENT).apply { rightMargin = a.dp(6) })
+                val th = File(VideoExport.videoDir(a), "${o.optString("id")}.jpg")
+                cell.addView(ImageView(a).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF1C1C24.toInt()); if (th.exists()) setImageBitmap(BitmapFactory.decodeFile(th.path)) },
+                    LinearLayout.LayoutParams(a.dp(54), a.dp(96)))
+                cell.addView(TextView(a).apply { text = "${k + 1}º · ${tag[VideoExport.origin(o)] ?: ""}"; textSize = 10f; setTextColor(a.MUTED); gravity = Gravity.CENTER })
+            }
+        }
+        // agrupados pelo vídeo cru de origem
+        val tag = groupTags(all)
+        val groups = all.groupBy { VideoExport.origin(it) }.entries.sortedByDescending { e -> e.value.count { it.optInt("posts") == 0 } }
+        groups.forEach { (orig, vids) ->
+            val p = if (orig.startsWith("solo:")) null else Projects.list(a).firstOrNull { it.optString("id") == orig }
+            val waiting = vids.count { it.optInt("posts") == 0 }
+            val head = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            libBox.addView(head, a.lpMatch().apply { topMargin = a.dp(16) })
+            if (p != null) head.addView(ImageView(a).apply { scaleType = ImageView.ScaleType.CENTER_CROP; thumbOf(orig)?.let { setImageBitmap(it) } },
+                LinearLayout.LayoutParams(a.dp(28), a.dp(50)).apply { rightMargin = a.dp(8) })
+            val title = when {
+                p != null -> "${tag[orig]} · " + p.optString("desc").ifBlank { "Vídeo cru" }.take(40)
+                vids.size == 1 && orig.startsWith("solo:") -> "${tag[orig]} · Vídeo importado"
+                else -> "${tag[orig]} · Vídeo cru apagado"
+            }
+            head.addView(TextView(a).apply {
+                text = "$title\n${vids.size} versão(ões) · $waiting na fila" + (p?.optString("ctx")?.takeIf { it.isNotBlank() }?.let { " · " + Contexts.label(a, it) } ?: "")
+                textSize = 13f; setTextColor(a.FG); typeface = android.graphics.Typeface.DEFAULT_BOLD
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            vids.forEach { o -> libItem(o) }
+        }
+    }
+
+    /** Letra de cada vídeo cru (A, B, C…) pra ver de onde cada pronto saiu. */
+    private fun groupTags(all: List<org.json.JSONObject>): Map<String, String> {
+        val m = LinkedHashMap<String, String>()
+        all.map { VideoExport.origin(it) }.distinct().sorted().forEachIndexed { i, o ->
+            m[o] = "🎞 " + (if (i < 26) ('A' + i).toString() else (i + 1).toString())
+        }
+        return m
+    }
+
+    private fun libItem(o: org.json.JSONObject) {
+            run {
             val id = o.optString("id")
             val box = LinearLayout(a).apply {
                 orientation = LinearLayout.HORIZONTAL; setPadding(a.dp(8), a.dp(8), a.dp(8), a.dp(8))

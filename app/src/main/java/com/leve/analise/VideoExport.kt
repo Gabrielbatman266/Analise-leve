@@ -287,22 +287,73 @@ object VideoExport {
     // ---------- rodada aleatória: cada vídeo sai uma vez; quando todos saem, recomeça
     private fun cycleSet(c: Context): MutableSet<String> = HashSet(Store.prefs(c).getStringSet("vid_cycle", emptySet()) ?: emptySet())
 
+    /** Origem de um vídeo pronto: o vídeo cru de onde ele saiu (vídeos importados contam como origem própria). */
+    fun origin(o: JSONObject): String = o.optString("proj").ifBlank { "solo:" + o.optString("id") }
+
+    private fun recent(c: Context, key: String): List<String> =
+        Store.prefs(c).getString(key, "")!!.split('\u0001').filter { it.isNotBlank() }
+
+    /**
+     * Próximo da fila. Regras: cada vídeo sai uma vez por rodada; NUNCA o mesmo vídeo cru em seguida
+     * (evita as últimas origens enquanto houver opção); texto diferente do último; entre as opções,
+     * a origem que está há mais tempo sem sair.
+     */
     fun cycleNext(c: Context): String? {
-        val ids = library(c).map { it.optString("id") }.filter { File(videoDir(c), "$it.mp4").exists() }
-        if (ids.isEmpty()) return null
-        var pool = ids.filter { it !in cycleSet(c) }
-        if (pool.isEmpty()) { Store.prefs(c).edit().remove("vid_cycle").apply(); pool = ids }
+        val lib = library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() }
+        if (lib.isEmpty()) return null
+        val done = cycleSet(c)
+        var pool = lib.filter { it.optString("id") !in done }
+        if (pool.isEmpty()) { Store.prefs(c).edit().remove("vid_cycle").apply(); pool = lib }
         val last = Store.prefs(c).getString("vid_last", "")
-        return (pool.filter { it != last }.ifEmpty { pool }).random()
+        pool = pool.filter { it.optString("id") != last }.ifEmpty { pool }
+        val origins = lib.map { origin(it) }.distinct().size
+        val recentO = recent(c, "vid_last_orig")
+        // quantas origens anteriores evitar: até 3, mas sempre deixando pelo menos uma livre
+        val avoid = recentO.take(minOf(3, maxOf(0, origins - 1)))
+        var cand = pool
+        for (k in avoid.size downTo 1) { val f = pool.filter { origin(it) !in avoid.take(k) }; if (f.isNotEmpty()) { cand = f; break } }
+        val lastTxt = recent(c, "vid_last_txt").take(3)
+        cand = cand.filter { it.optString("texto").trim().lowercase() !in lastTxt }.ifEmpty { cand }
+        // origem há mais tempo sem sair primeiro (nunca saiu = melhor)
+        val rank = { o: JSONObject -> recentO.indexOf(origin(o)).let { if (it < 0) Int.MAX_VALUE else it } }
+        val best = cand.maxOf(rank)
+        return cand.filter { rank(it) == best }.random().optString("id")
     }
 
     fun markPosted(c: Context, id: String) {
-        val ids = library(c).map { it.optString("id") }.toSet()
+        val lib = library(c)
+        val ids = lib.map { it.optString("id") }.toSet()
         val s = cycleSet(c); s.add(id); s.retainAll(ids)
         val e = Store.prefs(c).edit().putString("vid_last", id)
+        lib.firstOrNull { it.optString("id") == id }?.let { o ->
+            val ro = (listOf(origin(o)) + recent(c, "vid_last_orig").filter { it != origin(o) }).take(20)
+            e.putString("vid_last_orig", ro.joinToString("\u0001"))
+            val t = o.optString("texto").trim().lowercase()
+            if (t.isNotEmpty()) e.putString("vid_last_txt", (listOf(t) + recent(c, "vid_last_txt")).take(5).joinToString("\u0001"))
+        }
         if (ids.isNotEmpty() && s.containsAll(ids)) { e.remove("vid_cycle"); e.putInt("vid_rounds", Store.prefs(c).getInt("vid_rounds", 0) + 1) }
         else e.putStringSet("vid_cycle", s)
         e.apply()
+    }
+
+    /** Ordem prevista dos próximos [n] (simulação das mesmas regras, sem sorteio). */
+    fun upcoming(c: Context, n: Int): List<JSONObject> {
+        val lib = library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() }
+        val done = cycleSet(c).toMutableSet()
+        val recentO = recent(c, "vid_last_orig").toMutableList()
+        val origins = lib.map { origin(it) }.distinct().size
+        val out = ArrayList<JSONObject>()
+        repeat(minOf(n, lib.size)) {
+            var pool = lib.filter { it.optString("id") !in done && it !in out }
+            if (pool.isEmpty()) return out
+            val avoid = recentO.take(minOf(3, maxOf(0, origins - 1)))
+            var cand = pool
+            for (k in avoid.size downTo 1) { val f = pool.filter { origin(it) !in avoid.take(k) }; if (f.isNotEmpty()) { cand = f; break } }
+            val pick = cand.maxBy { o -> recentO.indexOf(origin(o)).let { if (it < 0) Int.MAX_VALUE else it } }
+            out.add(pick); done.add(pick.optString("id"))
+            recentO.remove(origin(pick)); recentO.add(0, origin(pick))
+        }
+        return out
     }
 
     /** (postados nesta rodada, total, rodadas completas) */
