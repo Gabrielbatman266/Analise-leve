@@ -69,6 +69,11 @@ class RefsTab(private val a: MainActivity) {
         val cp = a.card("Estoque de fotos de referência")
         a.text("Poses, looks, cenários. As fotos ficam guardadas no app, sem metadados. Toque pra marcar; segure pra ver, anotar e gerar o prompt.", 13f, a.MUTED, parent = cp)
         a.button("＋ Adicionar fotos", cp, primary = true) { a.pickImages(REQ_PHOTOS, true) }
+        a.text("📌 Fotos que você salva no Threads (Salvar/baixar mídia) entram aqui sozinhas", 12f, a.MUTED, parent = cp)
+        a.chips(cp, listOf("Ligado", "Desligado"), { if (ThreadsRefs.on(a)) "Ligado" else "Desligado" }) { o ->
+            ThreadsRefs.setOn(a, o == "Ligado")
+            if (o == "Ligado" && !FolderScan.hasPerm(a)) { a.requestPermissions(FolderScan.perms, 42); a.toast("Permita o acesso às fotos pra eu ver o que o Threads salva") }
+        }
         tvSel = a.text("", 13f, a.OK, parent = cp)
         val sr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
         cp.addView(sr, a.lpMatch())

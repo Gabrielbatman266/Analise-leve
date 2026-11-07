@@ -242,7 +242,7 @@ object FolderScan {
 
     /** Pede pro Android acordar o app quando aparecer imagem nova na galeria. */
     fun schedule(c: Context) {
-        if (bucket(c) == null || !hasPerm(c)) return
+        if ((bucket(c) == null && !ThreadsRefs.on(c)) || !hasPerm(c)) return
         val js = c.getSystemService(JobScheduler::class.java)
         val job = JobInfo.Builder(JOB_ID, ComponentName(c, FolderJob::class.java))
             .addTriggerContentUri(JobInfo.TriggerContentUri(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
@@ -286,6 +286,7 @@ class FolderJob : JobService() {
     override fun onStartJob(params: JobParameters): Boolean {
         Thread {
             try { GalleryClean.sweep(this) } catch (e: Exception) { }
+            try { ThreadsRefs.scan(this) } catch (e: Exception) { }
             val n = try { FolderScan.scan(this) } catch (e: Exception) { 0 }
             val nv = try { FolderScan.scanVideos(this) } catch (e: Exception) { 0 }
             if (nv > 0) FolderScan.notifyVideos(this, nv)

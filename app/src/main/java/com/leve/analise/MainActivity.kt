@@ -122,6 +122,8 @@ class MainActivity : Activity() {
         Thread {
             PostQueue.cleanGallery(this, false)
             GalleryClean.sweep(this)
+            val nr = ThreadsRefs.scan(this)
+            if (nr > 0) ui.post { toast("📌 $nr foto(s) do Threads nas Referências"); if (::refs.isInitialized) refs.renderPhotos() }
             val n = FolderScan.scan(this)
             val nv = FolderScan.scanVideos(this)
             if (nv > 0) ui.post { toast("$nv vídeo(s) do Flow viraram esboço na aba Instagram"); if (::insta.isInitialized) insta.refreshLists() }
