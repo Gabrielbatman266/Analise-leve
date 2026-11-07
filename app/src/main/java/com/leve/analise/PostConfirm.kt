@@ -55,6 +55,7 @@ object PostConfirm {
                 VideoExport.updateLib(c, id) { it.put("legenda", cap); it.put("posts", it.optInt("posts") + 1); it.put("lastPost", now) }
                 VideoExport.markPosted(c, id)
                 RateLater.schedule(c, id)
+                Daily.countPost(c)
                 AutoProducer.refillIfNeeded(c)
             }
             "fotoIg" -> PostQueue.update(c, id) { it.put("ig", it.optInt("ig") + 1) }

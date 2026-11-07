@@ -52,7 +52,10 @@ object PostQueue {
         FileOutputStream(imageFile(c, id)).use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
         synchronized(lock) {
             val l = load(c)
-            l.add(JSONObject().put("id", id).put("status", "gerando").put("legendas", JSONArray())
+            // sem IA automática: já entra pronta com legendas do seu banco (não gasta crédito)
+            val auto = Captions.aiAuto(c)
+            l.add(JSONObject().put("id", id).put("status", if (auto) "gerando" else "pronta")
+                .put("legendas", if (auto) JSONArray() else JSONArray(Captions.randomCaptions(c, 5))).put("ia", false)
                 .put("at", System.currentTimeMillis()).put("usos", 0))
             save(c, l)
         }
@@ -101,7 +104,8 @@ object PostQueue {
 
     fun get(c: Context, id: String) = load(c).firstOrNull { it.optString("id") == id }
     fun next(c: Context) = load(c).firstOrNull { it.optString("status") == "pronta" }
-    fun pendingCaptions(c: Context) = load(c).filter { it.optString("status") == "gerando" }.map { it.optString("id") }
+    /** Fotos esperando a IA: todas (modo automático) ou só as que você pediu. */
+    fun pendingCaptions(c: Context) = load(c).filter { it.optString("status") == "gerando" && (Captions.aiAuto(c) || it.optBoolean("pedido")) }.map { it.optString("id") }
 
     fun captionOf(o: JSONObject): String {
         val e = o.optString("escolhida")

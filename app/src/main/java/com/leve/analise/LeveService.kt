@@ -392,6 +392,7 @@ class LeveService : Service() {
     /** Legendas primeiro: a foto pra postar não pode esperar a fila de prints. */
     /** Legendas em lote: até 8 fotos por pedido, pra cota da IA render muito mais. */
     private fun doCaptions() {
+        Captions.fillFromBank(this)
         while (!stopFlag) {
             val ids = PostQueue.pendingCaptions(this).take(Store.prefs(this).getInt("cap_batch", 8).coerceIn(1, 10))
             if (ids.isEmpty()) break
@@ -402,7 +403,7 @@ class LeveService : Service() {
                     val res = Ai.captionsBatch(this, ids.map { PostQueue.imageFile(this, it) })
                     ids.forEachIndexed { i, id ->
                         val caps = res.getOrNull(i).orEmpty().ifEmpty { Captions.randomCaptions(this, 4) }
-                        PostQueue.update(this, id) { it.put("legendas", org.json.JSONArray(caps)); it.put("status", "pronta"); it.remove("aviso") }
+                        PostQueue.update(this, id) { it.put("legendas", org.json.JSONArray(caps)); it.put("status", "pronta"); it.remove("aviso"); it.remove("pedido"); it.put("ia", true) }
                     }
                     lastError = ""; done = true
                     main.post { updateNotif() }

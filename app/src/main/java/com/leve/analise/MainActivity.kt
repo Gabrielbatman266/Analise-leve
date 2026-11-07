@@ -111,6 +111,7 @@ class MainActivity : Activity() {
         ui.postDelayed({ askPending() }, 600)
         ui.postDelayed({ if (::insta.isInitialized) insta.maybeRefill() }, 2500)
         Updater.schedule(this)
+        Daily.schedule(this)
         Updater.checkOnOpen(this)
         QuickPost.publishShortcut(this)
         QuickPost.updateWidgets(this)
@@ -121,6 +122,7 @@ class MainActivity : Activity() {
             val nv = FolderScan.scanVideos(this)
             if (nv > 0) ui.post { toast("$nv vídeo(s) do Flow viraram esboço na aba Instagram"); if (::insta.isInitialized) insta.refreshLists() }
             FolderScan.schedule(this)
+            Captions.fillFromBank(this) // fotos paradas em "gerando" recebem legendas do banco, sem gastar crédito
             if (n > 0 || PostQueue.pendingCaptions(this).isNotEmpty()) ui.post {
                 if (n > 0) toast("$n foto(s) nova(s) da pasta ${FolderScan.bucket(this)} na fila")
                 LeveService.send(this, LeveService.ACT_ANALYZE)
@@ -414,10 +416,22 @@ class MainActivity : Activity() {
         chips(cv, listOf("Variado", "Sem final", "Fixo"), { Captions.ctaMode(this) }) { p.edit().putString("cta_mode", it).apply() }
         field("Final fixo (quando escolher Fixo)", p.getString("cta_fixed", "gostou, amor?") ?: "", cv) { p.edit().putString("cta_fixed", it.trim()).apply() }
         field("Contexto (opcional: praia, sexta-feira, look novo…)", p.getString("ctx", "") ?: "", cv) { p.edit().putString("ctx", it.trim()).apply() }
-        button("Gerar legendas novas pra fila toda", cv, primary = true) {
-            val n = Captions.regenerateAll(this)
-            if (n > 0) { LeveService.send(this, LeveService.ACT_ANALYZE); toast("Gerando legendas novas pra $n foto(s)") } else toast("Nenhuma foto esperando na fila")
-            refresh()
+
+        val cia = card("Legendas da fila (Threads) com IA")
+        text("Sem IA, cada foto nova já entra com legendas do seu banco (as suas + as que bombaram). A IA só roda quando você pedir, e não gasta crédito à toa.", 13f, MUTED, parent = cia)
+        chips(cia, listOf("Só quando eu pedir", "Automático"), { if (Captions.aiAuto(this)) "Automático" else "Só quando eu pedir" }) {
+            Captions.setAiAuto(this, it == "Automático")
+            if (it != "Automático") Thread { Captions.fillFromBank(this); ui.post { postStamp = -1L; refresh() } }.start()
+        }
+        text("✨ Gerar legendas com IA agora para:", 12f, MUTED, parent = cia)
+        val gr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        cia.addView(gr, lpMatch())
+        listOf(2, 3, 5, 0).forEach { n ->
+            button(if (n == 0) "Todas" else "$n fotos", gr, weight = true) {
+                val k = Captions.requestAi(this, n)
+                if (k > 0) { LeveService.send(this, LeveService.ACT_ANALYZE); toast("A IA vai gerar legendas pra $k foto(s)") } else toast("Todas as fotos já têm legenda de IA")
+                postStamp = -1L; refresh()
+            }
         }
 
         val cs = card("O que está funcionando")
@@ -748,8 +762,8 @@ class MainActivity : Activity() {
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             side.addView(row, lpMatch())
             if (st == "postada") button("Usar de novo", row, weight = true) { PostQueue.requeue(this, id); refresh() }
-            else if (st != "gerando") button("Mais legendas", row, weight = true) {
-                PostQueue.update(this, id) { it.put("status", "gerando") }
+            else if (st != "gerando") button("✨ IA", row, weight = true) {
+                PostQueue.update(this, id) { it.put("status", "gerando"); it.put("pedido", true) }
                 LeveService.send(this, LeveService.ACT_ANALYZE); refresh()
             }
             button("🎲 Aleatória", row, weight = true) {

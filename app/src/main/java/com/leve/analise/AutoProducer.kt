@@ -67,8 +67,10 @@ object AutoProducer {
     } catch (e: Exception) { "A IA não respondeu (${e.message?.take(60)})" }
 
     /** Antes de produzir: vídeos com descrição ganham textos próprios; contextos com poucos textos ganham mais. */
+    fun textAiAuto(c: Context) = Store.prefs(c).getBoolean("ov_ai_auto", false)
+
     private fun ensureTexts(c: Context, projs: List<JSONObject>, progress: (String) -> Unit) {
-        if (Ai.key(c).isEmpty()) return
+        if (Ai.key(c).isEmpty() || !textAiAuto(c)) return // sem automático: usa só o que já tem no banco
         projs.filter { it.optString("desc").isNotBlank() && OverlayDB.count(c, vidKey(it.optString("id"))) < 4 }.forEach { p ->
             progress("Criando textos pro vídeo \"${p.optString("desc").take(30)}\"…"); genTexts(c, 8, vidKey(p.optString("id")))
         }
@@ -150,7 +152,8 @@ object AutoProducer {
 
     /** "Manter sempre N prontos": se faltar, produz em segundo plano (sem precisar abrir o app). */
     fun refillIfNeeded(c: Context) {
-        val keep = Store.prefs(c).getInt("auto_keep", 0)
+        // o estoque é o maior entre "manter sempre N" e o que ainda falta postar hoje pela meta
+        val keep = maxOf(Store.prefs(c).getInt("auto_keep", 0), Daily.remaining(c))
         if (keep <= 0 || running) return
         val need = keep - waiting(c)
         if (need <= 0 || Projects.list(c).isEmpty()) return

@@ -57,6 +57,25 @@ Regras: naturais, em minúsculas quando combinar, no máximo 1 emoji, sem hashta
 Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
     }
 
+    /** IA gera legendas sozinha pra toda foto nova? (desligado = usa o seu banco, sem gastar crédito) */
+    fun aiAuto(c: Context) = p(c).getBoolean("cap_ai_auto", false)
+    fun setAiAuto(c: Context, on: Boolean) = p(c).edit().putBoolean("cap_ai_auto", on).apply()
+
+    /** Pede legendas da IA pras N fotos prontas mais antigas que ainda não têm legenda de IA. */
+    fun requestAi(c: Context, n: Int): Int {
+        val ids = PostQueue.load(c).filter { it.optString("status") == "pronta" && !it.optBoolean("ia") }.map { it.optString("id") }.let { if (n > 0) it.take(n) else it }
+        ids.forEach { id -> PostQueue.update(c, id) { it.put("status", "gerando"); it.put("pedido", true) } }
+        return ids.size
+    }
+
+    /** Sem IA automática: fotos esperando legenda recebem legendas do banco na hora. */
+    fun fillFromBank(c: Context): Int {
+        if (aiAuto(c)) return 0
+        val ids = PostQueue.load(c).filter { it.optString("status") == "gerando" && !it.optBoolean("pedido") }.map { it.optString("id") }
+        ids.forEach { id -> PostQueue.update(c, id) { it.put("legendas", JSONArray(randomCaptions(c, 5))); it.put("status", "pronta"); it.put("ia", false) } }
+        return ids.size
+    }
+
     /** Marca todas as fotos ainda não postadas pra ganhar legendas novas com o estilo atual. */
     fun regenerateAll(c: Context): Int {
         val ids = PostQueue.load(c).filter { it.optString("status") == "pronta" }.map { it.optString("id") }

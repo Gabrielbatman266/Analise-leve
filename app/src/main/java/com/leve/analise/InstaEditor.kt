@@ -662,6 +662,18 @@ class InstaEditor(private val a: MainActivity) {
         ca.addView(autoCtxBox, a.lpMatch())
         btnAuto = a.button("🤖 Produzir agora", ca, primary = true) { produceNow(Store.prefs(a).getInt("auto_n", 5)) }
         tvAuto = a.text("", 13f, a.OK, parent = ca)
+        a.text("🎯 Meta de vídeos por dia", 13f, a.FG, parent = ca, bold = true)
+        a.text("De manhã o app deixa os vídeos do dia prontos e, das 8h às 23h, vai lembrando \"Hora do vídeo 3 de 10\" com o botão Postar, em horários espaçados.", 12f, a.MUTED, parent = ca)
+        a.chips(ca, listOf("Desligado", "3", "5", "10", "15", "20"), { Daily.goal(a).let { if (it == 0) "Desligado" else it.toString() } }) {
+            Daily.setGoal(a, if (it == "Desligado") 0 else it.toInt()); updateDaily()
+        }
+        tvDaily = a.text("", 13f, a.OK, parent = ca)
+        updateDaily()
+        a.text("Textos novos no vídeo com IA", 12f, a.MUTED, parent = ca)
+        a.chips(ca, listOf("Só quando eu pedir", "Automático"), { if (AutoProducer.textAiAuto(a)) "Automático" else "Só quando eu pedir" }) {
+            Store.prefs(a).edit().putBoolean("ov_ai_auto", it == "Automático").apply()
+        }
+        a.text("Só quando eu pedir: a produção usa os textos que já estão no banco e não gasta crédito. Pra criar mais, toque em ✨ (no banco, no contexto ou no T Textos do vídeo).", 11f, a.MUTED, parent = ca)
         a.text("Manter sempre vídeos prontos: quando faltar, o app produz sozinho em segundo plano (depois de cada post e ao abrir)", 12f, a.MUTED, parent = ca)
         a.chips(ca, listOf("Desligado", "3", "5", "10"), { Store.prefs(a).getInt("auto_keep", 0).let { if (it == 0) "Desligado" else it.toString() } }) {
             Store.prefs(a).edit().putInt("auto_keep", if (it == "Desligado") 0 else it.toInt()).apply()
@@ -780,6 +792,15 @@ class InstaEditor(private val a: MainActivity) {
     }
 
     // ------------------------------------------------------------------ 🤖 produção automática
+
+    private lateinit var tvDaily: TextView
+    fun updateDaily() {
+        if (!::tvDaily.isInitialized) return
+        val g = Daily.goal(a)
+        val next = Daily.nextAt(a)
+        tvDaily.text = if (g <= 0) "" else Daily.status(a) + " · ${AutoProducer.waiting(a)} prontos" +
+            (if (Daily.remaining(a) > 0 && next > System.currentTimeMillis()) " · próximo lembrete " + android.text.format.DateFormat.format("HH:mm", next) else "")
+    }
 
     private lateinit var btnAuto: Button
     private lateinit var tvAuto: TextView
@@ -1599,7 +1620,7 @@ class InstaEditor(private val a: MainActivity) {
     }
 
     private fun renderLibrary() {
-        updateCycle(); updateNav()
+        updateCycle(); updateNav(); updateDaily()
         libBox.removeAllViews()
         val l = VideoExport.library(a)
         if (l.isEmpty()) { a.text("Nenhum vídeo pronto ainda. Exporte um esboço ou importe os que você já tem.", 12f, a.MUTED, parent = libBox); return }

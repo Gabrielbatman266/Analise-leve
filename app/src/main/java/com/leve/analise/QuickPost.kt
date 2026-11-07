@@ -64,7 +64,8 @@ class PostWidget : AppWidgetProvider() {
         val nv = QuickPost.countVideos(c)
         for (id in ids) {
             val v = RemoteViews(c.packageName, R.layout.widget_post)
-            v.setTextViewText(R.id.w_count, "📸 $n foto(s) · 🎬 $nv vídeo(s) prontos" + if (AutoProducer.running) " · 🤖 produzindo" else "")
+            val g = Daily.goal(c)
+            v.setTextViewText(R.id.w_count, "📸 $n · 🎬 $nv prontos" + (if (g > 0) " · hoje ${Daily.postedToday(c)}/$g" else "") + if (AutoProducer.running) " · 🤖" else "")
             v.setOnClickPendingIntent(R.id.w_post, QuickPost.pending(c))
             v.setOnClickPendingIntent(R.id.w_video, QuickPost.videoPending(c))
             v.setOnClickPendingIntent(R.id.w_open, PendingIntent.getActivity(c, 78, Intent(c, MainActivity::class.java),
@@ -171,8 +172,9 @@ class StatusProvider : android.content.ContentProvider() {
     override fun query(uri: android.net.Uri, p: Array<out String>?, s: String?, a: Array<out String>?, o: String?): android.database.Cursor {
         val c = context!!
         val l = PostQueue.load(c)
-        return android.database.MatrixCursor(arrayOf("prontas", "total", "videos", "produzindo")).apply {
-            addRow(arrayOf<Any>(l.count { it.optString("status") == "pronta" }, l.size, AutoProducer.waiting(c), if (AutoProducer.running) 1 else 0))
+        return android.database.MatrixCursor(arrayOf("prontas", "total", "videos", "produzindo", "hoje", "meta")).apply {
+            addRow(arrayOf<Any>(l.count { it.optString("status") == "pronta" }, l.size, AutoProducer.waiting(c), if (AutoProducer.running) 1 else 0,
+                Daily.postedToday(c), Daily.goal(c)))
         }
     }
     override fun getType(uri: android.net.Uri): String? = null
