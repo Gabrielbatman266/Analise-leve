@@ -416,7 +416,8 @@ object VideoExport {
      */
     fun cycleNext(c: Context): String? {
         Scenes.refresh(c)
-        val lib = library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() }
+        val lib = library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() && !it.optBoolean("arquivado") }
+            .ifEmpty { library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() } }
         if (lib.isEmpty()) return null
         val rec = recent(c, "vid_rec")
         val recentO = recent(c, "vid_last_orig")
@@ -454,7 +455,7 @@ object VideoExport {
     /** Ordem prevista dos próximos [n] (simulação das mesmas regras, sem sorteio). */
     fun upcoming(c: Context, n: Int): List<JSONObject> {
         Scenes.refresh(c)
-        val lib = library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() }
+        val lib = library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() && !it.optBoolean("arquivado") }
         val rec = recent(c, "vid_rec").toMutableList()
         val recentO = recent(c, "vid_last_orig").toMutableList()
         val projs = Projects.list(c).associateBy { it.optString("id") }

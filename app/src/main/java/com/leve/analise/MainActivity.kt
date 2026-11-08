@@ -37,6 +37,7 @@ class MainActivity : Activity() {
     private val REQ_GALLERY = 12
     private val REQ_POSTS = 13
     private val REQ_DEL = 14
+    private val REQ_RESTORE = 47
     private val REQ_IGPHOTO = 16
 
     // paleta AMOLED
@@ -325,6 +326,25 @@ class MainActivity : Activity() {
         text("Limite de pedidos da IA por dia nas automações (o que você pede na mão não conta no limite):", 12f, MUTED, parent = cau)
         chips(cau, listOf("5", "12", "18", "30"), { Auto.aiMax(this).toString() }) { Auto.setAiMax(this, it.toInt()) }
         text("O grátis do Gemini dá uns 20 pedidos por dia: 12 deixa folga pra você usar na mão.", 11f, MUTED, parent = cau)
+        text("A IA separa cada vídeo novo do Flow na categoria certa (usa 1 pedido a cada 6 vídeos):", 12f, MUTED, parent = cau)
+        chips(cau, listOf("Ligado", "Desligado"), { if (AutoCat.on(this)) "Ligado" else "Desligado" }) { AutoCat.setOn(this, it == "Ligado") }
+        text("🗄 Arquivar sozinho o que flopou 2+ vezes (com 1 reteste depois de 14 dias):", 12f, MUTED, parent = cau)
+        chips(cau, listOf("Ligado", "Desligado"), { if (Archive.on(this)) "Ligado" else "Desligado" }) { Archive.setOn(this, it == "Ligado") }
+        text("🧪 Teste A/B: 1 em cada 4 posts repete uma foto avaliada com legenda nova, pra descobrir se é a foto ou a legenda que bomba:", 12f, MUTED, parent = cau)
+        chips(cau, listOf("Ligado", "Desligado"), { if (AB.on(this)) "Ligado" else "Desligado" }) { AB.setOn(this, it == "Ligado") }
+
+        val cbk = card("💾 Backup")
+        val tvBk = text("", 12f, MUTED, parent = cbk)
+        fun bkT() { tvBk.text = "Toda semana (no plano das 7:40) o app salva legendas, notas, filas, histórico e configurações em Download/PostLeve Backup. Fotos e vídeos ficam no app." +
+            (Backup.last(this).takeIf { it > 0 }?.let { "\nÚltimo: " + android.text.format.DateFormat.format("dd/MM HH:mm", it) } ?: "\nAinda não fez nenhum.") }
+        bkT()
+        val rbk = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; cbk.addView(rbk, lpMatch())
+        button("💾 Fazer agora", rbk, primary = true, weight = true) { Thread { val m = try { Backup.run(this) } catch (e: Exception) { "Erro: ${e.message}" }; ui.post { toast(m); bkT() } }.start() }
+        button("♻ Restaurar", rbk, weight = true) {
+            try { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/zip"), REQ_RESTORE) } catch (e: Exception) { toast("Não abriu o seletor de arquivos") }
+        }
+
+        page = pages["Ajustes"]!!
         text("Ao postar vídeo, lembrar de desligar \"Mostrar na grade do perfil\" (feed só com fotos):", 12f, MUTED, parent = cau)
         chips(cau, listOf("Lembrar", "Não lembrar"), { if (Store.prefs(this).getBoolean("ig_grid_hint", true)) "Lembrar" else "Não lembrar" }) { Store.prefs(this).edit().putBoolean("ig_grid_hint", it == "Lembrar").apply() }
 
@@ -403,6 +423,20 @@ class MainActivity : Activity() {
                 if (i.fix != null) button("🔄 ${i.fixLabel}", box) { toast(i.fix.invoke(this)); healthRedraw?.invoke() }
             }
             Health.lastFix(this).takeIf { it.isNotBlank() }?.let { text("Último conserto automático:\n$it", 11f, MUTED, parent = box) }
+            val af = Archive.photos(this); val av = Archive.videos(this)
+            if (af.size + av.size > 0) {
+                text("🗄 Arquivo: ${af.size} foto(s) e ${av.size} vídeo(s) que flopparam 2+ vezes (fora da fila; depois de 14 dias voltam 1 vez pra um último teste).", 12f, MUTED, parent = box)
+                val ra = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; box.addView(ra, lpMatch())
+                button("Ver / restaurar", ra, weight = true) {
+                    val items = af.map { "📸 " + PostQueue.captionOf(it).replace('\n', ' ').take(40) to { Archive.restorePhoto(this, it.optString("id")) } } +
+                        av.map { "🎬 " + it.optString("texto").replace('\n', ' ').ifBlank { "vídeo sem texto" }.take(40) to { Archive.restoreVideo(this, it.optString("id")) } }
+                    AlertDialog.Builder(this).setTitle("Toque pra devolver à fila").setItems(items.map { it.first }.toTypedArray()) { _, i -> items[i].second(); toast("Voltou pra fila"); healthRedraw?.invoke() }.show()
+                }
+                button("🗑 Apagar arquivo", ra, weight = true) {
+                    AlertDialog.Builder(this).setTitle("Apagar ${af.size + av.size} itens arquivados?").setMessage("Somem de vez (foto/vídeo e notas). Não dá pra desfazer.")
+                        .setPositiveButton("Apagar") { _, _ -> toast("${Archive.deleteAll(this)} apagado(s)"); healthRedraw?.invoke() }.setNegativeButton("Cancelar", null).show()
+                }
+            }
         }
         healthUi(); healthRedraw = { healthUi() }
         chips(ch, listOf("🤖 Conserta sozinho", "Só avisar"), { if (Health.autoOn(this)) "🤖 Conserta sozinho" else "Só avisar" }) { Health.setAuto(this, it.startsWith("🤖")) }
@@ -736,7 +770,7 @@ class MainActivity : Activity() {
         fun rulesT() {
             val r = Captions.learned(this)
             val fotos = PostQueue.load(this).filter { it.optInt("usos") > 0 || it.optString("status") == "postada" }
-            tvRules.text = Learn.repostStats(fotos) + "\n" + Learn.hourStats(fotos) + "\n\n" +
+            tvRules.text = Learn.repostStats(fotos) + "\n" + Learn.hourStats(fotos) + "\n" + AB.report(this) + "\n\n" +
                 (if (r.isEmpty()) "🧠 A IA ainda não analisou as combinações." else "🧠 O que a IA aprendeu (foto + legenda):\n" + r.joinToString("\n") { "• $it" })
         }
         rulesT()
@@ -1202,6 +1236,23 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (::insta.isInitialized && insta.onResult(requestCode, resultCode, data)) return
         if (::refs.isInitialized && refs.onResult(requestCode, resultCode, data)) return
+        if (requestCode == REQ_RESTORE) {
+            val u = data?.data ?: return
+            AlertDialog.Builder(this).setTitle("Restaurar este backup?").setMessage("Troca as legendas, notas, filas e configurações atuais pelas do backup e reinicia o app.")
+                .setPositiveButton("Restaurar") { _, _ ->
+                    Thread {
+                        val m = try { Backup.restore(this, u) } catch (e: Exception) { "Erro: ${e.message}" }
+                        ui.post {
+                            toast(m)
+                            ui.postDelayed({
+                                startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
+                                android.os.Process.killProcess(android.os.Process.myPid())
+                            }, 1200)
+                        }
+                    }.start()
+                }.setNegativeButton("Cancelar", null).show()
+            return
+        }
         if (requestCode == REQ_DEL) {
             if (resultCode == RESULT_OK) { FolderScan.clearOriginals(this); toast("Apagadas do Download") }
             updateFolderUi(); return

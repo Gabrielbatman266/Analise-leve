@@ -42,6 +42,30 @@ class RefsTab(private val a: MainActivity) {
 
     fun build() {
         val host = a.page
+        val ci = a.card("💡 Ideias pro Flow (no estilo do que bombou)")
+        val tvSt = a.text("", 13f, a.FG, parent = ci, bold = true)
+        val ideasBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        ci.addView(ideasBox, a.lpMatch())
+        fun ideasUi() {
+            tvSt.text = "📦 Estoque: fotos novas ~${"%.1f".format(Stock.daysPhotos(a))} dia(s) · vídeos ~${"%.1f".format(Stock.daysVideos(a))} dia(s)"
+            ideasBox.removeAllViews()
+            val l = Stock.ideas(a)
+            if (l.isEmpty()) a.text("Toque em ✨ pra a IA olhar seus posts 🔥/💎 e escrever prompts novos pro Flow. Quando o estoque estiver acabando, o app faz isso sozinho e te avisa.", 12f, a.MUTED, parent = ideasBox)
+            l.forEach { t ->
+                val r = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
+                ideasBox.addView(r, a.lpMatch().apply { topMargin = a.dp(6) })
+                r.addView(TextView(a).apply { text = t; textSize = 12f; setTextColor(a.FG); setTextIsSelectable(true) }, LinearLayout.LayoutParams(0, -2, 1f))
+                a.button("📋", r) { a.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("ideia", t)); a.toast("Copiado: cole no Flow") }
+            }
+        }
+        val ir = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        ci.addView(ir, a.lpMatch())
+        a.button("✨ Gerar ideias", ir, primary = true, weight = true) {
+            tvSt.text = "A IA está olhando seus posts que bombaram…"
+            Thread { val m = try { Stock.makeIdeas(a); null } catch (e: Exception) { e.message }; a.ui.post { ideasUi(); m?.let { a.toast(it) } } }.start()
+        }
+        a.button("Abrir o Flow", ir, weight = true) { try { a.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://labs.google/fx/tools/flow"))) } catch (e: Exception) { } }
+        ideasUi()
         navRow = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
         host.addView(navRow, a.lpMatch().apply { topMargin = a.dp(12) })
         listOf("🔗 Links de vídeo", "🖼 Fotos").forEachIndexed { i, n -> navBtns += a.button(n, navRow, weight = true) { show(i) } }

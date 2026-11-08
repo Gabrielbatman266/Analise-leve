@@ -41,6 +41,7 @@ object Auto {
     /** Chegaram [pids] novos: põe na categoria padrão e produz. */
     fun onNewRaw(c: Context, pids: List<String>) {
         if (pids.isEmpty()) return
+        try { AutoCat.classify(c, pids) } catch (e: Exception) { } // 2) IA põe cada um na categoria certa
         val cat = newCat(c)
         if (cat.isNotEmpty()) pids.forEach { id -> Projects.update(c, id) { if (it.optString("ctx").isEmpty()) it.put("ctx", cat) } }
         if (!produceNew(c) || AutoProducer.running) return

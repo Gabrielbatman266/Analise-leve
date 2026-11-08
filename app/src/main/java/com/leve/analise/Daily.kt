@@ -89,6 +89,7 @@ object Daily {
     /** ☀️ Piloto automático: arruma tudo de manhã e manda o plano do dia. */
     fun morning(c: Context) {
         val did = ArrayList<String>()
+        val lines0 = ArrayList<String>()
         try { Recover.run(c).let { r -> if (r.sum() > 0) did += "recuperei ${r.sum()} item(ns)" } } catch (e: Exception) { }
         try { FolderScan.scan(c).let { if (it > 0) did += "$it foto(s) nova(s) do Flow" } } catch (e: Exception) { }
         try { FolderScan.scanVideos(c).let { if (it > 0) did += "$it vídeo(s) cru(s) novo(s)" } } catch (e: Exception) { }
@@ -96,6 +97,9 @@ object Daily {
         try { Captions.fillFromBank(c) } catch (e: Exception) { }
         try { Health.autoFix(c).forEach { did += it.substringBefore(":") } } catch (e: Exception) { }
         try { Auto.captionsTick(c)?.let { did += it } } catch (e: Exception) { }
+        try { Archive.tick(c)?.let { did += it } } catch (e: Exception) { }
+        try { Backup.weekly(c)?.let { did += "backup da semana feito" } } catch (e: Exception) { }
+        try { lines0 += "📦 Estoque: fotos ~${"%.1f".format(Stock.daysPhotos(c))} dia(s) · vídeos ~${"%.1f".format(Stock.daysVideos(c))} dia(s)"; Stock.check(c) } catch (e: Exception) { }
         val waiting = AutoProducer.waiting(c)
         val g = goal(c)
         if (g > waiting && Projects.list(c).isNotEmpty()) { AutoProducer.refillIfNeeded(c); did += "produzindo ${g - waiting} vídeo(s)" }
@@ -107,6 +111,7 @@ object Daily {
         val lines = ArrayList<String>()
         lines += if (g > 0) "🎬 Meta: $g vídeo(s) · $waiting pronto(s)" + (if (g > waiting) " · fazendo o resto" else " ✓") else "🎬 $waiting vídeo(s) pronto(s)"
         lines += "📸 ${q.size} foto(s) na fila · ${q.count { it.optString("status") != "postada" }} nunca postada(s)"
+        lines.addAll(lines0)
         Learn.bestBucket(c)?.let { lines += "⏰ Seu melhor horário: $it (lembro mais nessa hora)" }
         if (ks.isNotEmpty()) lines += "Ontem: 💎${ks.count { it == "top" }} 🔥${ks.count { it == "good" }} 😐${ks.count { it == "meh" }} 👎${ks.count { it == "bad" }}"
         if (did.isNotEmpty()) lines += "🤖 Já fiz: " + did.joinToString(", ")

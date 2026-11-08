@@ -93,6 +93,8 @@ object RateWatch {
             try { SendLog.rate(c, e, k); auto++ } catch (x: Exception) { }
         }
         try { Auto.captionsTick(c) } catch (x: Exception) { }
+        try { Archive.tick(c)?.let { p(c).edit().putString("health_last", it).apply() } } catch (x: Exception) { }
+        try { Stock.check(c) } catch (x: Exception) { }
         // 2) o que passou de 1 h sem nota: acha o gargalo
         val late = SendLog.all(c).filter { it.optString("nota").isEmpty() && now - it.optLong("at") in 3600_000L..(3 * 86400_000L) }
         val reasons = ArrayList<String>()

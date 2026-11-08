@@ -193,6 +193,33 @@ Responda só com JSON: {"regras":["...","..."]}"""
         throw AiException(-2, "A IA não devolveu imagem (talvez ela tenha recusado essa edição)")
     }
 
+    /** 💬 3 respostas curtas pra um comentário, no jeito da criadora. */
+    fun replies(c: Context, ctx: String, app: String): List<String> {
+        val mine = (Captions.mine(c).take(10) + OverlayDB.all(c, null).filter { it.optString("src") == "meu" }.take(8).map { it.optString("t") })
+        val prompt = """Você ajuda uma criadora de conteúdo a responder comentários no ${if (app.contains("barcelona")) "Threads" else "Instagram"}, em português do Brasil.
+Contexto da caixa de resposta (pode estar vazio):
+$ctx
+${if (mine.isNotEmpty()) "Jeito dela de escrever (imite tom, tamanho e emojis):\n" + mine.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
+Escreva 3 respostas curtas e diferentes (até 12 palavras), simpáticas e que puxem conversa/engajamento. Nada explícito, sem promessas, sem links.
+Se não houver comentário no contexto, escreva respostas que sirvam pra qualquer elogio.
+Responda só com JSON: {"respostas":["...","...","..."]}"""
+        val arr = parseObj(ask(c, prompt, emptyList())).optJSONArray("respostas") ?: return emptyList()
+        return (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotBlank() }.take(3)
+    }
+
+    /** 💡 Prompts pro Google Flow no estilo do que bombou (as primeiras [nPhotos] imagens são fotos; o resto, vídeos). */
+    fun flowIdeas(c: Context, imgs: List<File>, nPhotos: Int, rules: List<String>): List<String> {
+        val prompt = """Estas são imagens de posts que BOMBARAM no perfil de uma criadora (as $nPhotos primeiras são fotos; as outras, quadros de vídeos curtos).
+${if (rules.isNotEmpty()) "O que já se sabe que funciona:\n" + rules.joinToString("\n") { "- $it" } else ""}
+Escreva 6 prompts em inglês pro Google Flow (gerador de imagem/vídeo) pra criar conteúdo NOVO no mesmo estilo:
+3 de foto e 3 de vídeo curto vertical (9:16). Varie cenário, roupa, pose, luz e ação, mantendo o clima do que bombou.
+Regras: chame a pessoa só de "the subject"; NÃO descreva rosto, traços, tatuagens, cabelo ou identidade (a referência de rosto é colocada no Flow);
+nada explícito; cada prompt em 1 a 3 frases, começando com "PHOTO:" ou "VIDEO:".
+Responda só com JSON: {"prompts":["...","..."]}"""
+        val arr = parseObj(ask(c, prompt, imgs.map { Base64.encodeToString(small(it), Base64.NO_WRAP) })).optJSONArray("prompts") ?: throw AiException(-2, "Resposta que não entendi")
+        return (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotBlank() }.take(8)
+    }
+
     /** 🧠 Vídeos: quadro de cada vídeo + o que tinha nele + como foi → regras. */
     fun learnVideos(c: Context, items: List<Triple<File, String, String>>, extra: String = ""): List<String> {
         val list = items.mapIndexed { i, (_, d, k) ->
