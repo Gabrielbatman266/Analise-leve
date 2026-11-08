@@ -78,9 +78,11 @@ object AutoProducer {
     private fun ensureTexts(c: Context, projs: List<JSONObject>, progress: (String) -> Unit) {
         if (Ai.key(c).isEmpty() || !textAiAuto(c)) return // sem automático: usa só o que já tem no banco
         projs.filter { !Contexts.noText(c, it.optString("ctx")) && it.optString("desc").isNotBlank() && OverlayDB.count(c, vidKey(it.optString("id"))) < 4 }.forEach { p ->
+            if (!Auto.canSpend(c)) return
             progress("Criando textos pro vídeo \"${p.optString("desc").take(30)}\"…"); genTexts(c, 8, vidKey(p.optString("id")))
         }
         projs.map { it.optString("ctx") }.distinct().filter { cx -> !Contexts.noText(c, cx) }.filter { cx -> OverlayDB.count(c, cx) + (if (cx.isEmpty()) 0 else OverlayDB.count(c, "")) < 6 }.forEach { cx ->
+            if (!Auto.canSpend(c)) return
             progress("Criando textos pra ${Contexts.label(c, cx)}…"); genTexts(c, 10, cx)
         }
     }
@@ -232,7 +234,7 @@ class ProduceService : Service() {
         } catch (e: Exception) { stopSelf(); return START_NOT_STICKY }
         wl = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "leve:producao").apply { acquire(60 * 60 * 1000L) }
         val nm = getSystemService(NotificationManager::class.java)
-        AutoProducer.run(this, n, Store.prefs(this).getString("auto_ctx", null),
+        AutoProducer.run(this, n, if (intent?.hasExtra("only") == true) intent.getStringExtra("only") else Store.prefs(this).getString("auto_ctx", null),
             { t -> try { nm.notify(nid, notif(t, true)) } catch (e: Exception) { } }) { ok ->
             try { wl?.release() } catch (e: Exception) { }
             stopForeground(STOP_FOREGROUND_REMOVE)

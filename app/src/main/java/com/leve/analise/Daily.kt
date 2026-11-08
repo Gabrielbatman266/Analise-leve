@@ -95,6 +95,7 @@ object Daily {
         try { ThreadsRefs.scan(c) } catch (e: Exception) { }
         try { Captions.fillFromBank(c) } catch (e: Exception) { }
         try { Health.autoFix(c).forEach { did += it.substringBefore(":") } } catch (e: Exception) { }
+        try { Auto.captionsTick(c)?.let { did += it } } catch (e: Exception) { }
         val waiting = AutoProducer.waiting(c)
         val g = goal(c)
         if (g > waiting && Projects.list(c).isNotEmpty()) { AutoProducer.refillIfNeeded(c); did += "produzindo ${g - waiting} vídeo(s)" }

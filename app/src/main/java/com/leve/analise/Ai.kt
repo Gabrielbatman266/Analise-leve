@@ -176,6 +176,7 @@ Responda só com JSON: {"regras":["...","..."]}"""
             .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", parts)))
             .put("generationConfig", JSONObject().put("responseModalities", JSONArray().put("TEXT").put("IMAGE")))
         val url = "https://generativelanguage.googleapis.com/v1beta/models/" + URLEncoder.encode(imageModel(c), "UTF-8") + ":generateContent"
+        Auto.countAi(c)
         val res = post(url, body.toString(), mapOf("x-goog-api-key" to k))
         val ps = JSONObject(res).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")
             ?: throw AiException(-2, "A IA não devolveu imagem (talvez ela tenha recusado essa edição)")
@@ -274,6 +275,7 @@ Responda só com JSON: {"r":[{"n":1,"ctx":"..."}]}"""
     private fun ask(c: Context, prompt: String, imagesB64: List<String>): String {
         val k = key(c)
         if (k.isEmpty()) throw AiException(401, "Coloque sua chave de API nas configurações")
+        Auto.countAi(c)
         return if (provider(c) == "gemini") gemini(k, model(c), prompt, imagesB64) else claude(k, model(c), prompt, imagesB64)
     }
 

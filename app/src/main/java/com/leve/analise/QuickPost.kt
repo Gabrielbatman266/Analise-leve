@@ -112,7 +112,7 @@ class PostVideoActivity : android.app.Activity() {
             startActivity(VideoExport.shareToInstagram(this, uri, "video/mp4"))
             PostConfirm.start(this, "video", id, cap, "Instagram")
             RateLater.schedule(this, id)
-            android.widget.Toast.makeText(this, "Legenda copiada: cole e publique", android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(this, if (Store.prefs(this).getBoolean("ig_grid_hint", true)) "Legenda copiada. Pra deixar o perfil só com fotos: desligue \"Mostrar na grade do perfil\" antes de publicar." else "Legenda copiada: cole e publique", android.widget.Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             android.widget.Toast.makeText(this, "Não achei o Instagram", android.widget.Toast.LENGTH_LONG).show()
         }

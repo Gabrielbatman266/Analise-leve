@@ -2061,6 +2061,7 @@ class InstaEditor(private val a: MainActivity) {
         val f = File(VideoExport.videoDir(a), "$id.mp4")
         if (!f.exists()) { a.toast("Esse vídeo não está mais no app"); return }
         VideoExport.updateLib(a, id) { it.put("legenda", cap) }
+        if (Store.prefs(a).getBoolean("ig_grid_hint", true)) a.toast("Dica: desligue \"Mostrar na grade do perfil\" no Instagram pra o feed ficar só com fotos")
         PostConfirm.start(a, "video", id, cap, "Instagram") // só conta como postado quando você confirmar
         RateLater.schedule(a, id)
         renderLibrary()

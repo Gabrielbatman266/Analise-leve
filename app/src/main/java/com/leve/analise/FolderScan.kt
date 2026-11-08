@@ -72,6 +72,7 @@ object FolderScan {
     /** Vídeos novos do Flow viram esboços (projetos) no editor do Instagram. Retorna quantos. */
     @Synchronized
     fun scanVideos(c: Context, all: Boolean = false): Int {
+        val newPids = ArrayList<String>()
         val b = bucket(c) ?: return 0
         if (!videosOn(c) || !hasVideoPerm(c) || Build.VERSION.SDK_INT < 29) return 0
         val now = System.currentTimeMillis() / 1000
@@ -95,7 +96,7 @@ object FolderScan {
                     if (!ok) { Projects.remove(c, pid); continue }
                     Projects.update(c, pid) { it.put("flow", true); it.put("text", ""); it.put("updated", System.currentTimeMillis()) }
                     VideoExport.baseFrame(c, Uri.fromFile(f), false)?.let { Projects.saveThumb(c, pid, it) }
-                    seen.add(id.toString()); n++
+                    seen.add(id.toString()); n++; newPids += pid
                     addOriginal(c, id, true)
                 }
             }
@@ -104,6 +105,7 @@ object FolderScan {
         val e = p(c).edit().putStringSet("vwatch_seen", keep)
         if (!all) e.putLong("vwatch_since", maxAdded)
         e.apply()
+        if (newPids.isNotEmpty()) try { Auto.onNewRaw(c, newPids) } catch (e: Exception) { }
         return n
     }
 

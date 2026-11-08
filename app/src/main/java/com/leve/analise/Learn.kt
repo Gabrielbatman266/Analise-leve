@@ -164,7 +164,7 @@ object Learn {
         val k = "learn_new_$kind"
         val n = p(c).getInt(k, 0) + 1
         p(c).edit().putInt(k, n).apply()
-        if (n < EVERY || !autoOn(c) || Ai.key(c).isEmpty()) return
+        if (n < EVERY || !autoOn(c) || !Auto.canSpend(c)) return
         p(c).edit().putInt(k, 0).apply()
         Thread {
             try { if (kind == "v") learnVideos(c) else Captions.learnCombos(c) } catch (e: Exception) { }

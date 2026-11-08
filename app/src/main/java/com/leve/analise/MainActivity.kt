@@ -111,6 +111,9 @@ class MainActivity : Activity() {
     private var tnRedraw: (() -> Unit)? = null
     private var healthRedraw: (() -> Unit)? = null
     private var histRedraw: (() -> Unit)? = null
+    private var panelRedraw: (() -> Unit)? = null
+    private var healthDrawFn: ((LinearLayout, List<Health.Issue>) -> Unit)? = null
+    private fun healthDraw(box: LinearLayout, issues: List<Health.Issue>) { healthDrawFn?.invoke(box, issues) }
 
     /** 📝 Nota manual: escolhe a foto (ou vídeo), a legenda que usou e a nota. */
     private fun manualRate() {
@@ -180,7 +183,8 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        PostBar.update(this); keysRedraw?.invoke(); tnRedraw?.invoke(); healthRedraw?.invoke(); histRedraw?.invoke()
+        Auto.migrate(this)
+        PostBar.update(this); keysRedraw?.invoke(); tnRedraw?.invoke(); healthRedraw?.invoke(); histRedraw?.invoke(); panelRedraw?.invoke()
         if (ThreadsNotif.on(this) && ThreadsNotif.hasAccess(this) && !ThreadsNotif.live(this)) ThreadsNotif.rebind(this)
         ui.postDelayed({ askPending() }, 600)
         ui.postDelayed({ if (::insta.isInitialized) insta.maybeRefill() }, 2500)
@@ -261,7 +265,25 @@ class MainActivity : Activity() {
 
         // ===== Postar
         page = pages["Postar"]!!
-        // atalhos sempre à mão
+        // 🏠 painel: o essencial em cima
+        val cpn = card("🏠 Painel")
+        val tvPanel = text("", 14f, FG, parent = cpn, bold = true)
+        val rp = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        cpn.addView(rp, lpMatch())
+        button("📸 Postar foto", rp, primary = true, weight = true) { try { startActivity(QuickPost.intent(this)) } catch (e: Exception) { } }
+        button("🎬 Postar vídeo", rp, primary = true, weight = true) { try { startActivity(QuickPost.videoIntent(this)) } catch (e: Exception) { } }
+        val tvAuto = text("", 12f, MUTED, parent = cpn)
+        chips(cpn, listOf("🤖 Tudo automático", "Manual"), { if (Auto.on(this)) "🤖 Tudo automático" else "Manual" }) { Auto.setOn(this, it.startsWith("🤖")); panelRedraw?.invoke() }
+        fun panelUi() {
+            val nf = QuickPost.countReady(this); val nv = QuickPost.countVideos(this)
+            val g = Daily.goal(this); val sn = SendLog.pending(this).size + SendLog.all(this).count { it.optBoolean("ok") && it.optString("nota").isEmpty() && System.currentTimeMillis() - it.optLong("at") < 3 * 86400_000L }
+            tvPanel.text = "📸 $nf fotos · 🎬 $nv vídeos prontos" + (if (g > 0) " · hoje ${Daily.postedToday(this)}/$g" else "") + (if (sn > 0) "\n⭐ $sn post(s) esperando nota (veja 🕘 abaixo)" else "")
+            tvAuto.text = Auto.summary(this)
+        }
+        panelUi(); panelRedraw = { panelUi() }
+
+        // atalhos sempre à mão (ficam em Ajustes)
+        page = pages["Ajustes"]!!
         val ck = card("📌 Botão de postar sempre à mão")
         val rk = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         ck.addView(rk, lpMatch())
@@ -292,6 +314,21 @@ class MainActivity : Activity() {
         keysUi()
         keysRedraw = { keysUi() }
         text("Notificação fixa com 📸 Threads · 🎬 Instagram · 🤖 Produzir. O botão flutuante fica por cima de qualquer app: toque pra abrir o menu, arraste pra mudar de lugar, segure pra esconder. Ele pisca ⏰ quando é hora de postar e mostra quantos faltam hoje.", 12f, MUTED, parent = ck)
+
+        // 🤖 tudo automático (configurações)
+        val cau = card("🤖 Tudo automático")
+        text("Vídeos novos do Flow entram nesta categoria e já são produzidos:", 12f, MUTED, parent = cau)
+        val catNames = listOf("") + Contexts.names(this)
+        chips(cau, catNames.map { if (it.isEmpty()) "📥 Sem categoria" else Contexts.label(this, it) }, { Auto.newCat(this).let { n -> if (n.isEmpty()) "📥 Sem categoria" else Contexts.label(this, n) } }) { lab ->
+            Auto.setNewCat(this, catNames.firstOrNull { (if (it.isEmpty()) "📥 Sem categoria" else Contexts.label(this, it)) == lab } ?: "")
+        }
+        text("Limite de pedidos da IA por dia nas automações (o que você pede na mão não conta no limite):", 12f, MUTED, parent = cau)
+        chips(cau, listOf("5", "12", "18", "30"), { Auto.aiMax(this).toString() }) { Auto.setAiMax(this, it.toInt()) }
+        text("O grátis do Gemini dá uns 20 pedidos por dia: 12 deixa folga pra você usar na mão.", 11f, MUTED, parent = cau)
+        text("Ao postar vídeo, lembrar de desligar \"Mostrar na grade do perfil\" (feed só com fotos):", 12f, MUTED, parent = cau)
+        chips(cau, listOf("Lembrar", "Não lembrar"), { if (Store.prefs(this).getBoolean("ig_grid_hint", true)) "Lembrar" else "Não lembrar" }) { Store.prefs(this).edit().putBoolean("ig_grid_hint", it == "Lembrar").apply() }
+
+        page = pages["Postar"]!!
 
         // 🕘 histórico de envios + nota manual
         val chi = card("🕘 Envios e notas")
@@ -353,14 +390,19 @@ class MainActivity : Activity() {
         val hBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         ch.addView(hBox, lpMatch())
         fun healthUi() {
-            hBox.removeAllViews()
-            val issues = Health.check(this)
-            if (issues.isEmpty()) text("✓ Tudo girando bem: fotos, legendas, vídeos, textos e músicas variados.", 13f, OK, parent = hBox)
+            Thread {
+                val issues = try { Health.check(this) } catch (e: Exception) { emptyList() }
+                ui.post { healthDraw(hBox, issues) }
+            }.start()
+        }
+        healthDrawFn = { box, issues ->
+            box.removeAllViews()
+            if (issues.isEmpty()) text("✓ Tudo girando bem: fotos, legendas, vídeos, textos e músicas variados.", 13f, OK, parent = box)
             issues.forEach { i ->
-                text("${i.area}: ${i.msg}", 13f, FG, parent = hBox)
-                if (i.fix != null) button("🔄 ${i.fixLabel}", hBox) { toast(i.fix.invoke(this)); healthUi() }
+                text("${i.area}: ${i.msg}", 13f, FG, parent = box)
+                if (i.fix != null) button("🔄 ${i.fixLabel}", box) { toast(i.fix.invoke(this)); healthRedraw?.invoke() }
             }
-            Health.lastFix(this).takeIf { it.isNotBlank() }?.let { text("Último conserto automático:\n$it", 11f, MUTED, parent = hBox) }
+            Health.lastFix(this).takeIf { it.isNotBlank() }?.let { text("Último conserto automático:\n$it", 11f, MUTED, parent = box) }
         }
         healthUi(); healthRedraw = { healthUi() }
         chips(ch, listOf("🤖 Conserta sozinho", "Só avisar"), { if (Health.autoOn(this)) "🤖 Conserta sozinho" else "Só avisar" }) { Health.setAuto(this, it.startsWith("🤖")) }
