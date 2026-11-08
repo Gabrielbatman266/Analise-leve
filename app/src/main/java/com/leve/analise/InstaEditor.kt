@@ -2079,6 +2079,7 @@ class InstaEditor(private val a: MainActivity) {
     }.also { it.layoutParams = LinearLayout.LayoutParams(a.dp(w), a.dp(h)).apply { rightMargin = a.dp(8) } }
 
     private fun renderLibrary() {
+        Scenes.refresh(a)
         updateCycle(); updateNav(); updateDaily()
         libBox.removeAllViews()
         val all = VideoExport.library(a)
@@ -2162,7 +2163,7 @@ class InstaEditor(private val a: MainActivity) {
         // próximos a sair
         val next = VideoExport.upcoming(a, 6)
         if (next.isNotEmpty()) {
-            a.text("Próximos a sair (o que bombou volta mais, nunca em seguida)", 12f, a.MUTED, parent = libBox, bold = true)
+            a.text("Próximos a sair (a mesma cena nunca sai perto, mesmo com texto diferente)", 12f, a.MUTED, parent = libBox, bold = true)
             val hs = android.widget.HorizontalScrollView(a)
             val strip = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
             hs.addView(strip); libBox.addView(hs, a.lpMatch().apply { topMargin = a.dp(4) })
@@ -2179,7 +2180,7 @@ class InstaEditor(private val a: MainActivity) {
         val byRes = Store.prefs(a).getString("lib_group", "res") == "res"
         val gr = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         libBox.addView(gr, a.lpMatch().apply { topMargin = a.dp(12) })
-        a.chips(gr, listOf("Por resultado", "Por vídeo cru"), { if (Store.prefs(a).getString("lib_group", "res") == "res") "Por resultado" else "Por vídeo cru" }) {
+        a.chips(gr, listOf("Por resultado", "Por cena"), { if (Store.prefs(a).getString("lib_group", "res") == "res") "Por resultado" else "Por cena" }) {
             Store.prefs(a).edit().putString("lib_group", if (it == "Por resultado") "res" else "cru").apply(); renderLibrary()
         }
         fun header(t: String) { libBox.addView(TextView(a).apply { text = t; textSize = 14f; setTextColor(a.FG); typeface = android.graphics.Typeface.DEFAULT_BOLD }, a.lpMatch().apply { topMargin = a.dp(16) }) }
@@ -2201,10 +2202,11 @@ class InstaEditor(private val a: MainActivity) {
         } else {
             val groups = all.groupBy { VideoExport.origin(it) }.entries.sortedByDescending { e -> e.value.count { it.optInt("posts") == 0 } }
             groups.forEach { (orig, vids) ->
-                val p = if (orig.startsWith("solo:")) null else Projects.list(a).firstOrNull { it.optString("id") == orig }
+                val projIds = vids.map { it.optString("proj") }.filter { it.isNotEmpty() }.toSet()
+                val p = Projects.list(a).firstOrNull { it.optString("id") in projIds }
                 val waiting = vids.count { it.optInt("posts") == 0 }
                 val pr = p?.let { pj -> if (Learn.rated(pj) > 0) " · ${(Learn.mean(pj) * 100).toInt()}%" else "" } ?: ""
-                header("${tag[orig]} · " + (p?.optString("desc")?.ifBlank { null } ?: if (p != null) "Vídeo cru" else "Vídeo importado").take(36) + "\n${vids.size} versão(ões) · $waiting na fila$pr")
+                header("${tag[orig]} · " + (p?.optString("desc")?.ifBlank { null } ?: if (p != null) "Cena" else "Vídeo importado").take(36) + "\n${vids.size} vídeo(s) desta cena · $waiting na fila$pr" + (if (projIds.size > 1) " · juntei ${projIds.size} crus iguais" else ""))
                 vids.forEach { libItem(it, tag) }
             }
         }

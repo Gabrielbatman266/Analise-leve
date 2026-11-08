@@ -51,6 +51,7 @@ object Health {
     }
 
     fun rotateVideos(c: Context): String {
+        Scenes.refresh(c)
         val lib = VideoExport.library(c).filter { File(VideoExport.videoDir(c), "${it.optString("id")}.mp4").exists() }
         val rec = VideoExport.recentIds(c)
         // intercala vídeos crus diferentes, os mais parados primeiro
@@ -92,6 +93,7 @@ object Health {
         if (bank in 1..24) out += Issue("💬 Legendas", "Banco pequeno ($bank legendas): repete mais. Escreva algumas ou gere com ✨.", null, null)
         // VÍDEOS
         val lib = VideoExport.library(c)
+        Scenes.refresh(c)
         val vBroken = lib.filter { !File(VideoExport.videoDir(c), "${it.optString("id")}.mp4").exists() }
         if (vBroken.isNotEmpty()) out += Issue("🎬 Vídeos", "${vBroken.size} vídeo(s) na lista sem o arquivo.", "Limpar") { cc ->
             vBroken.forEach { VideoExport.removeLib(cc, it.optString("id")) }; "${vBroken.size} item(ns) quebrados removidos." }
@@ -101,6 +103,10 @@ object Health {
         val origins = lib.map { VideoExport.origin(it) }.distinct().size
         if (vok >= 4 && rv.size >= 6 && (distinctRatio(rv) < 0.7 || (origins >= 3 && distinctRatio(ro) < 0.5)))
             out += Issue("🎬 Vídeos", "Repetindo: ${rv.distinct().size} vídeos e ${ro.distinct().size} vídeos crus diferentes nos últimos posts (você tem $vok de $origins crus).", "Girar fila", ::rotateVideos)
+        val scenesN = lib.map { VideoExport.origin(it) }.distinct().size
+        val waitingV = lib.count { it.optInt("posts") == 0 }
+        if (scenesN in 1..5 && lib.size >= scenesN * 3)
+            out += Issue("🎬 Vídeos", "Só $scenesN cena(s) diferente(s) pra ${lib.size} vídeos: no perfil vai parecer tudo igual. Grave/gere mais vídeos crus diferentes ou use menos versões por vídeo.", null, null)
         val top = rv.groupingBy { it }.eachCount().maxByOrNull { it.value }
         if (vok >= 6 && rv.size >= 8 && top != null && top.value >= 3)
             out += Issue("🎬 Vídeos", "Um vídeo saiu ${top.value} vezes nos últimos ${rv.size}.", "Girar fila", ::rotateVideos)

@@ -359,7 +359,8 @@ object VideoExport {
     }
 
     /** Origem de um vídeo pronto: o vídeo cru de onde ele saiu (vídeos importados contam como origem própria). */
-    fun origin(o: JSONObject): String = o.optString("proj").ifBlank { "solo:" + o.optString("id") }
+    /** Cena do vídeo: vídeos da mesma cena (mesmo cru OU imagem parecida) contam como iguais na fila. */
+    fun origin(o: JSONObject): String = Scenes.of(o) ?: o.optString("proj").ifBlank { "solo:" + o.optString("id") }
 
     fun recentIds(c: Context) = recent(c, "vid_rec")
     fun recentOrigins(c: Context) = recent(c, "vid_last_orig")
@@ -403,7 +404,7 @@ object VideoExport {
             .ifEmpty { lib.filter { it.optString("id") != rec.firstOrNull() }.ifEmpty { lib } }
         val origins = lib.map { origin(it) }.distinct().size
         // vídeos crus: evita os últimos ~60% (antes: só os 3 últimos)
-        val avoid = recentO.take(minOf(maxOf(3, (origins * 0.6).toInt()), maxOf(0, origins - 1)))
+        val avoid = recentO.take(minOf(maxOf(3, (origins * 0.7).toInt()), maxOf(0, origins - 1)))
         for (n in avoid.size downTo 1) { val f = pool.filter { origin(it) !in avoid.take(n) }; if (f.isNotEmpty()) { pool = f; break } }
         val lastTxt = recent(c, "vid_last_txt").take(3)
         return pool.filter { it.optString("texto").trim().lowercase() !in lastTxt || it.optString("texto").isBlank() }.ifEmpty { pool }
@@ -414,13 +415,14 @@ object VideoExport {
      * (nem o mesmo vídeo, nem o mesmo vídeo cru, nem o mesmo texto).
      */
     fun cycleNext(c: Context): String? {
+        Scenes.refresh(c)
         val lib = library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() }
         if (lib.isEmpty()) return null
         val rec = recent(c, "vid_rec")
         val recentO = recent(c, "vid_last_orig")
         val projs = Projects.list(c).associateBy { it.optString("id") }
         val byId = lib.associateBy { it.optString("id") }
-        Health.takeForced(c, "force_vids") { id -> byId[id]?.let { o -> id !in rec.take(2) && origin(o) != recentO.firstOrNull() } == true }?.let { fid ->
+        Health.takeForced(c, "force_vids") { id -> byId[id]?.let { o -> id !in rec.take(2) && origin(o) !in recentO.take(minOf(3, maxOf(0, lib.map { origin(it) }.distinct().size - 1))) } == true }?.let { fid ->
             pushRec(c, "vid_rec", fid, 40); pushRec(c, "vid_last_orig", origin(byId.getValue(fid)), 20); return fid
         }
         val cand = candidates(c, lib, rec, recentO)
@@ -451,6 +453,7 @@ object VideoExport {
 
     /** Ordem prevista dos próximos [n] (simulação das mesmas regras, sem sorteio). */
     fun upcoming(c: Context, n: Int): List<JSONObject> {
+        Scenes.refresh(c)
         val lib = library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() }
         val rec = recent(c, "vid_rec").toMutableList()
         val recentO = recent(c, "vid_last_orig").toMutableList()
