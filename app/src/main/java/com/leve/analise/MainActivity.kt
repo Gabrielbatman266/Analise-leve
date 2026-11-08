@@ -389,7 +389,7 @@ class MainActivity : Activity() {
         text("curtidas ou mais", 12f, MUTED, parent = ctn)
         text("O que silenciar", 12f, MUTED, parent = ctn)
         chips(ctn, listOf("Só curtidas", "Tudo do Threads"), { if (ThreadsNotif.mode(this) == "all") "Tudo do Threads" else "Só curtidas" }) { ThreadsNotif.setMode(this, if (it == "Tudo do Threads") "all" else "likes") }
-        text("Passou do limite = 🔥 automático no post", 12f, MUTED, parent = ctn)
+        text("📸 Threads: passou do limite = 🔥 automático (5x o limite = 💎). Lê as curtidas mesmo com o silêncio desligado. Se a notificação não mostrar a legenda e você postou várias fotos em 48 h, o app pergunta qual foi.", 12f, MUTED, parent = ctn)
         chips(ctn, listOf("Ligado", "Desligado"), { if (ThreadsNotif.autoRate(this)) "Ligado" else "Desligado" }) { ThreadsNotif.setAutoRate(this, it == "Ligado") }
         button("2. Deixar o Threads sem som (recomendado)", ctn) { ThreadsNotif.openThreadsSettings(this) }
         text("📸 Instagram: Reel que passa de", 12f, MUTED, parent = ctn)

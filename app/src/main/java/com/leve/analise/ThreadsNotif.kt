@@ -142,18 +142,55 @@ object ThreadsNotif {
 
     /** Post passou do limite: avisa com som e marca 🔥 no post que bate com o trecho. */
     fun hit(c: Context, likes: Int, text: String, open: PendingIntent?) {
-        val key = "tn_hit_" + text.hashCode() + (if (likes >= min(c) * 5) "_top" else "")
+        val k = if (likes >= min(c) * 5) "top" else "good"
+        val key = "tn_hit_" + text.hashCode() + "_" + k
         if (p(c).getBoolean(key, false)) return
         p(c).edit().putBoolean(key, true).apply()
-        val rated = if (autoRate(c)) rateMatching(c, text, if (likes >= min(c) * 5) "top" else "good") else null
+        val e = if (k == "top") "💎" else "🔥"
         val nm = c.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("tn_hit", "Posts que bombaram (Threads)", NotificationManager.IMPORTANCE_HIGH))
-        val nb = Notification.Builder(c, "tn_hit").setSmallIcon(android.R.drawable.star_on)
-            .setContentTitle((if (likes >= min(c) * 5) "💎" else "🔥") + " Post com $likes+ curtidas no Threads")
-            .setContentText((if (rated != null) "Marquei como ${if (likes >= min(c) * 5) "💎" else "🔥"}: " else "") + text.replace('\n', ' ').take(100))
-            .setAutoCancel(true)
+        val nb = Notification.Builder(c, "tn_hit").setSmallIcon(android.R.drawable.star_on).setAutoCancel(true)
         open?.let { nb.setContentIntent(it) }
-        try { nm.notify(("hit" + text).hashCode(), nb.build()) } catch (e: SecurityException) { }
+        if (!autoRate(c)) {
+            nb.setContentTitle("$e Post com $likes+ curtidas no Threads").setContentText(text.replace('\n', ' ').take(100))
+            try { nm.notify(("hit" + text).hashCode(), nb.build()) } catch (x: SecurityException) { }
+            return
+        }
+        // 1) a notificação mostra um pedaço da legenda? acha o post exato
+        val exact = rateMatching(c, text, k)
+        if (exact != null) {
+            nb.setContentTitle("$e Post com $likes+ curtidas no Threads").setContentText("Marquei como $e: " + text.replace('\n', ' ').take(90))
+            try { nm.notify(("hit" + text).hashCode(), nb.build()) } catch (x: SecurityException) { }
+            return
+        }
+        // 2) senão: fotos enviadas nas últimas 48 h
+        val now = System.currentTimeMillis()
+        val sent = { o: org.json.JSONObject -> maxOf(o.optLong("sentAt"), o.optLong("postedAt")) }
+        val recent = PostQueue.load(c).filter { now - sent(it) < 48 * 3600_000L && sent(it) > 0 }.sortedByDescending { sent(it) }
+        if (recent.size == 1) {
+            val o = recent[0]; val id = o.optString("id")
+            val cur = if (o.optLong("notaAt") >= sent(o)) o.optString("nota") else ""
+            if (cur != k && cur != "top") RateLater.applyPhoto(c, id, k)
+            nb.setContentTitle("$e Post com $likes+ curtidas no Threads").setContentText("Marquei a foto como $e: " + PostQueue.captionOf(o).replace('\n', ' ').take(70))
+            try { android.graphics.BitmapFactory.decodeFile(PostQueue.imageFile(c, id).path, android.graphics.BitmapFactory.Options().apply { inSampleSize = 4 })?.let { nb.setLargeIcon(it) } } catch (x: Exception) { }
+            try { nm.notify(("hit" + text).hashCode(), nb.build()) } catch (x: SecurityException) { }
+            return
+        }
+        nb.setContentTitle("$e Um post passou de $likes curtidas no Threads — qual foi?")
+        if (recent.isEmpty()) {
+            nb.setContentText(text.replace('\n', ' ').take(100))
+        } else {
+            nb.setContentText("Toque na foto certa pra eu marcar $e (1º = a mais recente)")
+            nb.setStyle(Notification.BigTextStyle().bigText(recent.take(3).mapIndexed { i, o -> "${i + 1}º " + PostQueue.captionOf(o).replace('\n', ' ').take(50) }.joinToString("\n")))
+            val fmt = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US)
+            recent.take(3).forEachIndexed { i, o ->
+                val id = o.optString("id")
+                val pi = PendingIntent.getBroadcast(c, ("thr" + id + k).hashCode(), Intent(c, RateReceiver::class.java).setAction(k).putExtra("id", id).putExtra("foto", true)
+                    .setData(android.net.Uri.parse("nota://th/$id/$k")), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                nb.addAction(Notification.Action.Builder(null, "${i + 1}º " + fmt.format(java.util.Date(sent(o))) + " " + PostQueue.captionOf(o).replace('\n', ' ').take(8), pi).build())
+            }
+        }
+        try { nm.notify(("hit" + text).hashCode(), nb.build()) } catch (x: SecurityException) { }
     }
 
     /** Acha o post da fila cuja legenda aparece no texto da notificação e dá 🔥 (uma vez por post). */
@@ -209,13 +246,16 @@ class ThreadsListener : NotificationListenerService() {
     }
 
     private fun handle(sbn: StatusBarNotification) {
-        if (!ThreadsNotif.on(this)) { ThreadsNotif.log(this, "(filtro desligado)", null, true); return }
         val n = sbn.notification ?: return
         val summary = n.flags and Notification.FLAG_GROUP_SUMMARY != 0
         val text = textOf(n)
-        if (summary) { cleanSummary(sbn); return }
+        if (summary) { if (ThreadsNotif.on(this)) cleanSummary(sbn); return }
         if (text.isEmpty()) return
         val likes = ThreadsNotif.likes(text)
+        if (!ThreadsNotif.on(this)) { // só lê as curtidas (nota automática), sem silenciar nada
+            if (likes != null && likes >= ThreadsNotif.min(this)) ThreadsNotif.hit(this, likes, text, n.contentIntent)
+            ThreadsNotif.log(this, text, likes, true); return
+        }
         val keep = when {
             likes != null -> likes >= ThreadsNotif.min(this)
             else -> ThreadsNotif.mode(this) != "all" // não é curtida: só some no modo "tudo"
