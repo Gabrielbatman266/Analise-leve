@@ -195,10 +195,12 @@ class ScreenReader : AccessibilityService() {
             if (idx < 0) return@forEach
             var likes: Int? = null
             for (j in idx + 1..minOf(nt.size - 1, idx + 14)) {
-                LIKEWORD.find(nt[j])?.let { likes = num(it.groupValues[1], it.groupValues[2]); break }
+                val m = LIKEWORD.find(nt[j])
+                if (m != null) { likes = num(m.groupValues[1], m.groupValues[2]); break }
             }
             if (likes == null) for (j in idx + 1..minOf(nt.size - 1, idx + 10)) {
-                NUM.find(nt[j])?.let { likes = num(it.groupValues[1], it.groupValues[2]); break }
+                val m = NUM.find(nt[j])
+                if (m != null) { likes = num(m.groupValues[1], m.groupValues[2]); break }
             }
             likes?.let { Likes.record(this, if (video) "video" else "fila", s.optString("id"), it, "tela") }
         }
