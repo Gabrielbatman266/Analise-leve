@@ -147,12 +147,14 @@ object RateLater {
     }
 
     /** Nota de um post de foto: vale pra foto E pra legenda; acumula (a foto pode ser postada várias vezes). */
-    fun applyPhoto(c: Context, id: String, k: String) {
+    fun applyPhoto(c: Context, id: String, k: String, cap: String? = null) {
         // deu nota = postou: confirma sozinho se ainda estava esperando o "Publicou?"
         if (PostConfirm.list(c).any { it.optString("kind") == "fila" && it.optString("id") == id }) PostConfirm.answer(c, "fila", id, true)
+        if (!cap.isNullOrBlank()) PostQueue.update(c, id) { it.put("escolhida", cap) } // vota na legenda que foi usada de verdade
         val o = PostQueue.get(c, id) ?: return
-        if (o.optLong("postedAt") == 0L || o.optString("status") != "postada")
-            PostQueue.update(c, id) { it.put("status", "postada"); it.put("postedAt", System.currentTimeMillis()); it.put("usos", it.optInt("usos") + 1) }
+        // enviada de novo depois do último post confirmado = é um post novo (não troca a nota do antigo)
+        if (o.optLong("postedAt") == 0L || o.optString("status") != "postada" || o.optLong("sentAt") > o.optLong("postedAt") + 60_000L)
+            PostQueue.update(c, id) { it.put("status", "postada"); it.put("postedAt", maxOf(it.optLong("sentAt"), System.currentTimeMillis() - 1)); it.put("usos", it.optInt("usos") + 1) }
         val o2 = PostQueue.get(c, id) ?: return
         val at = o2.optLong("postedAt")
         if (o2.optLong("notaAt") == at && o2.optString("nota") == k) return
@@ -219,6 +221,7 @@ class RateReceiver : android.content.BroadcastReceiver() {
             return
         }
         RateLater.apply(c, vid, i.action ?: return)
+        SendLog.noted(c, "video", vid, i.action ?: return)
         nm.cancel(nid)
         android.widget.Toast.makeText(c, if (i.action == "top") "💎 Anotado: muito mais vídeos assim" else if (i.action == "good") "Anotado: mais vídeos assim" else if (i.action == "bad") "Anotado: menos vídeos assim" else "Anotado", android.widget.Toast.LENGTH_SHORT).show()
     }
@@ -242,6 +245,7 @@ class RateReceiver : android.content.BroadcastReceiver() {
             return
         }
         RateLater.applyPhoto(c, id, i.action ?: return)
+        SendLog.noted(c, "fila", id, i.action ?: return)
         nm.cancel(nid)
         android.widget.Toast.makeText(c, if (i.action == "top") "💎 Anotado: essa vira prioridade máxima" else if (i.action == "good") "Anotado: essa volta mais vezes" else if (i.action == "bad") "Anotado: vou evitar assim" else "Anotado", android.widget.Toast.LENGTH_SHORT).show()
     }

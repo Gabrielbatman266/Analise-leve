@@ -29,6 +29,7 @@ object PostConfirm {
 
     /** kind: "fila" (foto da fila → Threads), "video" (vídeo pronto → Instagram), "fotoIg" (foto → Instagram) */
     fun start(c: Context, kind: String, id: String, caption: String, app: String) {
+        SendLog.add(c, kind, id, caption, app)
         val l = list(c).filter { !(it.optString("kind") == kind && it.optString("id") == id) }.toMutableList()
         l.add(JSONObject().put("kind", kind).put("id", id).put("cap", caption).put("app", app).put("at", System.currentTimeMillis()))
         save(c, l); notifyAsk(c, l.last())
@@ -44,6 +45,7 @@ object PostConfirm {
         c.getSystemService(NotificationManager::class.java).cancel(NID)
         l.lastOrNull()?.let { notifyAsk(c, it) }
         if (!yes) return
+        SendLog.confirm(c, kind, id)
         val cap = p.optString("cap")
         val now = System.currentTimeMillis()
         when (kind) {
@@ -81,10 +83,19 @@ object PostConfirm {
         val nm = c.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("confirma", "Confirmar post", NotificationManager.IMPORTANCE_LOW))
         val open = PendingIntent.getActivity(c, 33, Intent(c, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val kind = p.optString("kind"); val id = p.optString("id")
+        val thumb = SendLog.thumb(c, if (kind == "video") "video" else "foto", id)
+        val cap = p.optString("cap").replace('\n', ' ')
         val n = Notification.Builder(c, "confirma")
             .setSmallIcon(android.R.drawable.ic_menu_help)
             .setContentTitle("Publicou ${label(p)}?")
-            .setContentText("Só marco como postado se você confirmar.")
+            .setContentText(if (cap.isNotBlank()) "Legenda: " + cap.take(80) else "Só marco como postado se você confirmar.")
+            .apply {
+                if (thumb != null) {
+                    setLargeIcon(thumb)
+                    setStyle(Notification.BigPictureStyle().bigPicture(thumb).setSummaryText(if (cap.isNotBlank()) cap.take(120) else label(p)))
+                }
+            }
             .setContentIntent(open).setOnlyAlertOnce(true)
             .addAction(Notification.Action.Builder(null, "✓ Publiquei", pi(c, p, true, 34)).build())
             .addAction(Notification.Action.Builder(null, "Não publiquei", pi(c, p, false, 35)).build())

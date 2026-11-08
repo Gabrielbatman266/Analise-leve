@@ -110,10 +110,77 @@ class MainActivity : Activity() {
     private var keysRedraw: (() -> Unit)? = null
     private var tnRedraw: (() -> Unit)? = null
     private var healthRedraw: (() -> Unit)? = null
+    private var histRedraw: (() -> Unit)? = null
+
+    /** 📝 Nota manual: escolhe a foto (ou vídeo), a legenda que usou e a nota. */
+    private fun manualRate() {
+        AlertDialog.Builder(this).setTitle("Dar nota em…").setItems(arrayOf("📸 Uma foto do Threads", "🎬 Um vídeo do Instagram")) { _, w ->
+            if (w == 0) pickItem(PostQueue.load(this).filter { PostQueue.imageFile(this, it.optString("id")).exists() }.sortedByDescending { maxOf(it.optLong("sentAt"), it.optLong("postedAt"), it.optLong("at")) }, false)
+            else pickItem(VideoExport.library(this).filter { java.io.File(VideoExport.videoDir(this), "${it.optString("id")}.mp4").exists() }.sortedByDescending { maxOf(it.optLong("lastPost"), it.optLong("at")) }, true)
+        }.show()
+    }
+
+    private fun pickItem(items: List<org.json.JSONObject>, video: Boolean) {
+        if (items.isEmpty()) { toast("Nada pra escolher"); return }
+        val sv = ScrollView(this)
+        val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(8)) }
+        sv.addView(grid)
+        var dlg: AlertDialog? = null
+        items.take(60).chunked(3).forEach { rowItems ->
+            val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            grid.addView(r, lpMatch().apply { topMargin = dp(6) })
+            rowItems.forEach { o ->
+                val id = o.optString("id")
+                r.addView(ImageView(this).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF1C1C24.toInt())
+                    SendLog.thumb(this@MainActivity, if (video) "video" else "foto", id)?.let { setImageBitmap(it) }
+                    setOnClickListener { dlg?.dismiss(); if (video) rateDialog(o, true, o.optString("legenda")) else pickCaption(o) }
+                }, LinearLayout.LayoutParams(0, dp(150), 1f).apply { rightMargin = dp(6) })
+            }
+            repeat(3 - rowItems.size) { r.addView(View(this), LinearLayout.LayoutParams(0, dp(150), 1f)) }
+        }
+        dlg = AlertDialog.Builder(this).setTitle(if (video) "Qual vídeo?" else "Qual foto?").setView(sv).setNegativeButton("Cancelar", null).show()
+    }
+
+    private fun pickCaption(o: org.json.JSONObject) {
+        val own = o.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
+        val opts = (listOfNotNull(o.optString("escolhida").takeIf { it.isNotBlank() }) + Captions.recentCaps(this).take(12) + own)
+            .map { it.trim() }.filter { it.isNotBlank() }.distinct().take(25)
+        val labels = opts.map { it.replace('\n', ' ').take(70) } + "✏ Escrever a legenda que usei"
+        AlertDialog.Builder(this).setTitle("Qual legenda você usou?").setItems(labels.toTypedArray()) { _, i ->
+            if (i < opts.size) rateDialog(o, false, opts[i])
+            else {
+                val et = EditText(this).apply { hint = "Cole ou escreva a legenda" }
+                AlertDialog.Builder(this).setTitle("Legenda usada").setView(et)
+                    .setPositiveButton("OK") { _, _ -> val t = et.text.toString().trim(); if (t.isNotEmpty()) { CaptionDB.add(this, t, "minha"); rateDialog(o, false, t) } }
+                    .setNegativeButton("Cancelar", null).show()
+            }
+        }.show()
+    }
+
+    private fun rateDialog(o: org.json.JSONObject, video: Boolean, cap: String) {
+        val id = o.optString("id")
+        val ks = listOf("top", "good", "meh", "bad")
+        AlertDialog.Builder(this).setTitle("Como foi?" + if (cap.isNotBlank()) "\n" + cap.replace('\n', ' ').take(60) else "")
+            .setItems(arrayOf("💎 Viralizou", "🔥 Bombou", "😐 Normal", "👎 Flopou")) { _, i ->
+                val k = ks[i]
+                if (video) {
+                    if (o.optInt("posts") == 0) VideoExport.updateLib(this, id) { it.put("posts", 1); it.put("lastPost", System.currentTimeMillis()) }
+                    RateLater.apply(this, id, k)
+                } else {
+                    PostQueue.update(this, id) { it.put("sentAt", System.currentTimeMillis()) } // conta como um post novo
+                    RateLater.applyPhoto(this, id, k, cap)
+                }
+                SendLog.add(this, if (video) "video" else "fila", id, cap, if (video) "Instagram" else "Threads", manual = true)
+                SendLog.noted(this, if (video) "video" else "fila", id, k)
+                toast("${Learn.emoji(k)} anotado: foto/vídeo e legenda")
+                histRedraw?.invoke(); refresh(); if (::insta.isInitialized) insta.refreshLists()
+            }.setNegativeButton("Cancelar", null).show()
+    }
 
     override fun onResume() {
         super.onResume()
-        PostBar.update(this); keysRedraw?.invoke(); tnRedraw?.invoke(); healthRedraw?.invoke()
+        PostBar.update(this); keysRedraw?.invoke(); tnRedraw?.invoke(); healthRedraw?.invoke(); histRedraw?.invoke()
         if (ThreadsNotif.on(this) && ThreadsNotif.hasAccess(this) && !ThreadsNotif.live(this)) ThreadsNotif.rebind(this)
         ui.postDelayed({ askPending() }, 600)
         ui.postDelayed({ if (::insta.isInitialized) insta.maybeRefill() }, 2500)
@@ -222,6 +289,49 @@ class MainActivity : Activity() {
         keysUi()
         keysRedraw = { keysUi() }
         text("Notificação fixa com 📸 Threads · 🎬 Instagram · 🤖 Produzir. O botão flutuante fica por cima de qualquer app: toque pra abrir o menu, arraste pra mudar de lugar, segure pra esconder. Ele pisca ⏰ quando é hora de postar e mostra quantos faltam hoje.", 12f, MUTED, parent = ck)
+
+        // 🕘 histórico de envios + nota manual
+        val chi = card("🕘 Envios e notas")
+        text("Toda vez que você toca em Postar fica aqui. Se esqueceu de confirmar ou de dar a nota, faz por aqui.", 12f, MUTED, parent = chi)
+        val rowH = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        chi.addView(rowH, lpMatch())
+        button("📝 Dar nota manual", rowH, primary = true, weight = true) { manualRate() }
+        val histBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        chi.addView(histBox, lpMatch())
+        var histAll = false
+        fun histUi() {
+            histBox.removeAllViews()
+            val l = SendLog.all(this)
+            val pend = SendLog.pending(this).size
+            if (pend > 0) text("⚠ $pend envio(s) sem confirmar nem nota", 13f, ACCENT, parent = histBox)
+            if (l.isEmpty()) text("Nada enviado ainda.", 12f, MUTED, parent = histBox)
+            val fmt = java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale.US)
+            l.take(if (histAll) 60 else 8).forEach { e ->
+                val kind = e.optString("kind"); val id = e.optString("id")
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                histBox.addView(row, lpMatch().apply { topMargin = dp(8) })
+                row.addView(ImageView(this).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF1C1C24.toInt())
+                    SendLog.thumb(this@MainActivity, if (kind == "video") "video" else "foto", id)?.let { setImageBitmap(it) }
+                }, LinearLayout.LayoutParams(dp(46), dp(70)).apply { rightMargin = dp(10) })
+                val side = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                row.addView(side, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                val nota = e.optString("nota")
+                val st = when { nota.isNotEmpty() -> Learn.emoji(nota) + " nota dada"; e.optBoolean("ok") -> "✓ postado, sem nota"; else -> "⏳ não confirmado" }
+                text("${fmt.format(java.util.Date(e.optLong("at")))} · ${if (kind == "video") "🎬" else "📸"} ${e.optString("app")} · $st" + (if (e.optBoolean("manual")) " · manual" else ""), 11f,
+                    if (nota.isEmpty() && !e.optBoolean("ok")) ACCENT else MUTED, parent = side)
+                text(e.optString("cap").replace('\n', ' ').ifBlank { "(sem legenda)" }.take(70), 12f, FG, parent = side)
+                val rr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                side.addView(rr, lpMatch())
+                listOf("top" to "💎", "good" to "🔥", "meh" to "😐", "bad" to "👎").forEach { (k, em) ->
+                    button(em, rr, primary = nota == k, weight = true) { SendLog.rate(this, e, k); toast("${Learn.emoji(k)} anotado"); histUi(); refresh() }
+                }
+                if (!e.optBoolean("ok") && nota.isEmpty()) button("✕", rr, weight = true) { PostConfirm.answer(this, if (kind == "video") "video" else kind, id, false)
+                    JsonFile.edit(java.io.File(filesDir, "envios.json")) { l2 -> l2.removeAll { it.optLong("at") == e.optLong("at") } }; histUi() }
+            }
+            if (l.size > 8) button(if (histAll) "Mostrar menos" else "Ver histórico completo (${minOf(l.size, 60)})", histBox) { histAll = !histAll; histUi() }
+        }
+        histUi(); histRedraw = { histUi() }
 
         val ch = card("🩺 Saúde das filas")
         val hBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
