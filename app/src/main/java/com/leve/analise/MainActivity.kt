@@ -192,6 +192,9 @@ class MainActivity : Activity() {
         Thread {
             PostQueue.cleanGallery(this, false)
             GalleryClean.sweep(this)
+            RateWatch.schedule(this)
+            try { RateWatch.run(this, notify = false) } catch (e: Exception) { }
+            ui.post { histRedraw?.invoke() }
             val rec = Recover.run(this)
             val hf = Health.autoFix(this)
             if (hf.isNotEmpty()) ui.post { toast("🩺 " + hf.first()); healthRedraw?.invoke() }
@@ -296,10 +299,23 @@ class MainActivity : Activity() {
         val rowH = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         chi.addView(rowH, lpMatch())
         button("📝 Dar nota manual", rowH, primary = true, weight = true) { manualRate() }
+        val tvWatch = text("", 12f, FG, parent = chi)
+        val rowS = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        chi.addView(rowS, lpMatch())
+        val bNotif = button("", rowS, weight = true) { ThreadsNotif.openAccess(this) }
+        val bReader = button("", rowS, weight = true) {
+            if (RateWatch.readerOn(this)) toast("Leitor de tela já está ligado ✓")
+            else { toast("Ative \"Post Leve\" em Apps instalados/Serviços baixados. Se bloquear: ⋮ › Permitir configurações restritas."); RateWatch.openReader(this) }
+        }
+        text("A nota automática usa 3 fontes: notificações de curtida, o leitor de tela (lê as curtidas quando você abre seus posts no Threads/Instagram) e a sua média. Se um post passa de 1 h sem nota, o vigia descobre o motivo, conserta o que dá e te pede a nota com prévia.", 11f, MUTED, parent = chi)
         val histBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         chi.addView(histBox, lpMatch())
         var histAll = false
         fun histUi() {
+            val acc = ThreadsNotif.hasAccess(this); val rd = RateWatch.readerOn(this)
+            bNotif.text = (if (acc) "✓" else "✗") + " 🔔 Notificações"; bReader.text = (if (rd) "✓" else "✗") + " 👀 Leitor de tela"
+            bNotif.setTextColor(if (acc) OK else ACCENT); bReader.setTextColor(if (rd) OK else ACCENT)
+            tvWatch.text = "🧠 Vigia: " + RateWatch.diag(this).ifBlank { "ainda não rodou" }
             histBox.removeAllViews()
             val l = SendLog.all(this)
             val pend = SendLog.pending(this).size

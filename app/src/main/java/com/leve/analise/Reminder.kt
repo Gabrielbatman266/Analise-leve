@@ -112,7 +112,7 @@ object Reminder {
 
 class ReminderReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
-        if (i.action == Intent.ACTION_BOOT_COMPLETED) { Reminder.schedule(c); FolderScan.schedule(c); Daily.schedule(c); PostBar.update(c); return }
+        if (i.action == Intent.ACTION_BOOT_COMPLETED) { Reminder.schedule(c); FolderScan.schedule(c); Daily.schedule(c); PostBar.update(c); RateWatch.schedule(c); return }
         if (i.action == "com.leve.analise.REROLL") { Reminder.notifyNow(c); return }
         PostQueue.cleanGallery(c, false)
         Reminder.schedule(c)

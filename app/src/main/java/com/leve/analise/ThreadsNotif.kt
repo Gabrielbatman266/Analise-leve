@@ -43,7 +43,7 @@ object ThreadsNotif {
         nm.createNotificationChannel(NotificationChannel("tn_hit", "Posts que bombaram (Threads)", NotificationManager.IMPORTANCE_HIGH))
         val e = if (k == "top") "💎" else "🔥"
         if (recent.size == 1) {
-            val o = recent[0]; val cur = if (o.optLong("notaAt") == o.optLong("lastPost")) o.optString("nota") else ""
+            val o = recent[0]; Likes.record(c, "video", o.optString("id"), likes, "notif"); val cur = if (o.optLong("notaAt") == o.optLong("lastPost")) o.optString("nota") else ""
             if (cur != k && cur != "top") RateLater.apply(c, o.optString("id"), k)
             val nb = Notification.Builder(c, "tn_hit").setSmallIcon(android.R.drawable.star_on)
                 .setContentTitle("$e Reel com $likes+ curtidas")
@@ -158,6 +158,7 @@ object ThreadsNotif {
         }
         // 1) a notificação mostra um pedaço da legenda? acha o post exato
         val exact = rateMatching(c, text, k)
+        exact?.let { Likes.record(c, "fila", it, likes, "notif") }
         if (exact != null) {
             nb.setContentTitle("$e Post com $likes+ curtidas no Threads").setContentText("Marquei como $e: " + text.replace('\n', ' ').take(90))
             try { nm.notify(("hit" + text).hashCode(), nb.build()) } catch (x: SecurityException) { }
@@ -169,6 +170,7 @@ object ThreadsNotif {
         val recent = PostQueue.load(c).filter { now - sent(it) < 48 * 3600_000L && sent(it) > 0 }.sortedByDescending { sent(it) }
         if (recent.size == 1) {
             val o = recent[0]; val id = o.optString("id")
+            Likes.record(c, "fila", id, likes, "notif")
             val cur = if (o.optLong("notaAt") >= sent(o)) o.optString("nota") else ""
             if (cur != k && cur != "top") RateLater.applyPhoto(c, id, k)
             nb.setContentTitle("$e Post com $likes+ curtidas no Threads").setContentText("Marquei a foto como $e: " + PostQueue.captionOf(o).replace('\n', ' ').take(70))
