@@ -65,7 +65,7 @@ object Health {
 
     fun rotateMusic(c: Context): String {
         p(c).edit().putLong("mus_extra_until", System.currentTimeMillis() + 24 * 3600_000L).apply()
-        return "Músicas giradas: as últimas 5 ficam de fora nas próximas produções (24 h)."
+        return "Música dos vídeos: as últimas 5 usadas ficam de fora nas próximas produções (24 h)."
     }
 
     // ---------- verificação
@@ -86,7 +86,7 @@ object Health {
         if (ok.isNotEmpty() && fresh == 0) out += Issue("📸 Fotos", "Todas as ${ok.size} fotos já foram postadas: vão repetir mais. Mande fotos novas do Flow.", null, null)
         // LEGENDAS
         val rc = Captions.recentCaps(c).take(15)
-        if (rc.size >= 8 && distinctRatio(rc) < 0.75)
+        if (rc.size >= 8 && distinctRatio(rc) < 0.75 && capExtra(c) == 0)
             out += Issue("💬 Legendas", "Legendas repetindo: ${rc.distinct().size} diferentes nos últimos ${rc.size} posts.", "Girar legendas", ::rotateCaps)
         val bank = CaptionDB.size(c)
         if (bank in 1..24) out += Issue("💬 Legendas", "Banco pequeno ($bank legendas): repete mais. Escreva algumas ou gere com ✨.", null, null)
@@ -113,9 +113,19 @@ object Health {
         Contexts.names(c).filter { !Contexts.noText(c, it) && Projects.list(c).any { p -> p.optString("ctx") == it } && OverlayDB.count(c, it) + OverlayDB.count(c, "") < 3 }
             .forEach { n -> out += Issue("T Textos", "${Contexts.label(c, n)} tem poucos textos: vai repetir.", null, null) }
         // MÚSICA
-        val mus = lib.take(8).map { it.optString("musica") }.filter { it.isNotEmpty() }
-        if (mus.size >= 5 && mus.groupingBy { it }.eachCount().values.maxOrNull()!! >= 3 && VideoExport.musics(c).size >= 3)
-            out += Issue("🎵 Música", "Uma música apareceu ${mus.groupingBy { it }.eachCount().values.maxOrNull()} vezes nos últimos ${mus.size} vídeos.", "Girar músicas", ::rotateMusic)
+        // música de fundo dos vídeos PRODUZIDOS (não é a fila de postagem)
+        val recentLib = lib.take(8).filter { it.optString("musica").isNotEmpty() }
+        val top = recentLib.groupingBy { it.optString("musica") }.eachCount().maxByOrNull { it.value }
+        if (top != null && recentLib.size >= 5 && top.value >= 3) {
+            val cats = recentLib.filter { it.optString("musica") == top.key }.map { it.optString("ctx") }.distinct()
+            // só é problema se a categoria sorteia música e tem mais de uma pra escolher
+            val canVary = cats.any { cx -> MusicPick.mode(c, cx).let { it == MusicPick.AUTO || it == MusicPick.ASK } && MusicPick.pool(c, cx).size >= 2 }
+            val name = File(top.key).nameWithoutExtension.take(30)
+            if (canVary && musicExtra(c) == 0)
+                out += Issue("🎵 Música dos vídeos", "A mesma música (\"$name\") foi usada em ${top.value} dos últimos ${recentLib.size} vídeos produzidos.", "Variar a música", ::rotateMusic)
+            else if (!canVary && cats.isNotEmpty() && VideoExport.musics(c).size < 2)
+                out += Issue("🎵 Música dos vídeos", "Todos os vídeos estão saindo com a mesma música porque só tem 1 salva. Salve mais em 🎵 Músicas.", null, null)
+        }
         // VÍDEOS CRUS
         val crus = Projects.list(c)
         val idle = crus.filter { pj -> lib.none { it.optString("proj") == pj.optString("id") } && System.currentTimeMillis() - pj.optLong("created") > 2 * 86400_000L }
@@ -127,6 +137,7 @@ object Health {
     fun autoFix(c: Context): List<String> {
         if (!autoOn(c)) return emptyList()
         return check(c).filter { it.fix != null && it.fixLabel != "Produzir" }.mapNotNull { i -> try { i.fix!!(c) } catch (e: Exception) { null } }
+            .filter { msg -> val k = "hf_" + msg.hashCode(); val last = p(c).getLong(k, 0); (System.currentTimeMillis() - last > 6 * 3600_000L).also { if (it) p(c).edit().putLong(k, System.currentTimeMillis()).apply() } }
             .also { if (it.isNotEmpty()) p(c).edit().putString("health_last", it.joinToString("\n")).putLong("health_at", System.currentTimeMillis()).apply() }
     }
     fun lastFix(c: Context) = p(c).getString("health_last", "") ?: ""
