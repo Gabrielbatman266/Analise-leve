@@ -91,6 +91,40 @@ object Learn {
             if (worst.key != best.key) " · pior: ${worst.key} (${worst.value.first}%)" else ""
     }
 
+    // ---------- melhores horários (pros lembretes)
+    fun bestHoursOn(c: Context) = p(c).getBoolean("best_hours", true)
+    fun setBestHours(c: Context, v: Boolean) = p(c).edit().putBoolean("best_hours", v).apply()
+
+    /** Nota (0..1) da faixa de horário, juntando fotos e vídeos; null = poucos dados. Fica em cache por 1 h. */
+    fun hourScore(c: Context, hour: Int): Double? {
+        val name = BUCKETS.first { hour in it.first }.second
+        val cacheAt = p(c).getLong("hs_at", 0)
+        val cache = if (System.currentTimeMillis() - cacheAt < 3600_000L) p(c).getString("hs_cache", null) else null
+        val m = try {
+            if (cache != null) JSONObject(cache) else {
+                val all = (PostQueue.load(c) + VideoExport.library(c)).flatMap { hist(it) }.filter { it.first > 0 }
+                val o = JSONObject()
+                all.groupBy { bucket(it.first) }.forEach { (k, v) -> if (v.size >= 2) o.put(k, v.map { score(it.second) }.average()) }
+                p(c).edit().putString("hs_cache", o.toString()).putLong("hs_at", System.currentTimeMillis()).apply(); o
+            }
+        } catch (e: Exception) { return null }
+        return if (m.has(name)) m.optDouble(name) else null
+    }
+
+    /** Multiplica o intervalo do lembrete: horário bom = lembra mais (0,6x); ruim = menos (1,4x). */
+    fun hourFactor(c: Context, at: Long): Double {
+        if (!bestHoursOn(c)) return 1.0
+        val h = java.util.Calendar.getInstance().apply { timeInMillis = at }.get(java.util.Calendar.HOUR_OF_DAY)
+        val s = hourScore(c, h) ?: return 1.0
+        return 1.4 - 0.8 * s
+    }
+
+    fun bestBucket(c: Context): String? = try {
+        hourScore(c, 12) // garante o cache
+        val o = JSONObject(p(c).getString("hs_cache", "{}") ?: "{}")
+        o.keys().asSequence().maxByOrNull { o.optDouble(it) }?.takeIf { o.optDouble(it) > 0.55 }
+    } catch (e: Exception) { null }
+
     /** Histórico de um post em texto (pra IA). */
     fun histText(o: JSONObject): String {
         val h = hist(o)

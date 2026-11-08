@@ -19,6 +19,51 @@ import android.service.notification.StatusBarNotification
  */
 object ThreadsNotif {
     const val THREADS = "com.instagram.barcelona"
+    const val INSTA = "com.instagram.android"
+    fun igRate(c: Context) = p(c).getBoolean("ig_rate", true)
+    fun setIgRate(c: Context, v: Boolean) = p(c).edit().putBoolean("ig_rate", v).apply()
+    fun igSilence(c: Context) = p(c).getBoolean("ig_silence", false)
+    fun setIgSilence(c: Context, v: Boolean) = p(c).edit().putBoolean("ig_silence", v).apply()
+    fun igMin(c: Context) = p(c).getInt("ig_min", 100)
+    fun setIgMin(c: Context, v: Int) = p(c).edit().putInt("ig_min", v).apply()
+
+    /**
+     * Curtidas no Instagram → nota do Reel. A notificação não diz qual vídeo é:
+     * se só um vídeo foi postado nas últimas 48 h, marca ele; se foram vários, pergunta qual (1 toque).
+     */
+    fun igHit(c: Context, likes: Int, text: String) {
+        val k = if (likes >= igMin(c) * 5) "top" else "good"
+        val key = "ig_hit_" + text.hashCode() + k
+        if (p(c).getBoolean(key, false)) return
+        p(c).edit().putBoolean(key, true).apply()
+        val now = System.currentTimeMillis()
+        val recent = VideoExport.library(c).filter { it.optInt("posts") > 0 && now - it.optLong("lastPost") < 48 * 3600_000L }.sortedByDescending { it.optLong("lastPost") }
+        if (recent.isEmpty()) return
+        val nm = c.getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(NotificationChannel("tn_hit", "Posts que bombaram (Threads)", NotificationManager.IMPORTANCE_HIGH))
+        val e = if (k == "top") "💎" else "🔥"
+        if (recent.size == 1) {
+            val o = recent[0]; val cur = if (o.optLong("notaAt") == o.optLong("lastPost")) o.optString("nota") else ""
+            if (cur != k && cur != "top") RateLater.apply(c, o.optString("id"), k)
+            val nb = Notification.Builder(c, "tn_hit").setSmallIcon(android.R.drawable.star_on)
+                .setContentTitle("$e Reel com $likes+ curtidas")
+                .setContentText("Marquei o vídeo como $e: " + o.optString("texto").replace('\n', ' ').ifBlank { "sem texto" }.take(60)).setAutoCancel(true)
+            try { nm.notify(("ig" + text).hashCode(), nb.build()) } catch (x: SecurityException) { }
+            return
+        }
+        val nb = Notification.Builder(c, "tn_hit").setSmallIcon(android.R.drawable.star_on)
+            .setContentTitle("$e Um Reel passou de $likes curtidas — qual foi?")
+            .setContentText("Toque no vídeo certo pra eu marcar $e (1º = o mais recente)").setAutoCancel(true)
+        val fmt = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US)
+        recent.take(3).forEachIndexed { i, o ->
+            val id = o.optString("id")
+            val pi = PendingIntent.getBroadcast(c, ("igr" + id + k).hashCode(), Intent(c, RateReceiver::class.java).setAction(k).putExtra("id", id)
+                .setData(android.net.Uri.parse("nota://ig/$id/$k")), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            val label = "${i + 1}º " + fmt.format(java.util.Date(o.optLong("lastPost"))) + " " + o.optString("texto").replace('\n', ' ').take(10)
+            nb.addAction(Notification.Action.Builder(null, label, pi).build())
+        }
+        try { nm.notify(("ig" + text).hashCode(), nb.build()) } catch (x: SecurityException) { }
+    }
     private fun p(c: Context) = Store.prefs(c)
     fun on(c: Context) = p(c).getBoolean("tn_on", false)
     fun setOn(c: Context, v: Boolean) = p(c).edit().putBoolean("tn_on", v).apply()
@@ -139,8 +184,18 @@ class ThreadsListener : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
+        if (sbn.packageName == ThreadsNotif.INSTA) { handleIg(sbn); return }
         if (sbn.packageName != ThreadsNotif.THREADS) return
         handle(sbn)
+    }
+
+    private fun handleIg(sbn: StatusBarNotification) {
+        val n = sbn.notification ?: return
+        if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
+        val text = textOf(n); if (text.isEmpty()) return
+        val likes = ThreadsNotif.likes(text) ?: return
+        if (likes >= ThreadsNotif.igMin(this)) { if (ThreadsNotif.igRate(this)) ThreadsNotif.igHit(this, likes, text) }
+        else if (ThreadsNotif.igSilence(this)) { try { cancelNotification(sbn.key) } catch (e: Exception) { }; ThreadsNotif.countSilenced(this) }
     }
 
     private fun textOf(n: Notification): String {

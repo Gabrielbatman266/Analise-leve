@@ -48,9 +48,12 @@ object Daily {
         Intent(c, DailyReceiver::class.java).setAction(action), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
     /** Agenda a preparação da manhã (7:40) e o próximo lembrete do dia. */
+    fun autopilot(c: Context) = p(c).getBoolean("autopilot", true)
+    fun setAutopilot(c: Context, v: Boolean) { p(c).edit().putBoolean("autopilot", v).apply(); schedule(c) }
+
     fun schedule(c: Context) {
         val am = c.getSystemService(AlarmManager::class.java)
-        if (goal(c) <= 0) { am.cancel(pi(c, "manha", 52)); am.cancel(pi(c, "lembrar", 53)); return }
+        if (goal(c) <= 0 && !autopilot(c)) { am.cancel(pi(c, "manha", 52)); am.cancel(pi(c, "lembrar", 53)); return }
         val cal = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 7); set(Calendar.MINUTE, 40); set(Calendar.SECOND, 0)
             if (timeInMillis <= System.currentTimeMillis()) add(Calendar.DAY_OF_YEAR, 1)
@@ -74,13 +77,51 @@ object Daily {
         } else {
             val end = Calendar.getInstance().apply { set(Calendar.HOUR_OF_DAY, END_H); set(Calendar.MINUTE, 0) }.timeInMillis
             val gap = ((end - now.timeInMillis) / left).coerceIn(20 * 60_000L, 3 * 60 * 60_000L)
-            now.timeInMillis + maxOf(minDelayMs, (gap * (0.8 + Math.random() * 0.4)).toLong())
+            val g0 = (gap * (0.8 + Math.random() * 0.4)).toLong()
+            now.timeInMillis + maxOf(minDelayMs, (g0 * Learn.hourFactor(c, now.timeInMillis + g0)).toLong().coerceAtLeast(15 * 60_000L))
         }
         try { am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi(c, "lembrar", 53)) } catch (e: Exception) { }
         p(c).edit().putLong("day_next", at).apply()
     }
 
     fun nextAt(c: Context) = p(c).getLong("day_next", 0L)
+
+    /** ☀️ Piloto automático: arruma tudo de manhã e manda o plano do dia. */
+    fun morning(c: Context) {
+        val did = ArrayList<String>()
+        try { Recover.run(c).let { r -> if (r.sum() > 0) did += "recuperei ${r.sum()} item(ns)" } } catch (e: Exception) { }
+        try { FolderScan.scan(c).let { if (it > 0) did += "$it foto(s) nova(s) do Flow" } } catch (e: Exception) { }
+        try { FolderScan.scanVideos(c).let { if (it > 0) did += "$it vídeo(s) cru(s) novo(s)" } } catch (e: Exception) { }
+        try { ThreadsRefs.scan(c) } catch (e: Exception) { }
+        try { Captions.fillFromBank(c) } catch (e: Exception) { }
+        try { Health.autoFix(c).forEach { did += it.substringBefore(":") } } catch (e: Exception) { }
+        val waiting = AutoProducer.waiting(c)
+        val g = goal(c)
+        if (g > waiting && Projects.list(c).isNotEmpty()) { AutoProducer.refillIfNeeded(c); did += "produzindo ${g - waiting} vídeo(s)" }
+        // ontem
+        val y0 = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1); set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0) }.timeInMillis
+        val y1 = y0 + 86400_000L
+        val ks = (PostQueue.load(c) + VideoExport.library(c)).flatMap { Learn.hist(it) }.filter { it.first in y0 until y1 }.map { it.second }
+        val q = PostQueue.load(c).filter { PostQueue.imageFile(c, it.optString("id")).exists() }
+        val lines = ArrayList<String>()
+        lines += if (g > 0) "🎬 Meta: $g vídeo(s) · $waiting pronto(s)" + (if (g > waiting) " · fazendo o resto" else " ✓") else "🎬 $waiting vídeo(s) pronto(s)"
+        lines += "📸 ${q.size} foto(s) na fila · ${q.count { it.optString("status") != "postada" }} nunca postada(s)"
+        Learn.bestBucket(c)?.let { lines += "⏰ Seu melhor horário: $it (lembro mais nessa hora)" }
+        if (ks.isNotEmpty()) lines += "Ontem: 💎${ks.count { it == "top" }} 🔥${ks.count { it == "good" }} 😐${ks.count { it == "meh" }} 👎${ks.count { it == "bad" }}"
+        if (did.isNotEmpty()) lines += "🤖 Já fiz: " + did.joinToString(", ")
+        val nm = c.getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(NotificationChannel("plano", "Plano do dia", NotificationManager.IMPORTANCE_DEFAULT))
+        val open = PendingIntent.getActivity(c, 56, Intent(c, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val n = Notification.Builder(c, "plano").setSmallIcon(android.R.drawable.ic_menu_today)
+            .setContentTitle("☀️ Plano de hoje").setContentText(lines.first())
+            .setStyle(Notification.BigTextStyle().bigText(lines.joinToString("\n")))
+            .setContentIntent(open).setAutoCancel(true)
+            .addAction(Notification.Action.Builder(null, "🎬 Postar vídeo", QuickPost.videoPending(c)).build())
+            .addAction(Notification.Action.Builder(null, "📸 Postar foto", PendingIntent.getActivity(c, 57, QuickPost.intent(c).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build())
+            .build()
+        try { nm.notify(55, n) } catch (e: SecurityException) { }
+        QuickPost.updateWidgets(c)
+    }
 
     fun notifyTime(c: Context) {
         if (remaining(c) <= 0) return
@@ -103,7 +144,10 @@ object Daily {
 class DailyReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         when (i.action) {
-            "manha" -> { AutoProducer.refillIfNeeded(c); Daily.schedule(c) }               // prepara os vídeos do dia
+            "manha" -> {                                                                // prepara o dia
+                if (Daily.autopilot(c)) { val pr = goAsync(); Thread { try { Daily.morning(c) } finally { Daily.schedule(c); pr.finish() } }.start(); return }
+                AutoProducer.refillIfNeeded(c); Daily.schedule(c)
+            }
             "lembrar" -> { Daily.notifyTime(c); Daily.scheduleReminder(c, 25 * 60_000L) }  // se não postar, lembra de novo mais tarde
             "adiar" -> { c.getSystemService(NotificationManager::class.java).cancel(51); Daily.scheduleReminder(c, 30 * 60_000L) }
         }

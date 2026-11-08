@@ -392,6 +392,20 @@ class MainActivity : Activity() {
         text("Passou do limite = 🔥 automático no post", 12f, MUTED, parent = ctn)
         chips(ctn, listOf("Ligado", "Desligado"), { if (ThreadsNotif.autoRate(this)) "Ligado" else "Desligado" }) { ThreadsNotif.setAutoRate(this, it == "Ligado") }
         button("2. Deixar o Threads sem som (recomendado)", ctn) { ThreadsNotif.openThreadsSettings(this) }
+        text("📸 Instagram: Reel que passa de", 12f, MUTED, parent = ctn)
+        chips(ctn, listOf("50", "100", "300", "1000"), { ThreadsNotif.igMin(this).toString() }) { ThreadsNotif.setIgMin(this, it.toInt()) }
+        text("curtidas vira 🔥 sozinho (5x isso = 💎). Se postou vários vídeos em 48 h, o app pergunta qual foi.", 11f, MUTED, parent = ctn)
+        chips(ctn, listOf("Nota automática ligada", "Desligada"), { if (ThreadsNotif.igRate(this)) "Nota automática ligada" else "Desligada" }) { ThreadsNotif.setIgRate(this, it.startsWith("Nota")) }
+        chips(ctn, listOf("Silenciar curtidas pequenas do Insta", "Não silenciar"), { if (ThreadsNotif.igSilence(this)) "Silenciar curtidas pequenas do Insta" else "Não silenciar" }) { ThreadsNotif.setIgSilence(this, it.startsWith("Silenciar")) }
+
+        val cap0 = card("🤖 Piloto automático")
+        text("Todo dia às 7:40 o app recupera o que sumiu, puxa fotos e vídeos novos do Flow, gira as filas, produz os vídeos que faltam e te manda o ☀️ Plano de hoje (meta, filas, melhor horário e como foi ontem).", 13f, MUTED, parent = cap0)
+        chips(cap0, listOf("Ligado", "Desligado"), { if (Daily.autopilot(this)) "Ligado" else "Desligado" }) { Daily.setAutopilot(this, it == "Ligado") }
+        button("☀️ Ver o plano de hoje agora", cap0) { Thread { Daily.morning(this) }.start(); toast("Montando o plano…") }
+        text("⏰ Lembrar mais nos melhores horários", 12f, MUTED, parent = cap0)
+        chips(cap0, listOf("Ligado", "Desligado"), { if (Learn.bestHoursOn(this)) "Ligado" else "Desligado" }) { Learn.setBestHours(this, it == "Ligado"); Reminder.schedule(this); Daily.scheduleReminder(this) }
+        text("Usa o histórico de notas: no horário que mais bomba os lembretes vêm mais seguidos; no que flopa, mais espaçados." +
+            (Learn.bestBucket(this)?.let { " Hoje o melhor é: $it." } ?: " (Precisa de algumas notas pra saber.)"), 11f, MUTED, parent = cap0)
         text("O filtro apaga a notificação, mas o som do Threads pode tocar antes. Deixe as notificações do Threads silenciosas: quem toca é o aviso do Post Leve quando bomba. O 🔥 automático só funciona quando a notificação mostra um trecho da legenda.", 11f, MUTED, parent = ctn)
 
         val cu = card("Atualizações")

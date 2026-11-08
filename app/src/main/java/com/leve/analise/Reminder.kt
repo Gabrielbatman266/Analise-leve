@@ -38,6 +38,8 @@ object Reminder {
     fun pickNext(c: Context, from: Long): Long {
         val (mn, mx) = range(c)
         var at = from + ((mn * 60L)..(maxOf(mn, mx) * 60L)).random() * 1000L
+        // melhores horários: no horário que costuma bombar lembra mais rápido; no ruim, demora mais
+        at = from + ((at - from) * Learn.hourFactor(c, at)).toLong().coerceAtLeast(5 * 60_000L)
         if (dayOnly(c)) {
             val cal = java.util.Calendar.getInstance().apply { timeInMillis = at }
             val h = cal.get(java.util.Calendar.HOUR_OF_DAY)
