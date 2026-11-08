@@ -202,7 +202,7 @@ object ThreadsNotif {
         } ?: return null
         val id = o.optString("id")
         val cur = if (o.optLong("notaAt") == o.optLong("postedAt")) o.optString("nota") else ""
-        if (cur == k || cur == "top") return null
+        if (cur == k || cur == "top") return id // já tinha essa nota: achou, não mexe
         RateLater.applyPhoto(c, id, k)
         return id
     }
