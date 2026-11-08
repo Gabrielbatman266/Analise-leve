@@ -115,14 +115,14 @@ object Health {
         // MÚSICA
         // música de fundo dos vídeos PRODUZIDOS (não é a fila de postagem)
         val recentLib = lib.take(8).filter { it.optString("musica").isNotEmpty() }
-        val top = recentLib.groupingBy { it.optString("musica") }.eachCount().maxByOrNull { it.value }
-        if (top != null && recentLib.size >= 5 && top.value >= 3) {
-            val cats = recentLib.filter { it.optString("musica") == top.key }.map { it.optString("ctx") }.distinct()
+        val topM = recentLib.groupingBy { it.optString("musica") }.eachCount().maxByOrNull { it.value }
+        if (topM != null && recentLib.size >= 5 && topM.value >= 3) {
+            val cats = recentLib.filter { it.optString("musica") == topM.key }.map { it.optString("ctx") }.distinct()
             // só é problema se a categoria sorteia música e tem mais de uma pra escolher
             val canVary = cats.any { cx -> MusicPick.mode(c, cx).let { it == MusicPick.AUTO || it == MusicPick.ASK } && MusicPick.pool(c, cx).size >= 2 }
-            val name = File(top.key).nameWithoutExtension.take(30)
+            val name = File(topM.key).nameWithoutExtension.take(30)
             if (canVary && musicExtra(c) == 0)
-                out += Issue("🎵 Música dos vídeos", "A mesma música (\"$name\") foi usada em ${top.value} dos últimos ${recentLib.size} vídeos produzidos.", "Variar a música", ::rotateMusic)
+                out += Issue("🎵 Música dos vídeos", "A mesma música (\"$name\") foi usada em ${topM.value} dos últimos ${recentLib.size} vídeos produzidos.", "Variar a música", ::rotateMusic)
             else if (!canVary && cats.isNotEmpty() && VideoExport.musics(c).size < 2)
                 out += Issue("🎵 Música dos vídeos", "Todos os vídeos estão saindo com a mesma música porque só tem 1 salva. Salve mais em 🎵 Músicas.", null, null)
         }
