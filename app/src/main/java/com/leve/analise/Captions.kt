@@ -213,14 +213,15 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
             remember(c, fid, cap); return fid to cap
         }
         val k = minOf(all.size - 1, maxOf(minOf(3, all.size - 1), (all.size * 0.6).toInt()), 20)
+        val winGap = minOf(maxOf(4, (all.size * 0.4).toInt()), k)
         val cand = all.filter { o ->
             val idx = rec.indexOf(o.optString("id"))
-            idx < 0 || idx >= (if (photoMean(o) > 0.6) minOf(2, k) else k)
+            idx < 0 || idx >= (if (photoMean(o) > 0.6) winGap else k)
         }.ifEmpty { all.filter { it.optString("id") != rec.firstOrNull() }.ifEmpty { all } }
         val w = cand.map { o ->
             val posted = o.optString("status") == "postada"
             val idx = rec.indexOf(o.optString("id"))
-            val score = Math.exp(5.0 * (Learn.chanceMean(c, o) - 0.5)) * (1.0 + 0.6 * o.optInt("top"))
+            val score = minOf(3.0, Math.exp(5.0 * (Learn.chanceMean(c, o) - 0.5)) * (1.0 + 0.6 * o.optInt("top")))
             score * (if (!posted) 2.0 else 1.0) * (if (idx < 0) 1.5 else 1.0 + idx / 10.0)
         }
         var r = Math.random() * w.sum(); var o = cand.last()

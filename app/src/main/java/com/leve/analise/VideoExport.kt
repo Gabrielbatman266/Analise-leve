@@ -382,18 +382,28 @@ object VideoExport {
         val idx = rec.indexOf(o.optString("id"))
         val pj = projs[o.optString("proj")]
         val origin = if (pj == null) 1.0 else Math.exp(2.0 * (Learn.mean(pj) - 0.5))
-        return Math.exp(5.0 * (Learn.chanceMean(c, o) - 0.5)) * (1.0 + 0.6 * o.optInt("top")) * (if (o.optInt("posts") == 0) 2.0 else 1.0) * (if (idx < 0) 1.5 else 1.0 + idx / 10.0) * origin
+        // vídeo cru que está há mais tempo sem sair ganha mais chance (gira entre os crus)
+        val ro = recent(c, "vid_last_orig"); val oi = ro.indexOf(origin(o))
+        val oFresh = if (oi < 0) 1.6 else 1.0 + oi / 5.0
+        // teto: o que bombou sai mais, mas no máximo ~3x (antes um 💎 chegava a 6x e dominava a fila)
+        val boost = minOf(3.0, Math.exp(5.0 * (Learn.chanceMean(c, o) - 0.5)) * (1.0 + 0.6 * o.optInt("top")))
+        return boost * oFresh * (if (o.optInt("posts") == 0) 2.0 else 1.0) * (if (idx < 0) 1.5 else 1.0 + idx / 10.0) * origin
     }
 
     /** Candidatos agora: o que saiu há pouco espera (o que bombou espera só 2 posts) e o mesmo vídeo cru não sai em seguida. */
     private fun candidates(c: Context, lib: List<JSONObject>, rec: List<String>, recentO: List<String>): List<JSONObject> {
         val k = minOf(lib.size - 1, maxOf(minOf(3, lib.size - 1), (lib.size * 0.6).toInt()), 20)
+        // o que bombou espera ~40% da fila (antes: só 2 posts)
+        val winGap = minOf(maxOf(4, (lib.size * 0.4).toInt()), k)
+        val now = System.currentTimeMillis()
         var pool = lib.filter { o ->
             val idx = rec.indexOf(o.optString("id"))
-            idx < 0 || idx >= (if (Learn.isWin(o)) minOf(2, k) else k)
-        }.ifEmpty { lib.filter { it.optString("id") != rec.firstOrNull() }.ifEmpty { lib } }
+            (idx < 0 || idx >= (if (Learn.isWin(o)) winGap else k)) && now - o.optLong("lastPost") > 20 * 3600_000L // o mesmo vídeo no máx. 1x por dia
+        }.ifEmpty { lib.filter { o -> val idx = rec.indexOf(o.optString("id")); idx < 0 || idx >= minOf(2, k) } }
+            .ifEmpty { lib.filter { it.optString("id") != rec.firstOrNull() }.ifEmpty { lib } }
         val origins = lib.map { origin(it) }.distinct().size
-        val avoid = recentO.take(minOf(3, maxOf(0, origins - 1)))
+        // vídeos crus: evita os últimos ~60% (antes: só os 3 últimos)
+        val avoid = recentO.take(minOf(maxOf(3, (origins * 0.6).toInt()), maxOf(0, origins - 1)))
         for (n in avoid.size downTo 1) { val f = pool.filter { origin(it) !in avoid.take(n) }; if (f.isNotEmpty()) { pool = f; break } }
         val lastTxt = recent(c, "vid_last_txt").take(3)
         return pool.filter { it.optString("texto").trim().lowercase() !in lastTxt || it.optString("texto").isBlank() }.ifEmpty { pool }

@@ -101,6 +101,9 @@ object Health {
         val origins = lib.map { VideoExport.origin(it) }.distinct().size
         if (vok >= 4 && rv.size >= 6 && (distinctRatio(rv) < 0.7 || (origins >= 3 && distinctRatio(ro) < 0.5)))
             out += Issue("🎬 Vídeos", "Repetindo: ${rv.distinct().size} vídeos e ${ro.distinct().size} vídeos crus diferentes nos últimos posts (você tem $vok de $origins crus).", "Girar fila", ::rotateVideos)
+        val top = rv.groupingBy { it }.eachCount().maxByOrNull { it.value }
+        if (vok >= 6 && rv.size >= 8 && top != null && top.value >= 3)
+            out += Issue("🎬 Vídeos", "Um vídeo saiu ${top.value} vezes nos últimos ${rv.size}.", "Girar fila", ::rotateVideos)
         val waiting = lib.count { it.optInt("posts") == 0 }
         val need = Daily.remaining(c)
         if (need > waiting && Projects.list(c).isNotEmpty()) out += Issue("🎬 Vídeos", "Faltam ${need - waiting} vídeo(s) prontos pra meta de hoje.", "Produzir") { cc -> AutoProducer.refillIfNeeded(cc); "Produção começou em segundo plano." }
