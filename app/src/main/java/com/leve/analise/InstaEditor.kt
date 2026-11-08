@@ -2062,6 +2062,7 @@ class InstaEditor(private val a: MainActivity) {
         if (!f.exists()) { a.toast("Esse vídeo não está mais no app"); return }
         VideoExport.updateLib(a, id) { it.put("legenda", cap) }
         PostConfirm.start(a, "video", id, cap, "Instagram") // só conta como postado quando você confirmar
+        RateLater.schedule(a, id)
         renderLibrary()
         a.toast(if (cap.isEmpty()) "Abrindo o Instagram" else "Legenda copiada: no Instagram é só colar e postar")
         a.startActivity(VideoExport.shareToInstagram(a, PostQueue.uri(id).buildUpon().path("/$id.mp4").build(), "video/mp4"))

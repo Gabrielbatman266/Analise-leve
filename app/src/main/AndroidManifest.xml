@@ -18,6 +18,7 @@
     <queries>
         <package android:name="com.instagram.barcelona" />
         <package android:name="com.instagram.android" />
+        <package android:name="com.leve.teclado" />
         <intent>
             <action android:name="android.intent.action.SEND" />
             <data android:mimeType="image/*" />

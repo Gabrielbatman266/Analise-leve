@@ -121,6 +121,8 @@ object PostQueue {
     /** Foto + legenda juntas. Vai direto pro Threads quando ele está instalado. */
     fun shareIntent(c: Context, id: String, caption: String): Intent {
         Captions.remember(c, id, caption) // o que sai agora não volta logo em seguida
+        update(c, id) { it.put("sentAt", System.currentTimeMillis()); if (caption.isNotBlank()) it.put("escolhida", caption) }
+        RateLater.schedulePhoto(c, id) // todo post pergunta como foi
         return VideoExport.shareTo(c, uri(id), "image/jpeg", THREADS, listOf("share", "compose", "post"), caption)
     }
 

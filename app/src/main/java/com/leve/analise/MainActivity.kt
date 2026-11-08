@@ -355,6 +355,7 @@ class MainActivity : Activity() {
         chips(cg, listOf("2 min", "10 min", "30 min", "Nunca"), { ClipSync.ttl(this).let { if (it == 0) "Nunca" else "$it min" } }) { o ->
             Store.prefs(this).edit().putInt("clip_ttl", if (o == "Nunca") 0 else o.substringBefore(' ').toInt()).apply()
         }
+        button("🧹 Apagar do Leve Teclado as legendas já usadas", cg) { toast("Pedi pro teclado apagar ${ClipSync.forgetRecent(this)} legenda(s) do histórico") }
         text("Com o Leve Teclado, a legenda também some do histórico do teclado no tempo que você escolher lá. E no Threads, tudo que você copia vai sozinho pro banco de legendas (ligue em Leve Teclado › Post Leve).", 12f, MUTED, parent = cg)
 
         val ctn = card("🔕 Notificações do Threads")
@@ -871,12 +872,12 @@ class MainActivity : Activity() {
             } + (if (usos > 1) " · ${usos}x" else "") + (if (o.optBoolean("nova")) " · nova do Flow" else "")
             text(label, 13f, if (st == "postada") OK else ACCENT, parent = side, bold = true)
             o.optString("aviso").takeIf { it.isNotEmpty() }?.let { text(it, 12f, MUTED, parent = side) }
-            if (st == "postada") {
-                text("Legenda: " + PostQueue.captionOf(o).ifEmpty { "(nenhuma)" }, 13f, FG, parent = side)
-                text("Como foi esse post?", 12f, MUTED, parent = side)
+            if (st == "postada" || o.optLong("sentAt") > 0) {
+                if (st == "postada") text("Legenda: " + PostQueue.captionOf(o).ifEmpty { "(nenhuma)" }, 13f, FG, parent = side)
+                text(if (st == "postada") "Como foi esse post?" else "Postou? Dê a nota (já marca como postada):", 12f, MUTED, parent = side)
                 val rr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
                 side.addView(rr, lpMatch())
-                val nota = o.optString("nota")
+                val nota = if (o.optLong("notaAt") >= o.optLong("sentAt") && o.optLong("notaAt") == o.optLong("postedAt")) o.optString("nota") else ""
                 listOf("top" to "💎", "good" to "🔥", "meh" to "😐", "bad" to "👎").forEach { (k, e) ->
                     button(e, rr, primary = nota == k, weight = true) {
                         RateLater.applyPhoto(this, id, k); refresh()

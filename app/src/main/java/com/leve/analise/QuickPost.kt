@@ -111,6 +111,7 @@ class PostVideoActivity : android.app.Activity() {
         try {
             startActivity(VideoExport.shareToInstagram(this, uri, "video/mp4"))
             PostConfirm.start(this, "video", id, cap, "Instagram")
+            RateLater.schedule(this, id)
             android.widget.Toast.makeText(this, "Legenda copiada: cole e publique", android.widget.Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             android.widget.Toast.makeText(this, "Não achei o Instagram", android.widget.Toast.LENGTH_LONG).show()
@@ -147,13 +148,18 @@ object RateLater {
 
     /** Nota de um post de foto: vale pra foto E pra legenda; acumula (a foto pode ser postada várias vezes). */
     fun applyPhoto(c: Context, id: String, k: String) {
+        // deu nota = postou: confirma sozinho se ainda estava esperando o "Publicou?"
+        if (PostConfirm.list(c).any { it.optString("kind") == "fila" && it.optString("id") == id }) PostConfirm.answer(c, "fila", id, true)
         val o = PostQueue.get(c, id) ?: return
-        val at = o.optLong("postedAt")
-        if (o.optLong("notaAt") == at && o.optString("nota") == k) return
-        val prev = if (o.optLong("notaAt") == at) o.optString("nota") else ""
-        if (prev.isEmpty()) { times(k) { CaptionDB.rate(c, PostQueue.captionOf(o), it) }; Learn.noteRated(c, "f") }
-        Captions.ratePair(c, id, PostQueue.captionOf(o), if (k == "top") "good" else k, if (prev == "top") "good" else prev)
-        if (k == "top" && prev != "top") Captions.ratePair(c, id, PostQueue.captionOf(o), "good")
+        if (o.optLong("postedAt") == 0L || o.optString("status") != "postada")
+            PostQueue.update(c, id) { it.put("status", "postada"); it.put("postedAt", System.currentTimeMillis()); it.put("usos", it.optInt("usos") + 1) }
+        val o2 = PostQueue.get(c, id) ?: return
+        val at = o2.optLong("postedAt")
+        if (o2.optLong("notaAt") == at && o2.optString("nota") == k) return
+        val prev = if (o2.optLong("notaAt") == at) o2.optString("nota") else ""
+        if (prev.isEmpty()) { times(k) { CaptionDB.rate(c, PostQueue.captionOf(o2), it) }; Learn.noteRated(c, "f") }
+        Captions.ratePair(c, id, PostQueue.captionOf(o2), if (k == "top") "good" else k, if (prev == "top") "good" else prev)
+        if (k == "top" && prev != "top") Captions.ratePair(c, id, PostQueue.captionOf(o2), "good")
         PostQueue.update(c, id) {
             if (prev.isNotEmpty()) bump(it, prev, -1) // trocou a nota deste post
             bump(it, k, 1); it.put("nota", k); it.put("notaAt", at)
@@ -163,6 +169,7 @@ object RateLater {
 
     /** Aplica a nota uma vez só (a mesma do botão em Prontos). */
     fun apply(c: Context, vid: String, k: String) {
+        if (PostConfirm.list(c).any { it.optString("kind") == "video" && it.optString("id") == vid }) PostConfirm.answer(c, "video", vid, true)
         val o = VideoExport.library(c).firstOrNull { it.optString("id") == vid } ?: return
         val at = o.optLong("lastPost")
         if (o.optLong("notaAt") == at && o.optString("nota") == k) return
@@ -220,7 +227,7 @@ class RateReceiver : android.content.BroadcastReceiver() {
         val nid = ("nf" + id).hashCode()
         if (i.action == "ask") {
             val o = PostQueue.get(c, id) ?: return
-            if (o.optLong("notaAt") == o.optLong("postedAt") && o.optString("nota").isNotEmpty()) return
+            if (o.optString("nota").isNotEmpty() && o.optLong("notaAt") >= maxOf(o.optLong("sentAt"), o.optLong("postedAt"))) return
             nm.createNotificationChannel(android.app.NotificationChannel("nota", "Como foi o post", android.app.NotificationManager.IMPORTANCE_DEFAULT))
             fun act(k: String, label: String, req: Int) = android.app.Notification.Action.Builder(null, label,
                 PendingIntent.getBroadcast(c, req + nid, Intent(c, RateReceiver::class.java).setAction(k).putExtra("id", id).putExtra("foto", true)

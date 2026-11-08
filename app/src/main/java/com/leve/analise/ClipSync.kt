@@ -30,6 +30,7 @@ object ClipSync {
             cm.setPrimaryClip(clip)
         } catch (e: Exception) { return }
         Store.prefs(c).edit().putString("clip_last", text).apply()
+        tellKeyboard(c, "com.leve.teclado.EXPIRE", text)
         val min = ttl(c)
         if (min <= 0) return
         val am = c.getSystemService(AlarmManager::class.java)
@@ -40,8 +41,22 @@ object ClipSync {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
     /** Apaga a legenda da área de transferência (se você copiou outra coisa depois, não mexe). */
+    /** Avisa o Leve Teclado (se instalado) pra apagar a legenda do histórico dele. */
+    fun tellKeyboard(c: Context, action: String, text: String) {
+        try { c.sendBroadcast(Intent(action).setPackage("com.leve.teclado").putExtra("texto", text)) } catch (e: Exception) { }
+    }
+
+    /** Apaga do histórico do teclado as últimas legendas que o app usou. */
+    fun forgetRecent(c: Context): Int {
+        val l = (Captions.recentCaps(c) + VideoExport.library(c).take(40).map { it.optString("legenda") } + listOfNotNull(Store.prefs(c).getString("clip_last", null)))
+            .filter { it.isNotBlank() }.distinct()
+        l.forEach { tellKeyboard(c, "com.leve.teclado.FORGET", it) }
+        return l.size
+    }
+
     fun clean(c: Context) {
         val last = Store.prefs(c).getString("clip_last", null) ?: return
+        tellKeyboard(c, "com.leve.teclado.FORGET", last)
         try {
             val cm = c.getSystemService(ClipboardManager::class.java)
             val cur = try { cm.primaryClip } catch (e: Exception) { null }
