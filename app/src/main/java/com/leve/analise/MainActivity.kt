@@ -114,6 +114,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         PostBar.update(this); keysRedraw?.invoke(); tnRedraw?.invoke(); healthRedraw?.invoke()
+        if (ThreadsNotif.on(this) && ThreadsNotif.hasAccess(this) && !ThreadsNotif.live(this)) ThreadsNotif.rebind(this)
         ui.postDelayed({ askPending() }, 600)
         ui.postDelayed({ if (::insta.isInitialized) insta.maybeRefill() }, 2500)
         Updater.schedule(this)
@@ -360,11 +361,23 @@ class MainActivity : Activity() {
         text("Some com as notificações de curtida pequenas. Só aparece quando um post passa do limite, e aí o Post Leve avisa com som e marca o post como 🔥 sozinho.", 13f, MUTED, parent = ctn)
         val tnBtn = button("", ctn) { }
         val tnSt = text("", 12f, OK, parent = ctn)
+        val tnLog = text("", 11f, MUTED, parent = ctn)
         fun tnT() {
             val acc = ThreadsNotif.hasAccess(this); val on = ThreadsNotif.on(this) && acc
             tnBtn.text = if (!acc) "1. Liberar acesso às notificações" else if (on) "✓ Filtro ligado (toque pra desligar)" else "Ligar o filtro"
-            tnSt.text = if (on) "Hoje: ${ThreadsNotif.silencedToday(this)} notificação(ões) silenciada(s)" else ""
+            tnSt.setTextColor(if (acc && ThreadsNotif.live(this)) OK else ACCENT)
+            tnSt.text = when {
+                !acc -> "✗ Acesso às notificações NÃO liberado (veja os 3 pontinhos ⋮ em Informações do app › Permitir configurações restritas)."
+                !ThreadsNotif.live(this) -> "⚠ Acesso liberado, mas o serviço não está conectado. Toque em 🔄 Reconectar."
+                on -> "✓ Conectado. Hoje: ${ThreadsNotif.silencedToday(this)} notificação(ões) silenciada(s)"
+                else -> "Conectado, filtro desligado."
+            }
+            tnLog.text = if (acc) "Últimas do Threads:\n" + ThreadsNotif.logText(this) else ""
         }
+        val tnR = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        ctn.addView(tnR, lpMatch())
+        button("🔄 Reconectar", tnR, weight = true) { ThreadsNotif.rebind(this); ui.postDelayed({ tnT() }, 1500); toast("Reconectando o filtro…") }
+        button("↻ Atualizar", tnR, weight = true) { tnT() }
         tnBtn.setOnClickListener {
             if (!ThreadsNotif.hasAccess(this)) { ThreadsNotif.setOn(this, true); toast("Ative o Post Leve em \"Acesso a notificações\" e volte"); ThreadsNotif.openAccess(this) }
             else { ThreadsNotif.setOn(this, !ThreadsNotif.on(this)); tnT() }

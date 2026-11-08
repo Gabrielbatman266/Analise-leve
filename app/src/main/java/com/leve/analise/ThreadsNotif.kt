@@ -57,6 +57,34 @@ object ThreadsNotif {
         return 1 // "fulano curtiu sua thread"
     }
 
+    /** Diário das últimas notificações do Threads (pra ver o que o filtro decidiu). */
+    fun log(c: Context, text: String, likes: Int?, keep: Boolean) {
+        val a = try { org.json.JSONArray(p(c).getString("tn_log", "[]")) } catch (e: Exception) { org.json.JSONArray() }
+        val l = (0 until a.length()).map { a.getJSONObject(it) }.toMutableList()
+        l.add(0, org.json.JSONObject().put("at", System.currentTimeMillis()).put("t", text.replace('\n', ' ').take(90)).put("l", likes ?: -1).put("k", keep))
+        p(c).edit().putString("tn_log", org.json.JSONArray(l.take(8)).toString()).putLong("tn_seen", System.currentTimeMillis()).apply()
+    }
+    fun logText(c: Context): String {
+        val a = try { org.json.JSONArray(p(c).getString("tn_log", "[]")) } catch (e: Exception) { org.json.JSONArray() }
+        if (a.length() == 0) return "Ainda não chegou nenhuma notificação do Threads desde que o filtro ligou."
+        return (0 until a.length()).map { a.getJSONObject(it) }.joinToString("\n") { o ->
+            val h = android.text.format.DateFormat.format("HH:mm", o.optLong("at"))
+            val l = o.optInt("l"); val k = o.optBoolean("k")
+            "$h " + (if (k) "✓ ficou" else "🔕 sumiu") + (if (l >= 0) " ($l curtida(s))" else " (não é curtida)") + ": " + o.optString("t").take(60)
+        }
+    }
+    fun live(c: Context) = p(c).getBoolean("tn_live", false)
+    fun rebind(c: Context) {
+        if (!hasAccess(c)) return
+        try { NotificationListenerService.requestRebind(ComponentName(c, ThreadsListener::class.java)) } catch (e: Exception) { }
+        // força o sistema a religar o serviço (desliga e liga o componente)
+        try {
+            val pm = c.packageManager; val cn = ComponentName(c, ThreadsListener::class.java)
+            pm.setComponentEnabledSetting(cn, android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED, android.content.pm.PackageManager.DONT_KILL_APP)
+            pm.setComponentEnabledSetting(cn, android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED, android.content.pm.PackageManager.DONT_KILL_APP)
+        } catch (e: Exception) { }
+    }
+
     fun countSilenced(c: Context) {
         val today = android.text.format.DateFormat.format("yyyyMMdd", System.currentTimeMillis()).toString()
         val n = if (p(c).getString("tn_day", "") == today) p(c).getInt("tn_n", 0) + 1 else 1
@@ -99,20 +127,62 @@ object ThreadsNotif {
 }
 
 class ThreadsListener : NotificationListenerService() {
+    override fun onListenerConnected() {
+        Store.prefs(this).edit().putLong("tn_conn", System.currentTimeMillis()).putBoolean("tn_live", true).apply()
+        // limpa as que já estavam na barra quando ligou
+        try { activeNotifications?.filter { it.packageName == ThreadsNotif.THREADS }?.forEach { handle(it) } } catch (e: Exception) { }
+    }
+
+    override fun onListenerDisconnected() {
+        Store.prefs(this).edit().putBoolean("tn_live", false).apply()
+        try { requestRebind(ComponentName(this, ThreadsListener::class.java)) } catch (e: Exception) { }
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        if (sbn.packageName != ThreadsNotif.THREADS || !ThreadsNotif.on(this)) return
-        val n = sbn.notification ?: return
-        if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
+        if (sbn.packageName != ThreadsNotif.THREADS) return
+        handle(sbn)
+    }
+
+    private fun textOf(n: Notification): String {
         val ex = n.extras
-        val text = listOfNotNull(ex.getCharSequence(Notification.EXTRA_TITLE), ex.getCharSequence(Notification.EXTRA_TEXT), ex.getCharSequence(Notification.EXTRA_BIG_TEXT))
-            .joinToString(" ").trim()
+        val parts = ArrayList<CharSequence>()
+        listOf(Notification.EXTRA_TITLE, Notification.EXTRA_TEXT, Notification.EXTRA_BIG_TEXT, Notification.EXTRA_SUB_TEXT, Notification.EXTRA_SUMMARY_TEXT)
+            .forEach { k -> ex.getCharSequence(k)?.let { parts += it } }
+        ex.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)?.let { parts.addAll(it) }
+        n.tickerText?.let { parts += it }
+        return parts.map { it.toString() }.distinct().joinToString(" ").trim()
+    }
+
+    private fun handle(sbn: StatusBarNotification) {
+        if (!ThreadsNotif.on(this)) { ThreadsNotif.log(this, "(filtro desligado)", null, true); return }
+        val n = sbn.notification ?: return
+        val summary = n.flags and Notification.FLAG_GROUP_SUMMARY != 0
+        val text = textOf(n)
+        if (summary) { cleanSummary(sbn); return }
         if (text.isEmpty()) return
         val likes = ThreadsNotif.likes(text)
         val keep = when {
             likes != null -> likes >= ThreadsNotif.min(this)
             else -> ThreadsNotif.mode(this) != "all" // não é curtida: só some no modo "tudo"
         }
+        ThreadsNotif.log(this, text, likes, keep)
         if (likes != null && keep) ThreadsNotif.hit(this, likes, text, n.contentIntent)
-        if (!keep) { try { cancelNotification(sbn.key) } catch (e: Exception) { }; ThreadsNotif.countSilenced(this) }
+        if (!keep) {
+            try { cancelNotification(sbn.key) } catch (e: Exception) { }
+            ThreadsNotif.countSilenced(this)
+            n.group?.let { g -> android.os.Handler(mainLooper).postDelayed({ cleanGroup(g) }, 400) }
+        }
+    }
+
+    /** Se o grupo do Threads ficou só com o resumo ("3 notificações"), apaga o resumo também. */
+    private fun cleanGroup(group: String) {
+        try {
+            val act = activeNotifications?.filter { it.packageName == ThreadsNotif.THREADS && it.notification.group == group } ?: return
+            if (act.all { it.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0 }) act.forEach { cancelNotification(it.key) }
+        } catch (e: Exception) { }
+    }
+    private fun cleanSummary(sbn: StatusBarNotification) {
+        val g = sbn.notification.group ?: return
+        android.os.Handler(mainLooper).postDelayed({ cleanGroup(g) }, 800)
     }
 }
