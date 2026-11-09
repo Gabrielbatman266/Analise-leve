@@ -93,11 +93,20 @@ class RefsTab(private val a: MainActivity) {
         val cp = a.card("Estoque de fotos de referência")
         a.text("Poses, looks, cenários. As fotos ficam guardadas no app, sem metadados. Toque pra marcar; segure pra ver, anotar e gerar o prompt.", 13f, a.MUTED, parent = cp)
         a.button("＋ Adicionar fotos", cp, primary = true) { a.pickImages(REQ_PHOTOS, true) }
-        a.text("📌 Fotos que você salva no Threads (Salvar/baixar mídia) entram aqui sozinhas", 12f, a.MUTED, parent = cp)
+        a.text("📌 Fotos e vídeos que você salva no Threads (Salvar/baixar mídia) entram aqui sozinhos e o original sai da galeria", 12f, a.MUTED, parent = cp)
+        val tvTh = a.text("", 12f, a.OK, parent = cp)
+        fun thT() { tvTh.text = ThreadsRefs.status(a); tvTh.setTextColor(if (ThreadsRefs.status(a).startsWith("⚠")) a.ACCENT else a.OK) }
         a.chips(cp, listOf("Ligado", "Desligado"), { if (ThreadsRefs.on(a)) "Ligado" else "Desligado" }) { o ->
             ThreadsRefs.setOn(a, o == "Ligado")
-            if (o == "Ligado" && !FolderScan.hasPerm(a)) { a.requestPermissions(FolderScan.perms, 42); a.toast("Permita o acesso às fotos pra eu ver o que o Threads salva") }
+            if (o == "Ligado" && !FolderScan.hasPerm(a)) { a.requestPermissions(FolderScan.perms, 42); a.toast("Escolha \"Permitir tudo\" pra eu ver o que o Threads salva") }
+            thT()
         }
+        a.chips(cp, listOf("🗑 Apagar o original", "Manter na galeria"), { if (ThreadsRefs.deleteOn(a)) "🗑 Apagar o original" else "Manter na galeria" }) { ThreadsRefs.setDeleteOn(a, it.startsWith("🗑")); thT() }
+        val rth = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }; cp.addView(rth, a.lpMatch())
+        if (!FolderScan.hasPerm(a)) a.button("Permitir tudo", rth, weight = true) { a.requestPermissions(FolderScan.perms, 42) }
+        if (android.os.Build.VERSION.SDK_INT >= 31) a.button("Apagar sem perguntar", rth, weight = true) { ThreadsRefs.openManageMedia(a); a.toast("Ligue \"Gerenciar mídia\" pro Post Leve") }
+        a.button("↻ Buscar agora", rth, weight = true) { Thread { val n = ThreadsRefs.scan(a); ThreadsRefs.deleteNow(a); a.runOnUiThread { a.toast(if (n > 0) "$n nova(s) nas Referências" else "Nada novo do Threads"); thT(); renderPhotos() } }.start() }
+        thT()
         tvSel = a.text("", 13f, a.OK, parent = cp)
         val sr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
         cp.addView(sr, a.lpMatch())

@@ -64,6 +64,7 @@ object Setup {
         l += Item("Leve Teclado ativo", ime.startsWith("com.leve.teclado"), if (has(c, "com.leve.teclado")) "instalado, mas não é o teclado em uso" else "não instalado (copiar textos do Threads, 💬 respostas)", if (has(c, "com.leve.teclado")) "Trocar teclado" else null, important = false)
         l += Item("Threads instalado", has(c, ThreadsNotif.THREADS), "postar as fotos", null)
         l += Item("Instagram instalado", has(c, ThreadsNotif.INSTA), "postar os vídeos", null, important = false)
+        if (ThreadsRefs.on(c) && ThreadsRefs.deleteOn(c) && Build.VERSION.SDK_INT >= 31) l += Item("Apagar sem perguntar", ThreadsRefs.canManage(c), "tirar da galeria o que veio do Threads sem confirmar toda vez", "Liberar", important = false)
         l += Item("Backup recente", System.currentTimeMillis() - Backup.last(c) < 8 * 86400_000L, "proteger o que o app aprendeu", "Fazer agora", important = false)
         return l
     }
@@ -76,6 +77,7 @@ object Setup {
             "Leitor de tela" -> Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
             "Bateria sem restrição" -> Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + c.packageName))
             "Leve Teclado ativo" -> Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)
+            "Apagar sem perguntar" -> Intent(Settings.ACTION_REQUEST_MANAGE_MEDIA, Uri.parse("package:" + c.packageName))
             else -> return false
         }
         return try { c.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true } catch (e: Exception) {
@@ -141,6 +143,7 @@ object SelfTest {
             appendLine("API Threads: " + ThreadsApi.summary(c).replace("\n", " | "))
             appendLine("Coleta: " + Macro.lastRun(c) + " · posts com números: ${ThreadsApi.posts(c).size} (de fora do app: ${ThreadsApi.posts(c).count { it.optBoolean("orphan") }}) · Reels com números: ${ThreadsApi.posts(c).count { it.optString("kind") == "video" }}")
             try { Growth.report(c).let { r -> appendLine("Crescimento: " + r.lines.joinToString(" | ")); if (r.recs.isNotEmpty()) appendLine("Falta: " + r.recs.joinToString(" | ")) } } catch (e: Exception) { }
+            try { appendLine("Threads → Refs: " + ThreadsRefs.diag(c)) } catch (e: Exception) { }
             Store.prefs(c).getString("tela_dump", null)?.let { appendLine("Tela onde não achou números: " + it.take(1500)) }
             val lk = Likes.all(c)
             appendLine("Curtidas guardadas: ${lk.size} (notif ${lk.count { it.optString("src") == "notif" }}, tela ${lk.count { it.optString("src") == "tela" }}) · mediana fotos ${Likes.median(c, "fila") ?: "-"} · vídeos ${Likes.median(c, "video") ?: "-"} · modelo treinado em ${Predictor.trainedOn()}")
