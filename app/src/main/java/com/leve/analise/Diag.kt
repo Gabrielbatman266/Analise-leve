@@ -139,7 +139,7 @@ object SelfTest {
             appendLine("IA: ${Ai.provider(c)} (chave ${if (Ai.key(c).isNotEmpty()) "ok" else "FALTA"}) · usados hoje ${Auto.aiUsedToday(c)}/${Auto.aiMax(c)} · automático ${if (Auto.on(c)) "on" else "off"}")
             appendLine("Notas: notif ${ThreadsNotif.hasAccess(c)}/${ThreadsNotif.live(c)} · tela ${RateWatch.readerOn(c)} · limite ${ThreadsNotif.min(c)}/${ThreadsNotif.igMin(c)}")
             appendLine("API Threads: " + ThreadsApi.summary(c).replace("\n", " | "))
-            appendLine("Coleta: " + Macro.lastRun(c) + " · posts com números: ${ThreadsApi.posts(c).size} (de fora do app: ${ThreadsApi.posts(c).count { it.optBoolean("orphan") }})")
+            appendLine("Coleta: " + Macro.lastRun(c) + " · posts com números: ${ThreadsApi.posts(c).size} (de fora do app: ${ThreadsApi.posts(c).count { it.optBoolean("orphan") }}) · Reels com números: ${ThreadsApi.posts(c).count { it.optString("kind") == "video" }}")
             Store.prefs(c).getString("tela_dump", null)?.let { appendLine("Tela onde não achou números: " + it.take(1500)) }
             val lk = Likes.all(c)
             appendLine("Curtidas guardadas: ${lk.size} (notif ${lk.count { it.optString("src") == "notif" }}, tela ${lk.count { it.optString("src") == "tela" }}) · mediana fotos ${Likes.median(c, "fila") ?: "-"} · vídeos ${Likes.median(c, "video") ?: "-"} · modelo treinado em ${Predictor.trainedOn()}")

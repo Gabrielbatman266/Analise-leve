@@ -216,7 +216,7 @@ object Macro {
         val nm = c.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("macro", "Coleta automática", NotificationManager.IMPORTANCE_LOW))
         val stop = PendingIntent.getBroadcast(c, 99, Intent(c, AdminReceiver::class.java).setAction("macro_stop"), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val n = Notification.Builder(c, "macro").setSmallIcon(android.R.drawable.ic_menu_search).setContentTitle("🤖 Coletando números do Threads…")
+        val n = Notification.Builder(c, "macro").setSmallIcon(android.R.drawable.ic_menu_search).setContentTitle(if (app(c) == ThreadsNotif.INSTA) "🤖 Coletando números dos seus Reels…" else "🤖 Coletando números do Threads…")
             .setContentText("Rolando devagar e abrindo só os seus posts. Toque em Parar quando quiser.").setOngoing(true)
             .addAction(Notification.Action.Builder(null, "⏹ Parar", stop).build()).build()
         try { nm.notify(95, n) } catch (e: Exception) { }
@@ -321,6 +321,7 @@ class ScreenReader : AccessibilityService() {
     private fun startMacro() {
         if (running) return
         running = true; state = "PROFILE"; done.clear(); opened = 0; noNew = 0; offApp = 0
+        igPrevKey = ""; igSame = 0; igPtr = 0; igNotMine = 0; gridViews = emptyList(); igIndex = -1; igSends = null
         show("🤖 Coleta começando… não toque na tela")
         next(3500)
     }
@@ -348,16 +349,16 @@ class ScreenReader : AccessibilityService() {
         if (opened >= Macro.maxPosts(this)) { finish("✓ $opened post(s) lidos"); return }
         val root = rootInActiveWindow
         if (root == null || root.packageName?.toString() != appPkg) {
-            if (++offApp >= 4) { finish("saiu do Threads: $opened post(s) lidos"); return }
+            if (++offApp >= 4) { finish("saiu do " + (if (appPkg == ThreadsNotif.INSTA) "Instagram" else "Threads") + ": $opened post(s) lidos"); return }
             next(2500); return
         }
         offApp = 0
-        val all = nodes(root)
+        val all = nodes(root).let { if (appPkg == ThreadsNotif.INSTA) vis(it) else it }
         // lê o que está na tela agora (números, seguidores)
         val texts = all.mapNotNull { (it.text ?: it.contentDescription)?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() } }
+        if (appPkg == ThreadsNotif.INSTA) { try { igStep(all, texts) } catch (x: Exception) { ErrLog.log(this, "coleta instagram", x); next(3000) }; return }
         val got = try { scan(appPkg, texts) } catch (x: Exception) { emptyList() }
         if (state != "PROFILE" && !capturedNow) got.maxByOrNull { it.size }?.let { captured(it) }
-        if (appPkg == ThreadsNotif.INSTA && state == "PROFILE") { igProfile(all); return }
         val caps = SendLog.all(this).filter { it.optString("kind") == "fila" && System.currentTimeMillis() - it.optLong("at") < 30 * 86400_000L }
             .map { it.optString("cap") }.filter { core(it).length >= 8 }.distinctBy { core(it).take(24) }
         when (state) {
@@ -410,29 +411,168 @@ class ScreenReader : AccessibilityService() {
     }
 
     private val doneCells = HashSet<String>()
-    /** Instagram: na grade dos Reels não aparece a legenda; abre cada Reel em ordem e o leitor confere se é seu pela legenda. */
-    private fun igProfile(all: List<AccessibilityNodeInfo>) {
+
+    // ================= 📸 Instagram: abre o 1º Reel da grade e vai deslizando pros próximos =================
+    private var igPrevKey = ""; private var igSame = 0; private var igPtr = 0; private var igNotMine = 0; private var igIndex = -1
+    private var gridViews: List<Int?> = emptyList()
+    private var igSends: List<org.json.JSONObject>? = null
+    private var igGridTries = 0
+    private var igCurJ = -2
+
+    private fun rect(n: AccessibilityNodeInfo) = android.graphics.Rect().also { n.getBoundsInScreen(it) }
+
+    /** Só o que está de fato na tela (o Instagram deixa o Reel anterior e o próximo carregados por trás). */
+    private fun vis(all: List<AccessibilityNodeInfo>): List<AccessibilityNodeInfo> {
         val dm = resources.displayMetrics
-        val cells = all.filter { n ->
-            val d = (n.contentDescription ?: "").toString().lowercase()
-            val r = android.graphics.Rect(); n.getBoundsInScreen(r)
-            n.isClickable && r.top > dm.heightPixels * 0.2 && r.bottom < dm.heightPixels * 0.9 && r.width() in dpx(60)..(dm.widthPixels / 2) &&
-                Regex("reel|v[ií]deo|video|linha|row|coluna|column").containsMatchIn(d)
-        }.sortedWith(compareBy({ val r = android.graphics.Rect(); it.getBoundsInScreen(r); r.top / dpx(40) }, { val r = android.graphics.Rect(); it.getBoundsInScreen(r); r.left }))
-        val cell = cells.firstOrNull { (it.contentDescription ?: "").toString() !in doneCells }
+        return all.filter { n -> n.isVisibleToUser && rect(n).let { r -> r.height() > 0 && r.bottom > 0 && r.top < dm.heightPixels && r.right > 0 && r.left < dm.widthPixels } }
+    }
+
+    /** Envios de vídeo (mais novo primeiro) pra casar com os Reels. */
+    private fun videoSends() = igSends ?: SendLog.all(this).filter { it.optString("kind") == "video" && System.currentTimeMillis() - it.optLong("at") < 45 * 86400_000L &&
+        (it.optBoolean("ok") || it.optString("nota").isNotEmpty()) }.sortedByDescending { it.optLong("at") }.distinctBy { it.optString("id") + "|" + it.optLong("at") / 3_600_000L }.also { igSends = it }
+
+    /** Células da grade de Reels: pela forma (3 colunas, mais altas que largas) ou pela descrição. */
+    private fun gridCells(all: List<AccessibilityNodeInfo>): List<AccessibilityNodeInfo> {
+        val dm = resources.displayMetrics; val w = dm.widthPixels
+        val tabs = all.filter { Regex("^(reels|publica[cç][oõ]es|posts|marca[cç][oõ]es|tagged|reels tab)$").matches(txt(it)) }.map { rect(it).bottom }.maxOrNull() ?: (dm.heightPixels * 0.15).toInt()
+        val c = all.filter { n ->
+            val r = rect(n); val d = (n.contentDescription ?: "").toString().lowercase()
+            n.isClickable && r.top >= tabs - dpx(4) && r.bottom <= dm.heightPixels * 0.97 && r.height() > dpx(40) &&
+                ((r.width() in (w * 0.24).toInt()..(w * 0.36).toInt() && r.height() >= r.width() * 0.9) || Regex("reel|v[ií]deo|video|linha|row|coluna|column").containsMatchIn(d) && r.width() < w / 2)
+        }.distinctBy { val r = rect(it); "${r.left / dpx(20)}:${r.top / dpx(20)}" }
+        return c.sortedWith(compareBy({ rect(it).top / dpx(40) }, { rect(it).left }))
+    }
+
+    /** Visualizações que aparecem em cima de cada célula da grade (▶ 12,3 mil). */
+    private fun cellViews(cell: AccessibilityNodeInfo, all: List<AccessibilityNodeInfo>): Int? {
+        val cr = rect(cell)
+        Regex("(\\d[\\d.,]*\\s*(?:mil|k|mi|m)?)\\s*(visualiza|views|reprodu|plays)", RegexOption.IGNORE_CASE).find(norm((cell.contentDescription ?: "").toString()))?.let { return numOf(it.groupValues[1]) }
+        return all.filter { n -> val r = rect(n); cr.contains(r) && n !== cell }.firstNotNullOfOrNull { numOf(txt(it)) }
+    }
+
+    private fun looksLikeReel(all: List<AccessibilityNodeInfo>) = all.any { Regex("^(curtir|like|comentar|comment|ver insights|view insights|enviar|share|compartilhar)$").matches(txt(it)) }
+
+    /** Legenda do Reel aberto: o maior texto da metade de baixo que não é botão, número, áudio ou o @. */
+    private fun igCaption(all: List<AccessibilityNodeInfo>): String {
+        val dm = resources.displayMetrics; val hdl = Macro.igHandle(this).lowercase()
+        val bad = Regex("[aá]udio original|original audio|seguir|follow|ver insights|view insights|turbinar|boost|adicione um coment|add a comment|ver tradu|see translation|patrocinado|sponsored|•")
+        val c = all.mapNotNull { n ->
+            val t = (n.text ?: return@mapNotNull null).toString().trim(); val r = rect(n); val l = norm(t)
+            if (r.top < dm.heightPixels * 0.5 || r.left > dm.widthPixels * 0.7 || t.length < 8 || numOf(l) != null || TIME.matches(l) || bad.containsMatchIn(l) || l == hdl) null
+            else (if (hdl.isNotEmpty() && l.startsWith("$hdl ")) t.substring(hdl.length).trim() else t)
+        }
+        return c.maxByOrNull { it.length } ?: ""
+    }
+
+    /** Números da tela do Reel: rótulo perto do número, botões da coluna direita na ordem, e "curtido por X e outras N pessoas". */
+    private fun reelNums(all: List<AccessibilityNodeInfo>, texts: List<String>): MutableMap<String, Int> {
+        val nt = texts.map { norm(it) }
+        val m = pairs(nt, 0, nt.size).toMutableMap()
+        nt.forEach { t ->
+            Regex("(?:outras|and)\\s+(\\d[\\d.,]*\\s*(?:mil|k|mi)?)\\s+(?:pessoas|others)").find(t)?.let { mm -> numOf(mm.groupValues[1])?.let { m.putIfAbsent("likes", it + 1) } }
+            Regex("^(curtir|like|curtidas?|likes?|comentar|comment|coment[aá]rios?|comments?|enviar|share|compartilhar|repostar|repost|salvar|save)[,:]?\\s+(\\d[\\d.,]*\\s*(?:mil|k|mi)?)$").find(t)?.let { mm ->
+                val k = when { mm.groupValues[1].startsWith("cur") || mm.groupValues[1].startsWith("lik") -> "likes"; mm.groupValues[1].startsWith("com") -> "replies"
+                    mm.groupValues[1].startsWith("rep") -> "reposts"; mm.groupValues[1].startsWith("sa") -> "saves"; else -> "shares" }
+                numOf(mm.groupValues[2])?.let { m.putIfAbsent(k, it) } }
+        }
+        if (m["likes"] == null) { // sem rótulo: números da coluna da direita, de cima pra baixo = curtidas, comentários, compartilhamentos
+            val dm = resources.displayMetrics
+            val col = all.filter { rect(it).left > dm.widthPixels * 0.75 && rect(it).top > dm.heightPixels * 0.3 }.mapNotNull { n -> numOf(txt(n))?.let { rect(n).top to it } }.sortedBy { it.first }.map { it.second }
+            listOf("likes", "replies", "shares").forEachIndexed { i, k -> col.getOrNull(i)?.let { m.putIfAbsent(k, it) } }
+        }
+        return m
+    }
+
+    private fun igStep(all: List<AccessibilityNodeInfo>, texts: List<String>) {
+        when (state) {
+            "PROFILE" -> igProfile(all)
+            "IGREEL" -> {
+                if (!waited) { waited = true; next(1400); return } // deixa o Reel carregar
+                if (sig(all) == sigBefore) {
+                    if (!retried) { retried = true; show("↻ Não abriu, tentando de novo…", 0xEEB45309.toInt()); clickable(lastTarget)?.performAction(AccessibilityNodeInfo.ACTION_CLICK); next(rnd(2500, 3500)); return }
+                    if (igIndex < 0) { show("⚠ Não consegui abrir o Reel", 0xEEB45309.toInt()); state = "PROFILE"; next(rnd(2000, 3000)); return }
+                    if (++igSame >= 2) { finish("✓ fim dos seus Reels: $opened lido(s)"); return }
+                    igSwipe(); return
+                }
+                val cap = igCaption(all)
+                val hdl = Macro.igHandle(this).lowercase()
+                if (hdl.isNotEmpty() && all.none { val t = txt(it); t == hdl || t.startsWith("$hdl ") || t == "@$hdl" }) {
+                    if (++igNotMine >= 2) { finish("✓ acabaram os seus Reels: $opened lido(s)"); return }
+                } else igNotMine = 0
+                val nums = reelNums(all, texts)
+                val key = core(cap).take(24).ifEmpty { "n:" + nums.entries.sortedBy { it.key }.joinToString() }
+                if (key == igPrevKey) { if (++igSame >= 2) { finish("✓ fim dos seus Reels: $opened lido(s)"); return }; igSwipe(); return }
+                igSame = 0; igPrevKey = key; igIndex++; opened++; capturedNow = false; currentCap = cap; igCurJ = -2
+                gridViews.getOrNull(igIndex)?.let { nums.putIfAbsent("views", it) }
+                igSave(nums, "tela")
+                // abre "Ver insights" (reproduções, salvos, compartilhamentos, seguidores)
+                val ins = all.firstOrNull { Regex("^(ver insights|view insights|insights|ver estat[ií]sticas)$").matches(txt(it)) }
+                if (ins != null && (tapNode(ins) || clickable(ins)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true)) {
+                    mark(ins); show("📊 Abrindo insights do Reel $opened…"); state = "IGINS"; waited = false; next(rnd(2800, 3800)); return
+                }
+                if (!capturedNow) { dump(texts); show("⚠ Reel $opened: não achei números", 0xEEB45309.toInt()) }
+                h.postDelayed({ igSwipe() }, 1200)
+            }
+            "IGINS" -> {
+                if (!waited) { waited = true; next(1200); return }
+                val nt = texts.map { norm(it) }
+                val m = pairs(nt, 0, nt.size).toMutableMap()
+                if (m.isNotEmpty()) igSave(m, "insights") else if (!capturedNow) dump(texts)
+                performGlobalAction(GLOBAL_ACTION_BACK); state = "IGNEXT"; next(rnd(1800, 2600))
+            }
+            "IGNEXT" -> igSwipe()
+        }
+    }
+
+    /** Guarda os números do Reel: pela legenda; sem legenda, pela ordem dos seus envios; senão, como Reel de fora do app. */
+    private fun igSave(m0: Map<String, Int>, src: String) {
+        val m = m0.toMutableMap(); m["follows"]?.let { m["fol"] = it; m.remove("follows") }
+        if (m.isEmpty()) return
+        val sends = videoSends()
+        if (igCurJ == -2) { // casa este Reel uma vez só (a tela e os insights usam o mesmo)
+            igCurJ = if (core(currentCap).length >= 8) sends.indexOfFirst { sameCap(currentCap, it.optString("cap")) }
+                     else igPtr.takeIf { it < sends.size && core(sends[it].optString("cap")).length < 8 } ?: -1
+            if (igCurJ >= 0) igPtr = igCurJ + 1
+        }
+        val j = igCurJ
+        if (j >= 0) {
+            val s = sends[j]
+            m["likes"]?.let { Likes.record(this, "video", s.optString("id"), it, src) }
+            ThreadsApi.upsertLocal(this, s.optLong("at"), s.optString("id"), s.optString("cap"), m, src, "video")
+        } else if (Macro.readAll(this) && core(currentCap).length >= 8) {
+            ThreadsApi.upsertOrphan(this, currentCap, m, src, "video")
+        } else { show("✓ Reel $opened lido, mas não sei qual é (sem legenda)", 0xEEB45309.toInt()); capturedNow = true; return }
+        captured(m)
+    }
+
+    /** Desliza pro próximo Reel (lado esquerdo do vídeo, longe dos botões). */
+    private fun igSwipe() {
+        if (!running) return
+        if (opened >= Macro.maxPosts(this)) { finish("✓ $opened Reel(s) lidos"); return }
+        val dm = resources.displayMetrics
+        val path = android.graphics.Path().apply { moveTo(dm.widthPixels * 0.35f, dm.heightPixels * 0.72f); lineTo(dm.widthPixels * 0.35f, dm.heightPixels * 0.22f) }
+        rootInActiveWindow?.let { sigBefore = sig(vis(nodes(it))) }
+        try { dispatchGesture(android.accessibilityservice.GestureDescription.Builder().addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 260)).build(), null, null) } catch (e: Exception) { }
+        state = "IGREEL"; waited = false; retried = true
+        show("⏭ Próximo Reel… ($opened/${Macro.maxPosts(this)})"); next(rnd(2600, 3600))
+    }
+
+    /** Grade de Reels do perfil: anota as visualizações de cada célula e abre a 1ª. */
+    private fun igProfile(all: List<AccessibilityNodeInfo>) {
+        val cells = gridCells(all)
+        if (cells.isEmpty() && looksLikeReel(all)) { // o Instagram já abriu direto num Reel
+            state = "IGREEL"; waited = true; sigBefore = ""; retried = true; igStep(all, all.mapNotNull { (it.text ?: it.contentDescription)?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() } }); return
+        }
+        val cell = cells.firstOrNull()
         if (cell != null) {
-            doneCells += (cell.contentDescription ?: "").toString()
-            mark(cell); sigBefore = sig(all); retried = false
+            gridViews = cells.map { cellViews(it, all) }
+            mark(cell); sigBefore = sig(all); retried = false; lastTarget = cell; waited = false; igIndex = -1
             if (tapNode(cell) || cell.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                opened++; noNew = 0; state = "POST"; triedInsights = false; capturedNow = false; lastTarget = cell
-                show("🎯 Abrindo Reel $opened/${Macro.maxPosts(this)}…"); next(rnd(3200, 4600)); return
+                state = "IGREEL"; show("🎯 Abrindo seu Reel mais recente…"); next(rnd(3000, 4200)); return
             }
         }
-        val sc = all.firstOrNull { it.isScrollable && it.actionList.any { a -> a.id == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD } }
-        if (sc?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) != true) swipeUp()
-        show("🔽 Descendo… ($opened/${Macro.maxPosts(this)} lidos)")
-        if (++noNew >= 5) { finish("✓ fim dos Reels: $opened lidos"); return }
-        next(rnd(2500, 4000))
+        if (++igGridTries >= 4) { igGridTries = 0; dump(all.mapNotNull { (it.text ?: it.contentDescription)?.toString() }); finish("não achei a grade de Reels: abra a aba Reels do SEU perfil e tente de novo"); return }
+        show("🔎 Procurando seus Reels…"); next(rnd(2000, 3000))
     }
 
     /** Post que não veio do app: guarda os números pela legenda (vale pro ranking e pra IA saber que legenda rende). */
@@ -473,6 +613,7 @@ class ScreenReader : AccessibilityService() {
         val texts = ArrayList<String>()
         fun walk(n: AccessibilityNodeInfo?, depth: Int) {
             if (n == null || depth > 40 || texts.size > 600) return
+            if (pkg == ThreadsNotif.INSTA && !n.isVisibleToUser) { for (k in 0 until n.childCount) walk(n.getChild(k), depth + 1); return }
             n.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { texts += it }
             n.contentDescription?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { texts += it }
             for (k in 0 until n.childCount) walk(n.getChild(k), depth + 1)
@@ -515,12 +656,12 @@ class ScreenReader : AccessibilityService() {
     private val LABELS = mapOf(
         "views" to Regex("^(visualiza[cç][oõ]es|views|visualizações|reprodu[cç][oõ]es|plays|contas alcan[cç]adas|accounts reached)$", RegexOption.IGNORE_CASE),
         "likes" to Regex("^(curtidas?|likes?|curtir|like)$", RegexOption.IGNORE_CASE),
-        "replies" to Regex("^(respostas?|replies|reply|responder|coment[aá]rios?|comments?)$", RegexOption.IGNORE_CASE),
+        "replies" to Regex("^(respostas?|replies|reply|responder|coment[aá]rios?|comments?|comentar|comment)$", RegexOption.IGNORE_CASE),
         "saves" to Regex("^(salvamentos|salvos|saves?|salvar)$", RegexOption.IGNORE_CASE),
         "reposts" to Regex("^(reposts?|repostar|republica[cç][oõ]es)$", RegexOption.IGNORE_CASE),
         "quotes" to Regex("^(cita[cç][oõ]es|quotes?|citar)$", RegexOption.IGNORE_CASE),
-        "shares" to Regex("^(compartilhamentos|shares?|compartilhar|enviar)$", RegexOption.IGNORE_CASE),
-        "follows" to Regex("^(seguidores|follows|novos seguidores|seguiram)$", RegexOption.IGNORE_CASE))
+        "shares" to Regex("^(compartilhamentos|shares?|compartilhar|enviar|envios|sends?)$", RegexOption.IGNORE_CASE),
+        "follows" to Regex("^(seguidores|follows|novos seguidores|seguiram|seguimentos|follows gained)$", RegexOption.IGNORE_CASE))
 
     private fun numOf(t: String): Int? {
         val m = Regex("^(\\d[\\d.,]*)\\s*(mil|k|mi|m)?$", RegexOption.IGNORE_CASE).find(t.trim()) ?: return null

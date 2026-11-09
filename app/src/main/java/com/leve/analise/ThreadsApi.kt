@@ -128,11 +128,11 @@ object ThreadsApi {
     }
 
     /** Post feito fora do app: guarda números pela legenda (sem foto ligada). */
-    fun upsertOrphan(c: Context, text: String, m: Map<String, Int>, src: String) {
+    fun upsertOrphan(c: Context, text: String, m: Map<String, Int>, src: String, kind: String = "fila") {
         if (m.isEmpty() || text.length < 8) return
-        val key = "orf:" + norm(text).take(60).hashCode()
+        val key = (if (kind == "video") "orfv:" else "orf:") + norm(text).take(60).hashCode()
         JsonFile.edit(file(c)) { l ->
-            val o = l.firstOrNull { it.optString("id") == key } ?: JSONObject().put("id", key).put("kind", "fila").put("text", text).put("at", System.currentTimeMillis()).put("orphan", true).also { l.add(0, it) }
+            val o = l.firstOrNull { it.optString("id") == key } ?: JSONObject().put("id", key).put("kind", kind).put("text", text).put("at", System.currentTimeMillis()).put("orphan", true).also { l.add(0, it) }
             m.forEach { (k, v) -> if (v > o.optInt(k, -1)) o.put(k, v) }
             o.put("upd", System.currentTimeMillis()).put("src", src)
             while (l.size > 400) l.removeAt(l.size - 1)
@@ -263,7 +263,7 @@ object ThreadsApi {
     fun withNumbers(c: Context): Int { maps(c); return photoMap.size + videoMap.size }
     /** Pontuação real do vídeo (Instagram). */
     fun videoScore(c: Context, id: String): Double? { maps(c); return videoMap[id] }
-    fun topVideos(c: Context, n: Int = 5) = posts(c).filter { it.optString("kind") == "video" }.map { it to composite(c, it) }.sortedByDescending { it.second }.take(n)
+    fun topVideos(c: Context, n: Int = 5) = posts(c).filter { it.optString("kind") == "video" && it.optString("video").isNotEmpty() }.map { it to composite(c, it) }.sortedByDescending { it.second }.take(n)
     fun videoAiText(c: Context): String {
         val t = topVideos(c, 5); if (t.isEmpty()) return ""
         val lib = VideoExport.library(c).associateBy { it.optString("id") }
