@@ -73,7 +73,7 @@ object MetaClean {
         try {
             val e = android.media.ExifInterface(b.inputStream())
             fun any(vararg t: String) = t.any { !e.getAttribute(it).isNullOrBlank() }
-            if (e.latLong != null || any(android.media.ExifInterface.TAG_GPS_LATITUDE)) out += "📍 localização"
+            if (any(android.media.ExifInterface.TAG_GPS_LATITUDE, android.media.ExifInterface.TAG_GPS_LONGITUDE)) out += "📍 localização"
             if (any(android.media.ExifInterface.TAG_MAKE, android.media.ExifInterface.TAG_MODEL)) out += "📱 aparelho"
             if (any(android.media.ExifInterface.TAG_DATETIME_ORIGINAL, android.media.ExifInterface.TAG_DATETIME)) out += "🕒 data e hora"
             if (any(android.media.ExifInterface.TAG_SOFTWARE)) out += "🛠 programa"
