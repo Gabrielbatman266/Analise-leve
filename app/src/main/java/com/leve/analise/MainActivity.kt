@@ -118,6 +118,7 @@ class MainActivity : Activity() {
     private fun fixSetup(name: String) {
         when (name) {
             "Chave da IA" -> { showTab("Ajustes"); toast("Cole a chave no cartão da IA, em Ajustes") }
+            "API do Threads" -> { showTab("Ajustes"); toast("Abra o cartão 🔗 API do Threads, em Ajustes") }
             "Notificações do app" -> if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 41)
             "Acesso às fotos e vídeos" -> requestPermissions(FolderScan.perms, 42)
             "Pasta do Flow" -> askFolder()
@@ -375,6 +376,42 @@ class MainActivity : Activity() {
         text("🧪 Teste A/B: 1 em cada 4 posts repete uma foto avaliada com legenda nova, pra descobrir se é a foto ou a legenda que bomba:", 12f, MUTED, parent = cau)
         chips(cau, listOf("Ligado", "Desligado"), { if (AB.on(this)) "Ligado" else "Desligado" }) { AB.setOn(this, it == "Ligado") }
 
+        val cap = card("🔗 API do Threads (números exatos)")
+        val tvApi = text(ThreadsApi.summary(this), 13f, FG, parent = cap)
+        text("Com a API, o app lê de hora em hora as visualizações, curtidas, respostas, reposts e os SEGUIDORES de cada post, dá a nota sozinho e o modelo aprende com números de verdade. Só leitura: não posta nada. O token fica só no seu celular.", 12f, MUTED, parent = cap)
+        val etTok = EditText(this).apply { hint = "Token de acesso do Threads"; setSingleLine(true); setTextColor(FG); setHintTextColor(MUTED); textSize = 13f }
+        val etSec = EditText(this).apply { hint = "Segredo do app (opcional: deixa o token valer 60 dias)"; setSingleLine(true); setTextColor(FG); setHintTextColor(MUTED); textSize = 13f
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD }
+        if (!ThreadsApi.on(this)) { cap.addView(etTok, lpMatch()); cap.addView(etSec, lpMatch()) }
+        val rap = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; cap.addView(rap, lpMatch())
+        button(if (ThreadsApi.on(this)) "🔄 Sincronizar agora" else "🔗 Conectar", rap, primary = true, weight = true) {
+            tvApi.text = "Conectando…"
+            Thread {
+                val m = try {
+                    if (!ThreadsApi.on(this)) ThreadsApi.connect(this, etTok.text.toString(), etSec.text.toString()) + "\n" + ThreadsApi.sync(this, true)
+                    else ThreadsApi.sync(this, true)
+                } catch (e: Exception) { "⚠ " + (e.message ?: "erro") }
+                ui.post { toast(m.lines().first()); tvApi.text = m + "\n\n" + ThreadsApi.summary(this); if (ThreadsApi.on(this)) { cap.removeView(etTok); cap.removeView(etSec) } }
+            }.start()
+        }
+        if (ThreadsApi.on(this)) button("Desconectar", rap, weight = true) { ThreadsApi.disconnect(this); tvApi.text = "Desconectado. Reabra o app pra colar outro token." }
+        button("📖 Como pegar o token (passo a passo)", cap) {
+            AlertDialog.Builder(this).setTitle("Token da API do Threads").setMessage(
+                "1. Abra developers.facebook.com e entre com o Facebook ligado ao Instagram/Threads.\n" +
+                "2. Meus apps › Criar app › caso de uso \"Acessar a API do Threads\".\n" +
+                "3. No caso de uso, em Permissões, adicione threads_basic e threads_manage_insights.\n" +
+                "4. Em Funções do app › Funções, adicione a sua conta do Threads como Testador do Threads.\n" +
+                "5. No app do Threads: Configurações › Conta › Permissões do site › Convites → aceite.\n" +
+                "6. Volte ao painel: no caso de uso do Threads, use o Gerador de token de usuário e gere o token da sua conta.\n" +
+                "7. Copie o token e cole aqui. (Opcional: em Configurações do app › Básico copie o \"Segredo do app do Threads\" e cole no segundo campo, pra o token valer 60 dias e renovar sozinho.)\n\n" +
+                "Os nomes dos menus podem mudar um pouco; se travar em algum passo, me manda print.")
+                .setPositiveButton("Abrir o site") { _, _ -> try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://developers.facebook.com/apps/"))) } catch (e: Exception) { } }
+                .setNegativeButton("Fechar", null).show()
+        }
+        ThreadsApi.topFollowers(this, 3).takeIf { it.isNotEmpty() }?.let { tf ->
+            text("👥 Posts que mais trouxeram seguidores:\n" + tf.joinToString("\n") { "+${"%.1f".format(it.optDouble("fol"))} · ${it.optInt("views")} vis. · " + it.optString("text").replace('\n', ' ').take(50) }, 12f, OK, parent = cap)
+        }
+
         val cdg = card("🧪 Autoteste e diagnóstico")
         text("Testa as peças principais (filas, dados, legenda, cenas, produção de um vídeo de 2 s, permissões) e guarda os erros que acontecem. \"Copiar diagnóstico\" copia tudo (sem a sua chave) pra você colar no chat.", 12f, MUTED, parent = cdg)
         val tvDg = text("", 12f, FG, parent = cdg)
@@ -475,7 +512,7 @@ class MainActivity : Activity() {
                 val rr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
                 side.addView(rr, lpMatch())
                 listOf("top" to "💎", "good" to "🔥", "meh" to "😐", "bad" to "👎").forEach { (k, em) ->
-                    button(em, rr, primary = nota == k, weight = true) { SendLog.rate(this, e, k); toast("${Learn.emoji(k)} anotado"); histUi(); refresh() }
+                    button(em, rr, primary = nota == k, weight = true) { SendLog.rate(this, e, k, manual = true); toast("${Learn.emoji(k)} anotado"); histUi(); refresh() }
                 }
                 if (!e.optBoolean("ok") && nota.isEmpty()) button("✕", rr, weight = true) { PostConfirm.answer(this, if (kind == "video") "video" else kind, id, false)
                     JsonFile.edit(java.io.File(filesDir, "envios.json")) { l2 -> l2.removeAll { it.optLong("at") == e.optLong("at") } }; histUi() }

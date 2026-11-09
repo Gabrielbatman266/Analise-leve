@@ -35,8 +35,10 @@ object SendLog {
         (if (at > 0) l.firstOrNull { it.optLong("at") == at } else latest(l, kind, id))?.apply { put("nota", k); put("ok", true) }
     }
 
+    fun mark(c: Context, at: Long, flag: String) = JsonFile.edit(file(c)) { l -> l.firstOrNull { it.optLong("at") == at }?.put(flag, true) }
+
     /** Vota num envio do histórico: confirma o post e aplica a nota na foto/vídeo e na legenda usada. */
-    fun rate(c: Context, e: JSONObject, k: String) {
+    fun rate(c: Context, e: JSONObject, k: String, manual: Boolean = false) {
         val id = e.optString("id"); val cap = e.optString("cap")
         when (e.optString("kind")) {
             "video" -> {
@@ -49,6 +51,7 @@ object SendLog {
             else -> RateLater.applyPhoto(c, id, k, cap)
         }
         noted(c, e.optString("kind"), id, k, e.optLong("at"))
+        if (manual) mark(c, e.optLong("at"), "mn")
     }
 
     fun thumb(c: Context, kind: String, id: String): Bitmap? = try {

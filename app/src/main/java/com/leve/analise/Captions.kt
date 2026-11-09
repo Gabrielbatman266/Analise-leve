@@ -54,6 +54,7 @@ object Captions {
 Vibe: ${vibe(c)}. Tamanho: ${size(c)}. Contexto: ${ctx(c).ifEmpty { "nenhum" }}.
 ${learnedText(c)}
 ${Predictor.insightsText(c, false)}
+${ThreadsApi.aiText(c)}
 ${if (wins.isNotEmpty()) "🔥 LEGENDAS QUE BOMBARAM NO MEU PERFIL (prioridade máxima): metade das suas legendas deve ser VARIAÇÃO delas — mesmo tema, mesma estrutura e o mesmo tipo de gancho, com outras palavras:\n" + wins.joinToString("\n") { "- ${it.optString("t").replace('\n', ' ')}  (🔥${it.optInt("good")})" } + "\n(as com mais 🔥 viralizaram de verdade: priorize o estilo delas)" else ""}
 ${if (flops.isNotEmpty()) "👎 FLOPARAM (evite esse tom e esse assunto):\n" + flops.joinToString("\n") { "- ${it.replace('\n', ' ')}" } else ""}
 ${if (words.isNotEmpty()) "Palavras que aparecem nas que bombam: " + words.joinToString(", ") else ""}
@@ -180,10 +181,11 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         val pick = (sorted.take(6) + sorted.takeLast(4)).distinct().take(10)
         val list = pick.map { o ->
             val k = Learn.verdict(o).ifEmpty { "meh" }
-            val h = Learn.histText(o)
+            val h = Learn.histText(o) + (ThreadsApi.posts(c).firstOrNull { it.optString("photo") == o.optString("id") }?.let { m ->
+                " · números: ${m.optInt("views")} visualizações, ${m.optInt("likes")} curtidas, ${m.optInt("replies")} respostas, +${"%.1f".format(m.optDouble("fol", 0.0))} seguidores" } ?: "")
             Triple(PostQueue.imageFile(c, o.optString("id")), PostQueue.captionOf(o) + (if (h.isNotEmpty()) "  [$h]" else ""), k)
         }
-        val regras = Ai.learnCombos(c, list, Learn.repostStats(rated) + "\n" + Learn.hourStats(rated) + "\n" + Predictor.insightsText(c, false) + "\n💎 = VIRALIZOU (muito acima do normal): dê peso máximo ao que essas têm em comum.")
+        val regras = Ai.learnCombos(c, list, ThreadsApi.aiText(c) + "\n" + Learn.repostStats(rated) + "\n" + Learn.hourStats(rated) + "\n" + Predictor.insightsText(c, false) + "\n💎 = VIRALIZOU (muito acima do normal): dê peso máximo ao que essas têm em comum.")
         if (regras.isNotEmpty()) p(c).edit().putString("combo_regras", JSONArray(regras).toString()).putLong("combo_at", System.currentTimeMillis()).apply()
         return regras
     }

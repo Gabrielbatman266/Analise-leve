@@ -90,8 +90,8 @@ object Predictor {
         val lib = VideoExport.library(c).associateBy { it.optString("id") }
         val q = PostQueue.load(c).associateBy { it.optString("id") }
         val seen = HashSet<String>()
-        SendLog.all(c).filter { it.optString("nota").isNotEmpty() }.forEach { e ->
-            val y = score(e.optString("nota")); val at = e.optLong("at"); seen += e.optString("id") + "@" + (at / 3600_000L)
+        SendLog.all(c).filter { it.optString("nota").isNotEmpty() || ThreadsApi.targetFor(c, it.optLong("at")) != null }.forEach { e ->
+            val y = ThreadsApi.targetFor(c, e.optLong("at")) ?: score(e.optString("nota")); val at = e.optLong("at"); seen += e.optString("id") + "@" + (at / 3600_000L)
             if (e.optString("kind") == "video") lib[e.optString("id")]?.let { out += videoFeats(c, it, e.optString("cap"), at) to y }
             else q[e.optString("id")]?.let { out += photoFeats(c, it, e.optString("cap"), at) to y }
         }

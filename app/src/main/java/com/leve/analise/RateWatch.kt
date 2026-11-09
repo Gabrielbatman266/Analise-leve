@@ -83,6 +83,7 @@ object RateWatch {
     /** Roda de hora em hora (e ao abrir o app). Devolve quantas notas deu sozinho. */
     fun run(c: Context, notify: Boolean = true): Int {
         val now = System.currentTimeMillis()
+        if (ThreadsApi.on(c)) try { ThreadsApi.sync(c) } catch (x: Exception) { ErrLog.log(c, "API Threads", x) }
         val sends = SendLog.all(c).filter { now - it.optLong("at") < 3 * 86400_000L && it.optString("nota").isEmpty() }
         var auto = 0
         // 1) dá nota com as curtidas que já se sabe
