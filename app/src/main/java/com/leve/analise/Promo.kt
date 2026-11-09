@@ -104,7 +104,7 @@ object Promo {
     }
 
     /** Desenha o selo com o @ (limpo: vidro escuro, cantos redondos, sem logo de marca). */
-    fun render(c: Context, base: Bitmap, style: String, cta: String): Bitmap {
+    fun render(c: Context, base: Bitmap, look: String, cta: String): Bitmap {
         val b = base.copy(Bitmap.Config.ARGB_8888, true)
         val cv = Canvas(b); val w = b.width.toFloat(); val h = b.height.toFloat(); val u = w / 100f
         val at = "@" + handle(c)
@@ -117,7 +117,7 @@ object Promo {
             val ap = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = -1; textSize = r * 1.25f; typeface = Typeface.DEFAULT_BOLD; textAlign = Paint.Align.CENTER }
             cv.drawText("@", cx, cy + r * 0.43f, ap)
         }
-        when (style) {
+        when (look) {
             "faixa" -> {
                 val top = h * 0.70f
                 cv.drawRect(0f, top, w, h, Paint().apply { shader = LinearGradient(0f, top, 0f, h, 0x00000000, 0xD0000000.toInt(), Shader.TileMode.CLAMP) })
