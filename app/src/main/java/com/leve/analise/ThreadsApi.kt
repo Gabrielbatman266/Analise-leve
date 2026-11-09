@@ -114,7 +114,34 @@ object ThreadsApi {
     }
 
     /** Guarda números vindos da TELA ou de um PRINT (sem API). Mantém o maior valor de cada métrica. */
-    fun upsertLocal(c: Context, sendAt: Long, photoId: String, text: String, m: Map<String, Int>, src: String, kind: String = "fila") {
+    /** Nenhum post seu tem milhões: acima disso é leitura errada (ex.: "57m" = 57 minutos). */
+    const val MAXV = 3_000_000
+    /** Bom senso: tira número impossível (curtidas > visualizações, valor gigante) antes de guardar. */
+    fun sane(m0: Map<String, Int>): Map<String, Int> {
+        val m = m0.filterValues { it in 0..MAXV }.toMutableMap()
+        val v = m["views"]
+        if (v != null && v >= 30) listOf("likes", "replies", "reposts", "quotes", "shares", "saves", "fol").forEach { k -> m[k]?.let { if (it > v * 1.2) m.remove(k) } }
+        if (v == null) m["likes"]?.let { lk -> m.filterKeys { it != "likes" }.values.maxOrNull()?.let { other -> if (other > 0 && lk > other * 400) m.remove("likes") } }
+        return m
+    }
+
+    /** Uma vez: limpa números impossíveis que já tinham entrado (a leitura antiga lia "57m" como 57 milhões). */
+    fun repair(c: Context): Int {
+        if (p(c).getBoolean("repair_mi", false)) return 0
+        var n = 0
+        JsonFile.edit(file(c)) { l -> l.forEach { o ->
+            val keys = listOf("views", "likes", "replies", "reposts", "quotes", "shares", "saves", "fol")
+            val before = keys.filter { o.has(it) }.associateWith { o.optInt(it) }
+            val after = sane(before)
+            (before.keys - after.keys).forEach { o.remove(it); n++ }
+        } }
+        JsonFile.edit(File(c.filesDir, "curtidas.json")) { l -> n += l.count { it.optInt("likes") > MAXV }; l.removeAll { it.optInt("likes") > MAXV } }
+        p(c).edit().putBoolean("repair_mi", true).apply(); invalidate()
+        return n
+    }
+
+    fun upsertLocal(c: Context, sendAt: Long, photoId: String, text: String, m0: Map<String, Int>, src: String, kind: String = "fila") {
+        val m = sane(m0)
         if (m.isEmpty()) return
         JsonFile.edit(file(c)) { l ->
             val o = l.firstOrNull { it.optLong("send") == sendAt } ?: JSONObject().put("id", "$src:$sendAt").put("send", sendAt)
@@ -128,7 +155,8 @@ object ThreadsApi {
     }
 
     /** Post feito fora do app: guarda números pela legenda (sem foto ligada). */
-    fun upsertOrphan(c: Context, text: String, m: Map<String, Int>, src: String, kind: String = "fila") {
+    fun upsertOrphan(c: Context, text: String, m0: Map<String, Int>, src: String, kind: String = "fila") {
+        val m = sane(m0)
         if (m.isEmpty() || text.length < 8) return
         val key = (if (kind == "video") "orfv:" else "orf:") + norm(text).take(60).hashCode()
         JsonFile.edit(file(c)) { l ->
@@ -152,6 +180,7 @@ object ThreadsApi {
 
     /** Sem rede: distribui seguidores e dá as notas com o que já se sabe (API, tela ou print). */
     fun process(c: Context) {
+        try { repair(c) } catch (e: Exception) { }
         val ps = posts(c); if (ps.isEmpty()) return
         attributeFollowers(c, ps)
         JsonFile.write(file(c), ps)

@@ -985,6 +985,20 @@ class MainActivity : Activity() {
             l.take(6).forEach { o -> text("• " + Promo.fill(this, o.optString("t")).replace('\n', ' ') + "  —  " + promoStats(o), 12f, MUTED, parent = box) }
         }
         promoRedraw()
+
+        val cg = card("📈 Vigia do crescimento")
+        val tvG = text("", 13f, FG, parent = cg)
+        val tvR = text("", 12f, ACCENT, parent = cg)
+        chips(cg, listOf("🤖 Ajustar a divulgação sozinho", "Eu ajusto"), { if (Growth.autoTune(this)) "🤖 Ajustar a divulgação sozinho" else "Eu ajusto" }) { Growth.setAutoTune(this, it.startsWith("🤖")) }
+        text("Todo dia às 21h chega o resumo. Com 4+ divulgações medidas, o app aumenta a frequência quando ela traz bem mais seguidores que um post normal e diminui quando traz menos. A IA usa esses números ao criar legendas.", 11f, MUTED, parent = cg)
+        val rg = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; cg.addView(rg, lpMatch())
+        fun gUi() { Thread { val r = try { Growth.report(this) } catch (e: Exception) { null }; ui.post {
+            tvG.text = r?.lines?.joinToString("\n\n") ?: "Sem dados ainda."
+            tvR.text = r?.recs?.joinToString("\n") { "• $it" }.orEmpty(); tvR.visibility = if (r?.recs.isNullOrEmpty()) View.GONE else View.VISIBLE
+        } }.start() }
+        button("↻ Atualizar", rg, weight = true) { gUi() }
+        button("📋 Copiar", rg, weight = true) { (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("crescimento", tvG.text.toString() + "\n" + tvR.text)); toast("Copiado") }
+        gUi()
     }
 
     private fun promoStats(o: org.json.JSONObject): String {

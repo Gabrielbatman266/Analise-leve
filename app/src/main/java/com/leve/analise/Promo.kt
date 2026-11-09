@@ -262,6 +262,7 @@ object Promo {
                 val f1 = folAt(c, e.optLong("at") + 26 * 3600_000L)
                 val gain = fromPost ?: if (f0 != null && f1 != null && f1 >= f0) (f1 - f0) - base else null
                 if (gain != null) {
+                    JsonFile.edit(File(c.filesDir, "envios.json")) { l -> l.firstOrNull { it.optLong("at") == e.optLong("at") }?.put("gain", gain) }
                     val rel = if (fromPost != null) gain / maxOf(1.0, base / 3) else gain / maxOf(1.0, base)
                     JsonFile.edit(bank(c)) { b -> b.firstOrNull { norm(it.optString("t")) == norm(e.optString("tpl")) }?.let { it.put("fol", it.optDouble("fol") + rel); it.put("folN", it.optInt("folN") + 1); it.put("folRaw", it.optDouble("folRaw") + gain) } }
                 }

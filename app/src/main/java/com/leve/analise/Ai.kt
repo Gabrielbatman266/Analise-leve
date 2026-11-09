@@ -141,6 +141,7 @@ Objetivo: quem vê o post no Threads ir SEGUIR o Instagram dela. O post é uma f
 ${if (mine.isNotEmpty()) "Jeito dela de escrever (imite o tom):\n" + mine.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
 ${if (wins.isNotEmpty()) "Legendas normais que BOMBARAM no perfil:\n" + wins.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
 ${ThreadsApi.aiText(c)}
+${Growth.aiText(c)}
 ${Captions.learnedText(c)}
 ${if (tested.isNotBlank()) "Legendas de divulgação JÁ TESTADAS e o resultado (siga as de nota/seguidores altos, fuja das baixas):\n$tested" else ""}
 Crie $n legendas NOVAS de divulgação. Use o marcador {ig} exatamente uma vez, no lugar onde entra o Instagram dela (o app troca por link ou @).

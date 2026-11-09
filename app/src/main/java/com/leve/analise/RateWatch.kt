@@ -29,7 +29,7 @@ object Likes {
 
     /** Guarda o maior número de curtidas visto pra um post. src: "notif", "tela". */
     fun record(c: Context, kind: String, id: String, likes: Int, src: String, add: Boolean = false) {
-        if (likes <= 0) return
+        if (likes <= 0 || likes > ThreadsApi.MAXV) return
         JsonFile.edit(file(c)) { l ->
             val o = l.firstOrNull { it.optString("kind") == kind && it.optString("id") == id && System.currentTimeMillis() - it.optLong("first") < 3 * 86400_000L }
             if (o == null) l.add(0, JSONObject().put("kind", kind).put("id", id).put("likes", likes).put("singles", if (add) 1 else 0).put("first", System.currentTimeMillis()).put("at", System.currentTimeMillis()).put("src", src))
@@ -97,6 +97,7 @@ object RateWatch {
         }
         try { Auto.captionsTick(c) } catch (x: Exception) { ErrLog.log(c, "vigia", x) }
         try { Promo.tick(c) } catch (x: Exception) { ErrLog.log(c, "divulgação", x) }
+        try { Growth.tick(c) } catch (x: Exception) { ErrLog.log(c, "vigia do crescimento", x) }
         try { Archive.tick(c)?.let { p(c).edit().putString("health_last", it).apply() } } catch (x: Exception) { ErrLog.log(c, "vigia", x) }
         try { Stock.check(c) } catch (x: Exception) { ErrLog.log(c, "vigia", x) }
         try { Burst.autoTick(c) } catch (x: Exception) { ErrLog.log(c, "rajada", x) }
@@ -447,7 +448,7 @@ class ScreenReader : AccessibilityService() {
     /** Visualizações que aparecem em cima de cada célula da grade (▶ 12,3 mil). */
     private fun cellViews(cell: AccessibilityNodeInfo, all: List<AccessibilityNodeInfo>): Int? {
         val cr = rect(cell)
-        Regex("(\\d[\\d.,]*\\s*(?:mil|k|mi|m)?)\\s*(visualiza|views|reprodu|plays)", RegexOption.IGNORE_CASE).find(norm((cell.contentDescription ?: "").toString()))?.let { return numOf(it.groupValues[1]) }
+        Regex("(\\d[\\d.,]*\\s*(?:mil|k|mi)?)\\s*(visualiza|views|reprodu|plays)", RegexOption.IGNORE_CASE).find(norm((cell.contentDescription ?: "").toString()))?.let { return numOf(it.groupValues[1]) }
         return all.filter { n -> val r = rect(n); cr.contains(r) && n !== cell }.firstNotNullOfOrNull { numOf(txt(it)) }
     }
 
@@ -653,7 +654,7 @@ class ScreenReader : AccessibilityService() {
         return ((clean.toDoubleOrNull() ?: 0.0) * mult).toInt()
     }
 
-    private val FOLLOW = Regex("(\\d[\\d.,]*)\\s*(mil|k|mi|m)?\\s*(seguidores|followers)", RegexOption.IGNORE_CASE)
+    private val FOLLOW = Regex("(\\d[\\d.,]*)\\s*(mil|k|mi)?\\s*(seguidores|followers)", RegexOption.IGNORE_CASE)
     private val LABELS = mapOf(
         "views" to Regex("^(visualiza[cç][oõ]es|views|visualizações|reprodu[cç][oõ]es|plays|contas alcan[cç]adas|accounts reached)$", RegexOption.IGNORE_CASE),
         "likes" to Regex("^(curtidas?|likes?|curtir|like)$", RegexOption.IGNORE_CASE),
@@ -665,8 +666,9 @@ class ScreenReader : AccessibilityService() {
         "follows" to Regex("^(seguidores|follows|novos seguidores|seguiram|seguimentos|follows gained)$", RegexOption.IGNORE_CASE))
 
     private fun numOf(t: String): Int? {
-        val m = Regex("^(\\d[\\d.,]*)\\s*(mil|k|mi|m)?$", RegexOption.IGNORE_CASE).find(t.trim()) ?: return null
-        val mult = when (m.groupValues[2].lowercase()) { "mil", "k" -> 1000.0; "mi", "m" -> 1_000_000.0; else -> 1.0 }
+        // "57m"/"5h"/"3d" são HORÁRIOS do post (57 minutos atrás), não números: só aceita mil/k/mi/milhões
+        val m = Regex("^(\\d[\\d.,]*)\\s*(mil|k|mi|milh[oõ]es|mi\\.)?$", RegexOption.IGNORE_CASE).find(t.trim()) ?: return null
+        val mult = when (m.groupValues[2].lowercase().trimEnd('.')) { "mil", "k" -> 1000.0; "mi", "milhões", "milhoes" -> 1_000_000.0; else -> 1.0 }
         val s = m.groupValues[1]; val clean = if (mult > 1) s.replace(',', '.') else s.replace(".", "").replace(",", "")
         return ((clean.toDoubleOrNull() ?: return null) * mult).toInt()
     }

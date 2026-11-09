@@ -55,6 +55,7 @@ Vibe: ${vibe(c)}. Tamanho: ${size(c)}. Contexto: ${ctx(c).ifEmpty { "nenhum" }}.
 ${learnedText(c)}
 ${Predictor.insightsText(c, false)}
 ${ThreadsApi.aiText(c)}
+${Growth.aiText(c)}
 ${if (wins.isNotEmpty()) "🔥 LEGENDAS QUE BOMBARAM NO MEU PERFIL (prioridade máxima): metade das suas legendas deve ser VARIAÇÃO delas — mesmo tema, mesma estrutura e o mesmo tipo de gancho, com outras palavras:\n" + wins.joinToString("\n") { "- ${it.optString("t").replace('\n', ' ')}  (🔥${it.optInt("good")})" } + "\n(as com mais 🔥 viralizaram de verdade: priorize o estilo delas)" else ""}
 ${if (flops.isNotEmpty()) "👎 FLOPARAM (evite esse tom e esse assunto):\n" + flops.joinToString("\n") { "- ${it.replace('\n', ' ')}" } else ""}
 ${if (words.isNotEmpty()) "Palavras que aparecem nas que bombam: " + words.joinToString(", ") else ""}

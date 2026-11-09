@@ -140,6 +140,7 @@ object SelfTest {
             appendLine("Notas: notif ${ThreadsNotif.hasAccess(c)}/${ThreadsNotif.live(c)} · tela ${RateWatch.readerOn(c)} · limite ${ThreadsNotif.min(c)}/${ThreadsNotif.igMin(c)}")
             appendLine("API Threads: " + ThreadsApi.summary(c).replace("\n", " | "))
             appendLine("Coleta: " + Macro.lastRun(c) + " · posts com números: ${ThreadsApi.posts(c).size} (de fora do app: ${ThreadsApi.posts(c).count { it.optBoolean("orphan") }}) · Reels com números: ${ThreadsApi.posts(c).count { it.optString("kind") == "video" }}")
+            try { Growth.report(c).let { r -> appendLine("Crescimento: " + r.lines.joinToString(" | ")); if (r.recs.isNotEmpty()) appendLine("Falta: " + r.recs.joinToString(" | ")) } } catch (e: Exception) { }
             Store.prefs(c).getString("tela_dump", null)?.let { appendLine("Tela onde não achou números: " + it.take(1500)) }
             val lk = Likes.all(c)
             appendLine("Curtidas guardadas: ${lk.size} (notif ${lk.count { it.optString("src") == "notif" }}, tela ${lk.count { it.optString("src") == "tela" }}) · mediana fotos ${Likes.median(c, "fila") ?: "-"} · vídeos ${Likes.median(c, "video") ?: "-"} · modelo treinado em ${Predictor.trainedOn()}")
