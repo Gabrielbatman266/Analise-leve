@@ -351,6 +351,11 @@ class MainActivity : Activity() {
         }
         chips(crk, listOf("Ler todos os meus posts", "Só os do app"), { if (Macro.readAll(this)) "Ler todos os meus posts" else "Só os do app" }) { Macro.setReadAll(this, it.startsWith("Ler")) }
         text("✋ Modo manual: role e abra os posts você mesmo; quando o leitor captar, aparece um aviso verde.", 12f, MUTED, parent = crk)
+        val rpz = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; crk.addView(rpz, lpMatch())
+        val bPz = button("", rpz, weight = true) { }
+        fun pzT() { bPz.text = if (Macro.paused(this)) "▶ Retomar o leitor de tela" else "⏸ Pausar o leitor por 1 h" }
+        bPz.setOnClickListener { if (Macro.paused(this)) { Macro.pause(this, 0); toast("Leitor ligado de novo") } else { Macro.pause(this, 3600_000L); toast("Leitor pausado por 1 h: abra o Threads e veja se os seguidores/bio aparecem") }; pzT() }
+        pzT()
         chips(crk, listOf("Aviso ligado", "Sem aviso"), { if (Macro.manualToast(this)) "Aviso ligado" else "Sem aviso" }) { Macro.setManualToast(this, it == "Aviso ligado") }
         Macro.lastRun(this).takeIf { it.isNotBlank() }?.let { text("Última coleta: $it", 11f, MUTED, parent = crk) }
         val rkBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }

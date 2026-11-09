@@ -178,6 +178,9 @@ object Macro {
     /** Também abre posts que você fez fora do app (guarda os números pela legenda). */
     fun readAll(c: Context) = p(c).getBoolean("macro_all", true)
     fun setReadAll(c: Context, v: Boolean) = p(c).edit().putBoolean("macro_all", v).apply()
+    /** ⏸ Pausa o leitor de tela (pra testar se ele atrapalha algo no Threads). */
+    fun paused(c: Context) = p(c).getLong("reader_pause", 0) > System.currentTimeMillis()
+    fun pause(c: Context, ms: Long) = p(c).edit().putLong("reader_pause", if (ms > 0) System.currentTimeMillis() + ms else 0).apply()
     fun setManualToast(c: Context, v: Boolean) = p(c).edit().putBoolean("reader_toast", v).apply()
 
     fun startInstagram(c: Context): String {
@@ -607,9 +610,12 @@ class ScreenReader : AccessibilityService() {
         if (!running && Macro.on(this) && ep == Macro.app(this)) { appPkg = ep; doneCells.clear(); startMacro() }
         if (ep == ThreadsRefs.THREADS) ThreadsRefs.threadsActive(this) // 📌 salvou mídia no Threads? já puxa pras Referências
         if (running) return // durante a coleta, quem lê é o próprio macro
+        if (Macro.paused(this)) return // ⏸ pausado: não lê nada
         manualPkg = e?.packageName?.toString().orEmpty()
         val now = System.currentTimeMillis()
-        if (now - last < 1500) return
+        // leve: só lê quando a tela troca/rola, no máximo a cada 3 s (antes lia a cada mudança, deixando o Threads pesado)
+        if (e?.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED && now - last < 6000) return
+        if (now - last < 3000) return
         last = now
         val pkg = e?.packageName?.toString() ?: return
         val root = rootInActiveWindow ?: return
@@ -707,7 +713,9 @@ class ScreenReader : AccessibilityService() {
         val video = pkg == ThreadsNotif.INSTA
         val nt = texts.map { norm(it) }
         // 1) perfil: número de seguidores (vale pros 2 apps; guardamos só o do Threads)
-        if (!video) nt.firstNotNullOfOrNull { FOLLOW.find(it) }?.let { m -> numOf(m.groupValues[1] + (m.groupValues[2].takeIf { it.isNotEmpty() }?.let { " $it" } ?: ""))?.let { ThreadsApi.addFollowers(this, it, "tela") } }
+        val me = Macro.handle(this).lowercase()
+        val ownProfile = nt.any { it == "editar perfil" || it == "edit profile" || it == "compartilhar perfil" || it == "share profile" } || (me.isNotEmpty() && nt.any { it == me || it == "@$me" })
+        if (!video && ownProfile) nt.firstNotNullOfOrNull { FOLLOW.find(it) }?.let { m -> numOf(m.groupValues[1] + (m.groupValues[2].takeIf { it.isNotEmpty() }?.let { " $it" } ?: ""))?.let { ThreadsApi.addFollowers(this, it, "tela") } }
         val sends = SendLog.all(this).filter { System.currentTimeMillis() - it.optLong("at") < 30 * 86400_000L && (it.optString("kind") == "video") == video }
         if (sends.isEmpty()) return got
         val insights = nt.any { LABELS["views"]!!.matches(it) } && nt.count { t -> LABELS.values.any { it.matches(t) } } >= 3
