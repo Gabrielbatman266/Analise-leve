@@ -272,7 +272,7 @@ object Insights {
         ThreadsApi.upsertLocal(c, e.optLong("at"), e.optString("id"), e.optString("cap"), m, "print")
         m["likes"]?.let { Likes.record(c, "fila", e.optString("id"), it, "print") }
         ThreadsApi.process(c)
-        return "✓ Números guardados: " + m.entries.joinToString(" · ") { "${it.key} ${it.value}" }
+        return "✓ Números guardados (banco e sorteio atualizados): " + m.entries.joinToString(" · ") { "${it.key} ${it.value}" }
     }
 
     /** 🏆 Ranking dos posts (pontuação composta: curtidas, respostas, reposts, visualizações e seguidores). */
@@ -292,7 +292,7 @@ object Perfect {
         if (q.isEmpty()) return null
         val rec = Captions.recentPhotos(c).take(maxOf(3, (q.size * 0.4).toInt()))
         val cand = q.filter { it.optString("id") !in rec }.ifEmpty { q }
-        val best = cand.maxBy { Predictor.blend(Learn.chanceMean(c, it), Learn.rated(it), Predictor.photo(c, it)) }
+        val best = cand.maxBy { o -> Predictor.blend(Learn.chanceMean(c, o), Learn.rated(o), Predictor.photo(c, o)).let { m0 -> ThreadsApi.photoScore(c, o.optString("id"))?.let { (m0 + 2 * it) / 3 } ?: m0 } }
         val own = best.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
         var pool = (own + Captions.mine(c) + CaptionDB.winners(c, 30).map { it.optString("t") } + CaptionDB.texts(c, "var").take(40) +
             ThreadsApi.topFollowers(c, 5).map { it.optString("text") })

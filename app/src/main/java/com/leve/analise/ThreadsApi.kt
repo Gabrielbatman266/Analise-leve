@@ -142,6 +142,8 @@ object ThreadsApi {
         attributeFollowers(c, ps)
         JsonFile.write(file(c), ps)
         rateFromApi(c)
+        invalidate()
+        try { Predictor.train(c, force = true) } catch (e: Exception) { ErrLog.log(c, "modelo", e) }
     }
 
     /** Liga cada post da API ao envio do app (mesma legenda, horário próximo). */
@@ -217,6 +219,29 @@ object ThreadsApi {
         if (System.currentTimeMillis() - m.optLong("at") < 12 * 3600_000L || ps.size < 5) return null
         return composite(c, m, ps)
     }
+
+    // ---------- números → sorteio (fotos e legendas que rendem saem mais)
+    @Volatile private var cacheAt = 0L
+    @Volatile private var photoMap: Map<String, Double> = emptyMap()
+    @Volatile private var capMap: Map<String, Double> = emptyMap()
+    private fun capKey(s: String) = norm(s).take(30)
+
+    private fun maps(c: Context) {
+        if (System.currentTimeMillis() - cacheAt < 60_000L) return
+        val ps = posts(c).filter { it.optLong("send") > 0 && System.currentTimeMillis() - it.optLong("at") > 3 * 3600_000L }
+        if (ps.size < 3) { photoMap = emptyMap(); capMap = emptyMap(); cacheAt = System.currentTimeMillis(); return }
+        val sc = ps.map { it to composite(c, it, ps) }
+        photoMap = sc.filter { it.first.optString("photo").isNotEmpty() }.groupBy { it.first.optString("photo") }.mapValues { (_, v) -> v.map { it.second }.average() }
+        capMap = sc.groupBy { capKey(it.first.optString("text")) }.filterKeys { it.length >= 6 }.mapValues { (_, v) -> v.map { it.second }.average() }
+        cacheAt = System.currentTimeMillis()
+    }
+    fun invalidate() { cacheAt = 0 }
+
+    /** Pontuação real (0..1) da foto pelos números dos posts dela; null = sem números. */
+    fun photoScore(c: Context, id: String): Double? { maps(c); return photoMap[id] }
+    /** Pontuação real da legenda (em qualquer foto). */
+    fun captionScore(c: Context, cap: String): Double? { maps(c); return capMap[capKey(cap)] }
+    fun withNumbers(c: Context): Int { maps(c); return photoMap.size }
 
     /** Posts que mais trouxeram seguidores (pra IA e pra tela). */
     fun topFollowers(c: Context, n: Int = 5) = posts(c).filter { it.optDouble("fol", 0.0) > 0 }.sortedByDescending { it.optDouble("fol") }.take(n)

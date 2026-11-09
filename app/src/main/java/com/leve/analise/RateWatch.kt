@@ -183,9 +183,11 @@ object Macro {
     fun stop(c: Context, why: String) {
         p(c).edit().putBoolean("macro_on", false).putString("macro_last", android.text.format.DateFormat.format("dd/MM HH:mm", System.currentTimeMillis()).toString() + " · " + why).apply()
         c.getSystemService(NotificationManager::class.java).cancel(95)
-        try { ThreadsApi.process(c) } catch (e: Exception) { }
+        try { ThreadsApi.process(c) } catch (e: Exception) { ErrLog.log(c, "coleta: processar", e) }
+        val nf = ThreadsApi.withNumbers(c)
         val nm = c.getSystemService(NotificationManager::class.java)
-        val b = Notification.Builder(c, "estoque").setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("🤖 Coleta terminada").setContentText(why).setAutoCancel(true)
+        val b = Notification.Builder(c, "estoque").setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("🤖 Coleta terminada · 📚 banco atualizado")
+            .setContentText(why).setStyle(Notification.BigTextStyle().bigText("$why\n📚 $nf foto(s) com números reais. Notas, modelo e sorteio atualizados: as fotos e legendas que rendem passam a sair mais.")).setAutoCancel(true)
         try { nm.createNotificationChannel(NotificationChannel("estoque", "Estoque", NotificationManager.IMPORTANCE_DEFAULT)); nm.notify(94, b.build()) } catch (e: Exception) { }
     }
 
@@ -271,7 +273,7 @@ class ScreenReader : AccessibilityService() {
 
     private fun finish(why: String) {
         running = false; h.removeCallbacksAndMessages(null)
-        show("🤖 $why", 0xEE1D4ED8.toInt())
+        show("🤖 $why\n📚 Banco atualizado: o sorteio já usa esses números", 0xEE1D4ED8.toInt())
         h.postDelayed({ clearOverlay() }, 3500)
         Macro.stop(this, why)
     }

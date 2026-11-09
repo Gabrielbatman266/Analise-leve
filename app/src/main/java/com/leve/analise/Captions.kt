@@ -162,7 +162,8 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
     /** Bônus da legenda pra uma foto: combinação já testada + previsão pelas características da legenda. */
     fun capBonus(c: Context, id: String): (String) -> Double {
         val pb = pairBonus(c, id); val ready = Predictor.ready(c)
-        return { cap -> pb(cap) * (if (ready) Math.exp(3.0 * (Predictor.caption(c, cap) - 0.5)) else 1.0) }
+        return { cap -> pb(cap) * (if (ready) Math.exp(3.0 * (Predictor.caption(c, cap) - 0.5)) else 1.0) *
+            (ThreadsApi.captionScore(c, cap)?.let { Math.exp(3.0 * (it - 0.5)) } ?: 1.0) } // legenda que rendeu nos números sai mais
     }
 
     /** Regras que a IA aprendeu comparando fotos + legendas. */
@@ -237,7 +238,9 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         val w = cand.map { o ->
             val posted = o.optString("status") == "postada"
             val idx = rec.indexOf(o.optString("id"))
-            val m = Predictor.blend(Learn.chanceMean(c, o), Learn.rated(o), Predictor.photo(c, o))
+            val m0 = Predictor.blend(Learn.chanceMean(c, o), Learn.rated(o), Predictor.photo(c, o))
+            // 📚 números captados (tela/insights/print/API): a foto que rende de verdade sai mais
+            val m = ThreadsApi.photoScore(c, o.optString("id"))?.let { real -> (m0 + 2 * real) / 3 } ?: m0
             val score = minOf(3.0, Math.exp(5.0 * (m - 0.5)) * (1.0 + 0.6 * o.optInt("top")))
             score * (if (!posted) 2.0 else 1.0) * (if (idx < 0) 1.5 else 1.0 + idx / 10.0)
         }
