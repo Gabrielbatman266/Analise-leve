@@ -25,7 +25,7 @@ import java.io.File
  */
 object Likes {
     private fun file(c: Context) = File(c.filesDir, "curtidas.json")
-    fun all(c: Context) = JsonFile.read(file(c))
+    fun all(c: Context): List<JSONObject> = JsonFile.peek(file(c))
 
     /** Guarda o maior número de curtidas visto pra um post. src: "notif", "tela". */
     fun record(c: Context, kind: String, id: String, likes: Int, src: String, add: Boolean = false) {
@@ -239,11 +239,12 @@ class ScreenReader : AccessibilityService() {
     override fun onDestroy() { instance = null; hideReadBtn(); super.onDestroy() }
 
     // ================= 📖 botão "Ler agora" (aparece só no Threads/Instagram) =================
-    private var readBtn: android.widget.TextView? = null
+    private var readBtn: android.view.View? = null
     private var readLp: android.view.WindowManager.LayoutParams? = null
     private var btnHiddenUntil = 0L
     private var forcing = false
     private var appHit = false
+    private val taught = HashMap<String, Int>()
     private val fgCheck = object : Runnable { override fun run() {
         val pk = try { rootInActiveWindow?.packageName?.toString() } catch (e: Exception) { null }
         if (pk != ThreadsNotif.THREADS && pk != ThreadsNotif.INSTA) hideReadBtn() else h.postDelayed(this, 2000)
@@ -252,11 +253,15 @@ class ScreenReader : AccessibilityService() {
     private fun showReadBtn() {
         if (readBtn != null || running || !Macro.readBtn(this) || System.currentTimeMillis() < btnHiddenUntil) return
         try {
-            val v = android.widget.TextView(this).apply {
-                text = "📖"; textSize = 18f; gravity = android.view.Gravity.CENTER; alpha = 0.55f
+            fun mk(t: String, sz: Float) = android.widget.TextView(this).apply {
+                text = t; textSize = sz; gravity = android.view.Gravity.CENTER; alpha = 0.55f
                 background = android.graphics.drawable.GradientDrawable().apply { shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(0xB3121216.toInt()); setStroke(dpx(1), 0x40FFFFFF) }
             }
-            val lp = android.view.WindowManager.LayoutParams(dpx(44), dpx(44), android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            val box = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.VERTICAL; gravity = android.view.Gravity.CENTER_HORIZONTAL }
+            val v = mk("📖", 18f); val t = mk("🎓", 13f)
+            box.addView(v, android.widget.LinearLayout.LayoutParams(dpx(44), dpx(44)))
+            box.addView(t, android.widget.LinearLayout.LayoutParams(dpx(32), dpx(32)).apply { topMargin = dpx(6) })
+            val lp = android.view.WindowManager.LayoutParams(-2, -2, android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, android.graphics.PixelFormat.TRANSLUCENT).apply {
                 gravity = android.view.Gravity.TOP or android.view.Gravity.END; x = dpx(4); y = Store.prefs(this@ScreenReader).getInt("readbtn_y", (resources.displayMetrics.heightPixels * 0.42).toInt())
             }
@@ -264,7 +269,7 @@ class ScreenReader : AccessibilityService() {
             v.setOnTouchListener { _, e ->
                 when (e.action) {
                     android.view.MotionEvent.ACTION_DOWN -> { sy = lp.y; ty = e.rawY; moved = false; down = System.currentTimeMillis(); v.alpha = 1f }
-                    android.view.MotionEvent.ACTION_MOVE -> { val dy = e.rawY - ty; if (Math.abs(dy) > dpx(8)) moved = true; if (moved) { lp.y = sy + dy.toInt(); try { wm.updateViewLayout(v, lp) } catch (x: Exception) { } } }
+                    android.view.MotionEvent.ACTION_MOVE -> { val dy = e.rawY - ty; if (Math.abs(dy) > dpx(8)) moved = true; if (moved) { lp.y = sy + dy.toInt(); try { wm.updateViewLayout(box, lp) } catch (x: Exception) { } } }
                     android.view.MotionEvent.ACTION_UP -> {
                         v.alpha = 0.55f
                         if (moved) Store.prefs(this).edit().putInt("readbtn_y", lp.y).apply()
@@ -274,24 +279,189 @@ class ScreenReader : AccessibilityService() {
                 }
                 true
             }
-            wm.addView(v, lp); readBtn = v; readLp = lp
+            t.setOnClickListener { teach() }
+            wm.addView(box, lp); readBtn = box; readLp = lp
             h.removeCallbacks(fgCheck); h.postDelayed(fgCheck, 2000)
         } catch (e: Exception) { }
     }
-    private fun hideReadBtn() { try { readBtn?.let { wm.removeView(it) } } catch (e: Exception) { }; readBtn = null }
+    private fun hideReadBtn() { try { readBtn?.let { wm.removeView(it) } } catch (e: Exception) { }; readBtn = null; closeTeach() }
 
-    /** Todos os textos da tela (no Instagram só o visível). */
-    private fun collect(pkg: String, max: Int = 1500): List<String> {
+    /** Um texto da tela: como está escrito, normalizado, o "nome" interno do campo e o número (se for número). */
+    class Item(val raw: String, val t: String, val vid: String, val num: Int?)
+    private var curItems: List<Item> = emptyList()
+    private var lastHit: JSONObject? = null
+
+    private fun itemsOf(pkg: String, max: Int = 1500): List<Item> {
         val root = rootInActiveWindow ?: return emptyList()
-        val out = ArrayList<String>()
+        val out = ArrayList<Item>()
+        fun add(r: String, vid: String) { if (r.isNotEmpty()) { val t = norm(r); out += Item(r, t, vid, numOf(t)) } }
         fun walk(n: AccessibilityNodeInfo?, d: Int) {
             if (n == null || d > 60 || out.size > max) return
-            val visOk = pkg != ThreadsNotif.INSTA || n.isVisibleToUser
-            if (visOk) { n.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { out += it }; n.contentDescription?.toString()?.trim()?.takeIf { it.isNotEmpty() && it != n.text?.toString()?.trim() }?.let { out += it } }
+            if (pkg != ThreadsNotif.INSTA || n.isVisibleToUser) {
+                val vid = n.viewIdResourceName?.substringAfterLast('/') ?: ""
+                val tx = n.text?.toString()?.trim().orEmpty(); val ds = n.contentDescription?.toString()?.trim().orEmpty()
+                add(tx, vid); if (ds != tx) add(ds, vid)
+            }
             for (k in 0 until n.childCount) walk(n.getChild(k), d + 1)
         }
         try { walk(root, 0) } catch (e: Exception) { }
         return out
+    }
+
+    /** Todos os textos da tela (no Instagram só o visível). Guarda também os itens, pras regras ensinadas. */
+    private fun collect(pkg: String): List<String> { curItems = itemsOf(pkg); return curItems.map { it.raw } }
+
+    // ================= 🎓 o que você ensinou: reconhece o número pelo vizinho, pela posição e pelo tipo de tela =================
+    private fun pat(t: String) = t.replace(Regex("\\d+"), "#")
+    private fun screenOf(L: List<Item>) = if (L.any { LABELS["views"]!!.matches(it.t) }) "ins" else "post"
+
+    private fun feat(L: List<Item>, i: Int, pkg: String, screen: String): JSONObject {
+        fun stable(x: Item) = x.num == null && !TIME.matches(x.t) && x.t.length in 2..28
+        val prev = (i - 1 downTo maxOf(0, i - 3)).firstOrNull { stable(L[it]) }?.let { pat(L[it].t) } ?: ""
+        val next = (i + 1..minOf(L.size - 1, i + 3)).firstOrNull { stable(L[it]) }?.let { pat(L[it].t) } ?: ""
+        var a = i; while (a > 0 && L[a - 1].num != null) a--
+        var b = i; while (b < L.size - 1 && L[b + 1].num != null) b++
+        val after = (b + 1..minOf(L.size - 1, b + 2)).firstOrNull { stable(L[it]) }?.let { pat(L[it].t) } ?: ""
+        return JSONObject().put("pkg", pkg).put("screen", screen).put("vid", L[i].vid).put("prev", prev).put("next", next).put("pos", i - a).put("len", b - a + 1).put("after", after)
+    }
+
+    private fun ruleScore(r: JSONObject, f: JSONObject): Int {
+        if (r.optString("pkg") != f.optString("pkg") || r.optString("screen") != f.optString("screen")) return 0
+        var s = 0
+        val rv = r.optString("vid"); val rp = r.optString("prev"); val rn = r.optString("next")
+        if (rv.isNotEmpty() && rv == f.optString("vid")) s += 3
+        if (rp.isNotEmpty() && rp == f.optString("prev")) s += 2
+        if (rn.isNotEmpty() && rn == f.optString("next")) s += 2
+        if (r.optInt("pos") == f.optInt("pos") && r.optInt("len") == f.optInt("len")) {
+            s += if (rp.isEmpty() && rv.isEmpty()) 2 else 1
+            if (r.optString("after").isNotEmpty() && r.optString("after") == f.optString("after")) s += 1
+        }
+        if (rp.isNotEmpty() && f.optString("prev").isNotEmpty() && rp != f.optString("prev")) s -= 2 // vizinho diferente: é outro número
+        return s
+    }
+
+    /** Aplica o que foi ensinado nesta tela: métrica → número. */
+    private fun learnedRead(L: List<Item>, pkg: String): Map<String, Int> {
+        val rules = ReaderRules.all(this).filter { it.optString("pkg") == pkg }
+        if (rules.isEmpty() || L.isEmpty()) return emptyMap()
+        val screen = screenOf(L)
+        val feats = L.indices.filter { L[it].num != null }.take(80).associateWith { feat(L, it, pkg, screen) }
+        val ign = rules.filter { it.optString("metric") == "ignore" }
+        val cand = feats.keys.filter { i -> ign.none { ruleScore(it, feats.getValue(i)) >= 3 } }
+        val out = HashMap<String, Int>()
+        rules.filter { it.optString("metric") != "ignore" }.groupBy { it.optString("metric") }.forEach { (metric, rs) ->
+            val best = cand.maxByOrNull { i -> rs.maxOf { ruleScore(it, feats.getValue(i)) } } ?: return@forEach
+            if (rs.maxOf { ruleScore(it, feats.getValue(best)) } >= 3) out[metric] = L[best].num!!
+        }
+        return out
+    }
+
+    private var teachView: android.view.View? = null
+    private fun closeTeach() { try { teachView?.let { wm.removeView(it) } } catch (e: Exception) { }; teachView = null }
+    private val METRICS = listOf("views" to "👁 Views", "likes" to "❤ Curtidas", "replies" to "💬 Respostas", "reposts" to "🔁 Reposts", "shares" to "↗ Envios",
+        "saves" to "🔖 Salvos", "viewers" to "👥 Alcance", "visits" to "👤 Visitas", "fol" to "➕ Seguiram", "ignore" to "🚫 Nada")
+
+    /** 🎓 Mostra os números desta tela; você toca no que cada um é; o leitor guarda a regra e lê de novo. */
+    fun teach() {
+        if (teachView != null || running) return
+        val pkg = try { rootInActiveWindow?.packageName?.toString() } catch (e: Exception) { null }
+        if (pkg != ThreadsNotif.THREADS && pkg != ThreadsNotif.INSTA) return
+        val L = itemsOf(pkg); val screen = screenOf(L)
+        val nums = L.indices.filter { L[it].num != null }.take(40)
+        if (nums.isEmpty()) { show("🎓 Não vi nenhum número nesta tela. Abra o post ou o \"Ver insights\"."); h.postDelayed({ if (!running) clearOverlay() }, 2500); return }
+        // o que o leitor acha hoje (pra você ver onde ele erra)
+        val nt = L.map { it.t }
+        val cur = pairs(nt, 0, nt.size).toMutableMap(); extras(nt, cur); cur.putAll(learnedRead(L, pkg)); cur["follows"]?.let { cur["fol"] = it; cur.remove("follows") }
+        val guess = HashMap<Int, String>(); val choice = HashMap<Int, String>()
+        cur.forEach { (k, v) -> if (METRICS.any { it.first == k }) nums.firstOrNull { L[it].num == v && it !in guess }?.let { guess[it] = k } }
+        try {
+            val W = android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            fun tv(s: String, sz: Float, col: Int) = android.widget.TextView(this).apply { text = s; textSize = sz; setTextColor(col) }
+            val panel = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.VERTICAL; setPadding(dpx(14), dpx(12), dpx(14), dpx(10))
+                background = android.graphics.drawable.GradientDrawable().apply { setColor(0xF50E0E12.toInt()); cornerRadii = floatArrayOf(dpx(22).toFloat(), dpx(22).toFloat(), dpx(22).toFloat(), dpx(22).toFloat(), 0f, 0f, 0f, 0f); setStroke(dpx(1), 0x26FFFFFF) }
+            }
+            panel.addView(tv("🎓 Ensinar o leitor", 17f, 0xFFFFFFFF.toInt()).apply { setTypeface(typeface, android.graphics.Typeface.BOLD) })
+            panel.addView(tv("Estes são os números que eu vejo nesta tela. Toque no que cada um é (só os que importam). Em cinza: o que eu acho hoje.", 12f, 0xFF9A9EAB.toInt()))
+            val list = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.VERTICAL }
+            val paints = ArrayList<() -> Unit>()
+            nums.forEach { i ->
+                val row = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.VERTICAL; setPadding(0, dpx(8), 0, dpx(4)) }
+                val ctx = listOfNotNull(L.getOrNull(i - 1)?.raw?.replace('\n', ' ')?.take(22)?.let { "antes: $it" }, L.getOrNull(i + 1)?.raw?.replace('\n', ' ')?.take(22)?.let { "depois: $it" }).joinToString("  ·  ")
+                val head = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
+                head.addView(tv(L[i].raw, 18f, 0xFFFFFFFF.toInt()).apply { setTypeface(typeface, android.graphics.Typeface.BOLD); setPadding(0, 0, dpx(10), 0) })
+                head.addView(tv(ctx, 11f, 0xFF9A9EAB.toInt()))
+                row.addView(head)
+                val chips = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL }
+                val views = METRICS.map { (k, label) ->
+                    tv(label, 12f, 0xFFECEEF3.toInt()).apply {
+                        setPadding(dpx(10), dpx(7), dpx(10), dpx(7))
+                        setOnClickListener {
+                            if (choice[i] == k) choice.remove(i) else { if (k != "ignore") choice.entries.removeAll { it.value == k }; choice[i] = k }
+                            paints.forEach { it() }
+                        }
+                        chips.addView(this, android.widget.LinearLayout.LayoutParams(W, W).apply { rightMargin = dpx(6) })
+                    } to k
+                }
+                paints += { views.forEach { (v, k) ->
+                    val on = choice[i] == k; val g = !on && choice[i] == null && guess[i] == k
+                    v.setTextColor(if (on) 0xFF06140D.toInt() else 0xFFECEEF3.toInt())
+                    v.background = android.graphics.drawable.GradientDrawable().apply { setColor(if (on) 0xFF4CC68E.toInt() else if (g) 0xFF3A3A46.toInt() else 0xFF1C1C24.toInt()); cornerRadius = dpx(14).toFloat() }
+                } }
+                row.addView(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) })
+                list.addView(row)
+            }
+            paints.forEach { it() }
+            panel.addView(android.widget.ScrollView(this).apply { addView(list) }, android.widget.LinearLayout.LayoutParams(-1, 0, 1f))
+            val foot = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL; setPadding(0, dpx(8), 0, 0) }
+            fun fb(s: String, col: Int, fg: Int, onClick: () -> Unit) = tv(s, 14f, fg).apply {
+                gravity = android.view.Gravity.CENTER; setPadding(0, dpx(12), 0, dpx(12)); setTypeface(typeface, android.graphics.Typeface.BOLD)
+                background = android.graphics.drawable.GradientDrawable().apply { setColor(col); cornerRadius = dpx(12).toFloat() }
+                setOnClickListener { onClick() }
+            }
+            foot.addView(fb("Cancelar", 0xFF1C1C24.toInt(), 0xFFECEEF3.toInt()) { closeTeach() }, android.widget.LinearLayout.LayoutParams(0, W, 1f).apply { rightMargin = dpx(8) })
+            foot.addView(fb("💾 Salvar e ler de novo", 0xFFFF5C82.toInt(), 0xFF1A0A10.toInt()) {
+                if (choice.isEmpty()) { closeTeach(); return@fb }
+                val vidCount = nums.groupingBy { L[it].vid }.eachCount()
+                choice.forEach { (i, metric) ->
+                    val f = feat(L, i, pkg, screen)
+                    if ((vidCount[L[i].vid] ?: 0) > 1) f.put("vid", "") // o mesmo "nome" em vários números não ajuda a distinguir
+                    ReaderRules.add(this, f.put("metric", metric))
+                }
+                val n = choice.size
+                closeTeach(); show("🎓 Aprendi $n número(s). Lendo de novo…", 0xEE15803D.toInt())
+                h.postDelayed({ forceRead() }, 700)
+            }, android.widget.LinearLayout.LayoutParams(0, W, 2f))
+            panel.addView(foot)
+            val lp = android.view.WindowManager.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.62).toInt(), android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, android.graphics.PixelFormat.TRANSLUCENT).apply { gravity = android.view.Gravity.BOTTOM }
+            wm.addView(panel, lp); teachView = panel
+        } catch (e: Exception) { ErrLog.log(this, "ensinar leitor", e); closeTeach() }
+    }
+
+    // ================= ✍ legenda que não entrou: escreve no campo (não publica) =================
+    private var cfLast = 0L; private var cfSeen = 0L
+    private fun forceCaption(pkg: String) {
+        val cap = CapForce.pending(this, pkg) ?: return
+        val now = System.currentTimeMillis(); if (now - cfLast < 500) return; cfLast = now
+        val root = try { rootInActiveWindow } catch (e: Exception) { null } ?: return
+        if (root.packageName?.toString() != pkg) return
+        val edits = nodes(root).filter { it.isEditable && it.isVisibleToUser }
+        if (edits.isEmpty()) { cfSeen = 0; return }
+        fun hintOf(n: AccessibilityNodeInfo) = (if (android.os.Build.VERSION.SDK_INT >= 26) n.hintText?.toString().orEmpty() else "") + " " + (n.text ?: "") + " " + (n.contentDescription ?: "")
+        // Instagram: só o campo de LEGENDA (não a busca, não comentário); Threads: o campo do post novo
+        val target = if (pkg == ThreadsNotif.INSTA) edits.firstOrNull { Regex("legenda|caption").containsMatchIn(hintOf(it).lowercase()) } ?: return else edits.first()
+        val showingHint = android.os.Build.VERSION.SDK_INT >= 26 && target.isShowingHintText
+        val cur = if (showingHint) "" else (target.text ?: "").toString().trim()
+        if (cur.isNotEmpty() && !(pkg == ThreadsNotif.INSTA && Regex("^(escreva uma legenda|write a caption)", RegexOption.IGNORE_CASE).containsMatchIn(cur))) { CapForce.done(this); cfSeen = 0; return } // já tem texto: não mexo
+        // espera 1,2 s com o campo vazio (o app pode estar colocando a legenda sozinho)
+        if (cfSeen == 0L) { cfSeen = now; h.postDelayed({ forceCaption(pkg) }, 1300); return }
+        if (now - cfSeen < 1200) return
+        CapForce.tried(this)
+        val ok = target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, android.os.Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, cap) })
+        if (!ok) { target.performAction(AccessibilityNodeInfo.ACTION_FOCUS); target.performAction(AccessibilityNodeInfo.ACTION_PASTE) } // a legenda já está copiada
+        show("✍ Legenda colocada no post", 0xEE15803D.toInt())
+        h.postDelayed({ if (!running && !forcing) clearOverlay(); forceCaption(pkg) }, 1800) // confere se entrou
     }
 
     /** A legenda do post na tela (o 1º texto longo antes dos números), pra guardar post feito fora do app. */
@@ -311,12 +481,13 @@ class ScreenReader : AccessibilityService() {
         if (pkg != ThreadsNotif.THREADS && pkg != ThreadsNotif.INSTA) { show("📖 Abra um post do Threads/Instagram primeiro"); h.postDelayed({ clearOverlay() }, 2000); return }
         forcing = true; capturedNow = false
         show("📖 Lendo esta tela…")
-        val all = LinkedHashMap<String, Int>(); var lastTexts: List<String> = emptyList(); var cap = ""; appHit = false
+        val all = LinkedHashMap<String, Int>(); var lastTexts: List<String> = emptyList(); var cap = ""; appHit = false; lastHit = null; taught.clear()
         fun take() {
             val raw = collect(pkg); lastTexts = raw
             val nt = raw.map { norm(it) }
             val got = try { scan(pkg, raw) } catch (e: Exception) { emptyList() }
             if (got.isNotEmpty()) appHit = true
+            taught.putAll(learnedRead(curItems, pkg)) // 🎓 o que você ensinou vale mais que o palpite
             got.forEach { m -> m.forEach { (k, v) -> if (v > (all[k] ?: -2)) all[k] = v } }
             // post de fora do app (ou legenda que não bateu): números da tela inteira + legenda achada na tela
             val m = pairs(nt, 0, nt.size).toMutableMap(); extras(nt, m)
@@ -337,15 +508,19 @@ class ScreenReader : AccessibilityService() {
     private fun done(pkg: String, all0: Map<String, Int>, cap: String, texts: List<String>) {
         forcing = false
         val all = all0.toMutableMap(); all["follows"]?.let { all["fol"] = it; all.remove("follows") }
+        all.putAll(taught)
         val clean = ThreadsApi.sane(all)
         if (clean.keys.none { !it.startsWith("vs_") }) {
-            dump(texts); show("⚠ Não achei números nesta tela. Abra o post (ou \"Ver insights\") e toque de novo.\nA tela foi salva no 📋 diagnóstico.", 0xEEB45309.toInt())
+            dump(texts); show("⚠ Não achei números nesta tela. Abra o post (ou \"Ver insights\") e toque de novo.\nOu toque no 🎓 e me mostre o que é cada número.", 0xEEB45309.toInt())
             h.postDelayed({ if (!running) clearOverlay() }, 4500); return
         }
         val fromApp = appHit
-        if (!fromApp && core(cap).length >= 8) ThreadsApi.upsertOrphan(this, cap, clean, "forcado", if (pkg == ThreadsNotif.INSTA) "video" else "fila")
+        val kindNow = if (pkg == ThreadsNotif.INSTA) "video" else "fila"
+        val force = ThreadsApi.sane(taught).keys
+        if (!fromApp && core(cap).length >= 8) ThreadsApi.upsertOrphan(this, cap, clean, "forcado", kindNow, force)
+        else if (fromApp && force.isNotEmpty()) lastHit?.let { s -> ThreadsApi.upsertLocal(this, s.optLong("at"), s.optString("id"), s.optString("cap"), clean.filterKeys { it in force }, "ensinado", kindNow, force) }
         opened = 0; captured(clean, manual = true)
-        pill?.text = (pill?.text ?: "").toString() + if (fromApp) "\n📌 post do app" else if (core(cap).length >= 8) "\n📌 post de fora: \"" + cap.replace('\n', ' ').take(30) + "…\"" else "\n⚠ não achei a legenda: abra o post"
+        pill?.text = (pill?.text ?: "").toString() + (if (force.isNotEmpty()) "\n🎓 usei o que você ensinou (" + force.size + ")" else "") + if (fromApp) "\n📌 post do app" else if (core(cap).length >= 8) "\n📌 post de fora: \"" + cap.replace('\n', ' ').take(30) + "…\"" else "\n⚠ não achei a legenda: abra o post"
         Thread { try { ThreadsApi.process(this) } catch (e: Exception) { } }.start()
         h.postDelayed({ if (!running) clearOverlay() }, 4500)
     }
@@ -480,7 +655,7 @@ class ScreenReader : AccessibilityService() {
         offApp = 0
         val all = nodes(root).let { if (appPkg == ThreadsNotif.INSTA) vis(it) else it }
         // lê o que está na tela agora (números, seguidores)
-        val texts = all.mapNotNull { (it.text ?: it.contentDescription)?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() } }
+        val texts = collect(appPkg)
         if (appPkg == ThreadsNotif.INSTA) { try { igStep(all, texts) } catch (x: Exception) { ErrLog.log(this, "coleta instagram", x); next(3000) }; return }
         val got = try { scan(appPkg, texts) } catch (x: Exception) { emptyList() }
         if (state != "PROFILE" && !capturedNow) got.maxByOrNull { it.size }?.let { captured(it) }
@@ -729,6 +904,7 @@ class ScreenReader : AccessibilityService() {
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
         val ep = e?.packageName?.toString()
         if (!running && Macro.on(this) && ep == Macro.app(this)) { appPkg = ep; doneCells.clear(); startMacro() }
+        if (ep != null && !running) try { forceCaption(ep) } catch (x: Exception) { }
         if ((ep == ThreadsNotif.THREADS || ep == ThreadsNotif.INSTA) && !running) h.post { showReadBtn() }
         if (ep == ThreadsRefs.THREADS) ThreadsRefs.threadsActive(this) // 📌 salvou mídia no Threads? já puxa pras Referências
         if (running) return // durante a coleta, quem lê é o próprio macro
@@ -741,15 +917,7 @@ class ScreenReader : AccessibilityService() {
         last = now
         val pkg = e?.packageName?.toString() ?: return
         val root = rootInActiveWindow ?: return
-        val texts = ArrayList<String>()
-        fun walk(n: AccessibilityNodeInfo?, depth: Int) {
-            if (n == null || depth > 40 || texts.size > 600) return
-            if (pkg == ThreadsNotif.INSTA && !n.isVisibleToUser) { for (k in 0 until n.childCount) walk(n.getChild(k), depth + 1); return }
-            n.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { texts += it }
-            n.contentDescription?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { texts += it }
-            for (k in 0 until n.childCount) walk(n.getChild(k), depth + 1)
-        }
-        try { walk(root, 0) } catch (x: Exception) { return }
+        val texts = try { collect(pkg) } catch (x: Exception) { return }
         Thread {
             try {
                 val got = scan(pkg, texts)
@@ -887,15 +1055,16 @@ class ScreenReader : AccessibilityService() {
             if (!insights && mm["likes"] == null) { // sem rótulo: 1º número depois da legenda = curtidas
                 for (j in idx + 1..minOf(nt.size - 1, idx + 10)) { numOf(nt[j])?.let { mm["likes"] = it }; if (mm["likes"] != null) break }
             }
-            if (mm.isEmpty()) return@forEach
             mm["follows"]?.let { mm["fol"] = it; mm.remove("follows") }
-            got += mm
+            val force = if (insights && curItems.size == texts.size) learnedRead(curItems, pkg).also { mm.putAll(it) }.keys else emptySet()
+            if (mm.isEmpty()) return@forEach
+            got += mm; lastHit = s
             if (video) {
                 mm["likes"]?.let { Likes.record(this, "video", s.optString("id"), it, "tela") }
-                ThreadsApi.upsertLocal(this, s.optLong("at"), s.optString("id"), s.optString("cap"), mm, if (insights) "insights" else "tela", "video")
+                ThreadsApi.upsertLocal(this, s.optLong("at"), s.optString("id"), s.optString("cap"), mm, if (insights) "insights" else "tela", "video", force)
             } else {
                 mm["likes"]?.let { Likes.record(this, "fila", s.optString("id"), it, "tela") }
-                ThreadsApi.upsertLocal(this, s.optLong("at"), s.optString("id"), s.optString("cap"), mm, if (insights) "insights" else "tela")
+                ThreadsApi.upsertLocal(this, s.optLong("at"), s.optString("id"), s.optString("cap"), mm, if (insights) "insights" else "tela", "fila", force)
             }
         }
         if (found > 0) Store.prefs(this).edit().putLong("tela_last", System.currentTimeMillis()).putInt("tela_found", found).apply()

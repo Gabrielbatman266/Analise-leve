@@ -144,6 +144,8 @@ object SelfTest {
             appendLine("Coleta: " + Macro.lastRun(c) + " · posts com números: ${ThreadsApi.posts(c).size} (de fora do app: ${ThreadsApi.posts(c).count { it.optBoolean("orphan") }}) · Reels com números: ${ThreadsApi.posts(c).count { it.optString("kind") == "video" }}")
             try { Growth.report(c).let { r -> appendLine("Crescimento: " + r.lines.joinToString(" | ")); if (r.recs.isNotEmpty()) appendLine("Falta: " + r.recs.joinToString(" | ")) } } catch (e: Exception) { }
             try { appendLine("Threads → Refs: " + ThreadsRefs.diag(c)) } catch (e: Exception) { }
+            try { appendLine(Predictor.accuracyText(c)) } catch (e: Exception) { }
+            appendLine("Leitor ensinado: " + ReaderRules.summary(c) + " · legenda forçada: " + (if (CapForce.on(c)) "ligada" else "desligada"))
             Store.prefs(c).getString("tela_dump", null)?.let { appendLine("Tela onde não achou números: " + it.take(1500)) }
             val lk = Likes.all(c)
             appendLine("Curtidas guardadas: ${lk.size} (notif ${lk.count { it.optString("src") == "notif" }}, tela ${lk.count { it.optString("src") == "tela" }}) · mediana fotos ${Likes.median(c, "fila") ?: "-"} · vídeos ${Likes.median(c, "video") ?: "-"} · modelo treinado em ${Predictor.trainedOn()}")

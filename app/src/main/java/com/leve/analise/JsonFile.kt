@@ -25,12 +25,24 @@ object JsonFile {
         parse(f) ?: parse(File(f.path + ".bak")) ?: mutableListOf()
     }
 
+    private val peeks = ConcurrentHashMap<String, Pair<Long, List<JSONObject>>>()
+    /**
+     * Leitura rápida SÓ PRA CONSULTAR: devolve a lista em cache enquanto o arquivo não muda
+     * (antes cada consulta lia e interpretava o arquivo inteiro de novo — centenas de vezes por sorteio).
+     * Não altere os objetos devolvidos; pra mudar use read()/edit().
+     */
+    fun peek(f: File): List<JSONObject> = synchronized(lock(f)) {
+        val stamp = f.lastModified() * 31 + f.length()
+        peeks[f.path]?.takeIf { it.first == stamp }?.second ?: read(f).also { peeks[f.path] = (f.lastModified() * 31 + f.length()) to it }
+    }
+
     fun write(f: File, l: List<JSONObject>) = synchronized(lock(f)) {
         val a = JSONArray(); l.forEach { a.put(it) }
         val tmp = File(f.path + ".tmp")
         FileOutputStream(tmp).use { out -> out.write(a.toString().toByteArray(Charsets.UTF_8)); out.fd.sync() }
         if (f.exists() && parse(f) != null) f.copyTo(File(f.path + ".bak"), true)
         if (!tmp.renameTo(f)) { tmp.copyTo(f, true); tmp.delete() }
+        peeks.remove(f.path)
     }
 
     /** Lê, muda e grava sem ninguém mexer no meio. */

@@ -127,11 +127,32 @@ ${wins.joinToString("\n") { "- " + it.replace('\n', ' ') }}
 ${if (flops.isNotEmpty()) "Estas FLOPARAM (evite esse tom/assunto):\n" + flops.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
 ${if (mine.isNotEmpty()) "Jeito dela de escrever:\n" + mine.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
 ${Captions.learnedText(c)}
+${MetaKnow.THREADS}
+${Study.aiText(c)}
 Crie $n legendas NOVAS que sejam variações das que bombaram: mesmo tema, mesma estrutura, mesmo tipo de gancho e tamanho, com outras palavras. Nada copiado igual.
 Regras: naturais, no máximo 1 emoji, sem hashtags, nada explícito, nada que finja ser outra pessoa real.
 Responda só com JSON: {"legendas":["..."]}"""
         val arr = parseObj(ask(c, prompt, emptyList())).optJSONArray("legendas") ?: throw AiException(-2, "Resposta que não entendi")
         return (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotBlank() }.take(n)
+    }
+
+    /** 🧪 Estudo da semana: lê todos os números e devolve o que fazer. */
+    fun study(c: Context, data: String): JSONObject {
+        val prompt = """Você é analista de crescimento de uma criadora de conteúdo (Threads com fotos + Reels no Instagram). O objetivo dela é GANHAR SEGUIDORES e levar gente do Threads pro Instagram.
+${MetaKnow.THREADS}
+${MetaKnow.REELS}
+
+DADOS REAIS DESTE PERFIL (do app que ela usa):
+$data
+
+Estude os dados e responda em português do Brasil, direto, sem enrolação e sem conselho genérico: cada item tem que citar um número ou um exemplo dos dados acima. Se um dado for pouco pra concluir, diga "ainda é cedo pra dizer" em vez de inventar.
+Não descreva a aparência dela. Nada explícito.
+Responda só com JSON:
+{"resumo":"2 a 3 frases: está crescendo ou não, e o principal motivo",
+ "acoes":["até 4 coisas que estão funcionando e ela deve fazer MAIS (tipo de legenda, horário, ritmo, tipo de vídeo)"],
+ "parar":["até 3 coisas que os números mostram que não funcionam"],
+ "testar":["até 3 testes concretos pra esta semana, cada um com o que medir"]}"""
+        return parseObj(ask(c, prompt, emptyList()))
     }
 
     /** 📣 Legendas de divulgação do Instagram (autopromoção) a partir do que já trouxe seguidores. */
@@ -140,8 +161,10 @@ Responda só com JSON: {"legendas":["..."]}"""
 Objetivo: quem vê o post no Threads ir SEGUIR o Instagram dela. O post é uma foto dela com o @ do Instagram na imagem.
 ${if (mine.isNotEmpty()) "Jeito dela de escrever (imite o tom):\n" + mine.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
 ${if (wins.isNotEmpty()) "Legendas normais que BOMBARAM no perfil:\n" + wins.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
+${MetaKnow.THREADS}
 ${ThreadsApi.aiText(c)}
 ${Growth.aiText(c)}
+${Study.aiText(c)}
 ${Captions.learnedText(c)}
 ${if (tested.isNotBlank()) "Legendas de divulgação JÁ TESTADAS e o resultado (siga as de nota/seguidores altos, fuja das baixas):\n$tested" else ""}
 Crie $n legendas NOVAS de divulgação. Use o marcador {ig} exatamente uma vez, no lugar onde entra o Instagram dela (o app troca por link ou @).
@@ -285,6 +308,8 @@ Reply only with JSON: {"prompt":"..."}"""
         val ctxLine = if (ctxName.isEmpty()) "Os textos devem servir pra qualquer vídeo (genéricos)."
             else "TODOS os textos são pra vídeos do contexto \"$ctxName\"" + (if (ctxDesc.isNotBlank()) ": $ctxDesc" else "") + ". O texto tem que combinar com esse tipo de cena."
         val prompt = """Crie $n textos curtos pra aparecer ESCRITOS DENTRO de vídeos curtos (Reels/Threads) de uma criadora de conteúdo, em português do Brasil.
+${MetaKnow.REELS}
+${Study.aiText(c)}
 ${Learn.videoRulesText(c)}
 ${Predictor.insightsText(c, true)}
 ${ThreadsApi.videoAiText(c)}

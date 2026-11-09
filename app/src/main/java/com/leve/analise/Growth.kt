@@ -148,6 +148,9 @@ object Growth {
         }
         if (Captions.recentCaps(c).size < 10 && CaptionDB.texts(c, "ia").size < 30) recs += "💬 Banco de legendas normais pequeno: gere mais legendas."
         p(c).getString("promo_tune_last", null)?.let { lines += "🤖 $it" }
+        try { lines += Predictor.accuracyText(c) } catch (e: Exception) { }
+        val early = try { ThreadsApi.needReread(c).size } catch (e: Exception) { 0 }
+        if (early > 0) recs += "⏳ $early post(s) foram lidos cedo demais (menos de 3 h depois de postar): a nota deles espera outra leitura. Rode a 🤖 Coleta ou abra e toque no 📖."
 
         val ok = s.size >= 2
         if (!ok) lines.add(0, "Ainda sem registros de seguidores suficientes pra medir.")
@@ -174,14 +177,86 @@ object Growth {
                 p(c).edit().putString("promo_tune_last", android.text.format.DateFormat.format("dd/MM", now).toString() + ": divulgação passou de 1 a cada $e para 1 a cada $ne posts (traz ${"%.1f".format(r.promoVsNormal)}x um post normal)").apply()
             }
         }
-        if (!r.ok) return
+        val studied = try { Study.tick(c) } catch (e: Exception) { false }
+        if (!r.ok && !studied) return
         val nm = c.getSystemService(NotificationManager::class.java)
         val open = PendingIntent.getActivity(c, 58, Intent(c, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val body = (r.lines.take(4) + r.recs.take(2)).joinToString("\n")
+        val body = (r.lines.take(4) + r.recs.take(2) + (if (studied) listOf("🧪 Estudo da semana pronto: abra o cartão 📈 pra ver.") else emptyList())).joinToString("\n")
         try {
             nm.createNotificationChannel(NotificationChannel("estoque", "Estoque", NotificationManager.IMPORTANCE_DEFAULT))
             nm.notify(57, Notification.Builder(c, "estoque").setSmallIcon(android.R.drawable.ic_menu_info_details).setContentTitle("📈 Vigia do crescimento")
                 .setContentText(r.lines.firstOrNull()).setStyle(Notification.BigTextStyle().bigText(body)).setContentIntent(open).setAutoCancel(true).build())
         } catch (e: Exception) { }
+    }
+}
+
+/**
+ * 📚 Como a Meta diz que decide o alcance (explicações oficiais do Threads e do Instagram).
+ * Entra em todo pedido de legenda/texto pra IA e define os pesos da nota dos posts.
+ */
+object MetaKnow {
+    const val THREADS = """📚 COMO O THREADS DECIDE O ALCANCE (explicação oficial da Meta): ele prevê 5 coisas pra cada pessoa — curtir, ABRIR AS RESPOSTAS, SEGUIR você, CLICAR NO SEU PERFIL e passar direto. Clique no perfil e seguir pesam muito; passar direto, silenciar e ocultar derrubam. Post recente e conversa ativa ganham alcance.
+Então cada legenda precisa: (1) prender nas 3–5 primeiras palavras, pra não passarem direto; (2) dar um motivo fácil pra RESPONDER (opinião, escolha entre duas coisas, completar a frase, provocação leve); (3) deixar curiosidade de abrir o perfil. Conteúdo sexualmente sugestivo demais sai do "Para você": insinue, nunca explicite."""
+
+    const val REELS = """📚 COMO O REELS DECIDE O ALCANCE (Instagram/Mosseri): tempo assistido, replays, ENVIOS por mensagem, curtidas por alcance e se a pessoa segue depois de ver. Os 3 primeiros segundos decidem se ficam; vídeo original e sem marca d'água; texto curto e legível; final que emenda no começo (loop) aumenta o replay.
+Então o texto do vídeo precisa: abrir com um gancho que faz parar, ser lido em 2 segundos, e dar vontade de MANDAR pra alguém ("manda pra aquele amigo que…", situação em que a pessoa se reconhece)."""
+}
+
+/**
+ * 🧪 Estudo da semana: 1 pedido de IA por semana lê TODOS os números (crescimento, modelo, melhores e piores posts, ritmo,
+ * divulgação) e devolve o que está funcionando, o que parar e o que testar. Fica guardado e entra nos próximos pedidos de legenda.
+ */
+object Study {
+    private fun p(c: Context) = Store.prefs(c)
+    fun last(c: Context) = p(c).getLong("study_at", 0)
+    fun text(c: Context) = p(c).getString("study_txt", "") ?: ""
+    fun rules(c: Context): List<String> = try { val a = org.json.JSONArray(p(c).getString("study_rules", "[]")); (0 until a.length()).map { a.optString(it) } } catch (e: Exception) { emptyList() }
+    fun aiText(c: Context) = rules(c).takeIf { it.isNotEmpty() }?.let { "🧪 PLANO DA SEMANA (do estudo dos números deste perfil) — siga:\n" + it.joinToString("\n") { r -> "- $r" } } ?: ""
+    fun due(c: Context) = System.currentTimeMillis() - last(c) > 7 * 86400_000L
+
+    fun data(c: Context): String {
+        val r = Growth.report(c)
+        val all = ThreadsApi.posts(c)
+        val th = all.filter { it.optString("kind", "fila") != "video" && (ThreadsApi.readAge(it) ?: 99.0) >= 3.0 }.map { it to ThreadsApi.composite(c, it, all) }.sortedByDescending { it.second }
+        fun line(m: JSONObject, s: Double) = "- \"${m.optString("text").replace('\n', ' ').take(90)}\" → ${(s * 100).toInt()} pts · ${m.optInt("views")} views, ${m.optInt("likes")} curtidas, ${m.optInt("replies")} respostas" +
+            (if (m.has("visits")) ", ${m.optInt("visits")} visitas ao perfil" else "") + (if (m.has("fol")) ", +${"%.1f".format(m.optDouble("fol"))} seguidores" else "") +
+            " · postado " + java.text.SimpleDateFormat("EEE HH'h'", java.util.Locale("pt", "BR")).format(java.util.Date(m.optLong("at")))
+        val vd = all.filter { it.optString("kind") == "video" }.map { it to ThreadsApi.composite(c, it, all) }.sortedByDescending { it.second }
+        return buildString {
+            appendLine("CRESCIMENTO:"); r.lines.forEach { appendLine(it) }
+            if (r.recs.isNotEmpty()) { appendLine("ALERTAS:"); r.recs.forEach { appendLine(it) } }
+            appendLine(Predictor.accuracyText(c))
+            Predictor.insightsText(c, false).takeIf { it.isNotBlank() }?.let { appendLine("FOTOS/LEGENDAS — " + it) }
+            Predictor.insightsText(c, true).takeIf { it.isNotBlank() }?.let { appendLine("VÍDEOS — " + it) }
+            if (th.isNotEmpty()) { appendLine("MELHORES POSTS DO THREADS:"); th.take(6).forEach { appendLine(line(it.first, it.second)) } }
+            if (th.size >= 8) { appendLine("PIORES POSTS DO THREADS:"); th.takeLast(5).forEach { appendLine(line(it.first, it.second)) } }
+            if (vd.isNotEmpty()) { appendLine("REELS (melhor → pior):"); (vd.take(4) + vd.takeLast(2)).distinct().forEach { (m, s) -> appendLine("- \"${m.optString("text").replace('\n', ' ').take(60)}\" → ${(s * 100).toInt()} pts · ${m.optInt("views")} reproduções, ${m.optInt("likes")} curtidas, ${m.optInt("shares")} envios, ${m.optInt("saves")} salvos") } }
+            appendLine(Learn.repostStats(PostQueue.load(c)))
+            Burst.report(c).takeIf { it.isNotBlank() }?.let { appendLine("DUPLA/TRIO: " + it.replace('\n', ' ')) }
+        }
+    }
+
+    /** Roda o estudo (1 pedido de IA). Devolve o texto pra mostrar. */
+    fun run(c: Context): String {
+        val o = Ai.study(c, data(c))
+        val acoes = o.optJSONArray("acoes")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty().filter { it.isNotBlank() }
+        val testar = o.optJSONArray("testar")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty().filter { it.isNotBlank() }
+        val parar = o.optJSONArray("parar")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty().filter { it.isNotBlank() }
+        val txt = buildString {
+            append(o.optString("resumo").trim())
+            if (acoes.isNotEmpty()) append("\n\n✅ Fazer mais:\n" + acoes.joinToString("\n") { "• $it" })
+            if (parar.isNotEmpty()) append("\n\n⛔ Parar:\n" + parar.joinToString("\n") { "• $it" })
+            if (testar.isNotEmpty()) append("\n\n🧪 Testar esta semana:\n" + testar.joinToString("\n") { "• $it" })
+        }.trim()
+        if (txt.isEmpty()) throw AiException(-2, "A IA não devolveu o estudo")
+        p(c).edit().putString("study_txt", txt).putLong("study_at", System.currentTimeMillis())
+            .putString("study_rules", org.json.JSONArray(acoes.take(4) + parar.take(2).map { "EVITE: $it" } + testar.take(2).map { "TESTE: $it" }).toString()).apply()
+        return txt
+    }
+
+    /** No resumo das 21h: se passou 1 semana, estuda sozinho (dentro do limite diário de IA). */
+    fun tick(c: Context): Boolean {
+        if (!due(c) || Ai.key(c).isEmpty() || !Auto.canSpend(c) || ThreadsApi.posts(c).size < 8) return false
+        return try { run(c); true } catch (e: Exception) { ErrLog.log(c, "estudo da semana", e); p(c).edit().putLong("study_at", System.currentTimeMillis() - 6 * 86400_000L).apply(); false }
     }
 }

@@ -86,43 +86,97 @@ object Predictor {
     }
 
     // ---------- treino
-    private fun samples(c: Context): List<Pair<List<String>, Double>> {
-        val out = ArrayList<Pair<List<String>, Double>>()
+    private class Sample(val f: List<String>, val y: Double, val w: Double)
+
+    private fun gapB(ms: Long) = when { ms < 20 * 60_000L -> "colado"; ms < 60 * 60_000L -> "curto"; ms < 3 * 3600_000L -> "medio"; else -> "longo" }
+
+    private fun samples(c: Context): List<Sample> {
+        val out = ArrayList<Sample>()
         val lib = VideoExport.library(c).associateBy { it.optString("id") }
         val q = PostQueue.load(c).associateBy { it.optString("id") }
         val seen = HashSet<String>()
-        SendLog.all(c).filter { it.optString("nota").isNotEmpty() || ThreadsApi.targetFor(c, it.optLong("at")) != null }.forEach { e ->
-            val y = ThreadsApi.targetFor(c, e.optLong("at")) ?: score(e.optString("nota")); val at = e.optLong("at"); seen += e.optString("id") + "@" + (at / 3600_000L)
-            if (e.optString("kind") == "video") lib[e.optString("id")]?.let { out += videoFeats(c, it, e.optString("cap"), at) to y }
-            else q[e.optString("id")]?.let { out += photoFeats(c, it, e.optString("cap"), at) to y }
+        val now = System.currentTimeMillis()
+        // posts recentes pesam mais (o que funciona muda com o tempo): metade do peso a cada 60 dias
+        fun wt(at: Long) = Math.pow(0.5, (now - at) / (60.0 * 86400_000L)).coerceIn(0.25, 1.0)
+        val sends = SendLog.all(c)
+        val byKind = sends.groupBy { it.optString("kind") == "video" }.mapValues { (_, v) -> v.sortedBy { it.optLong("at") } }
+        sends.forEach { e ->
+            val at = e.optLong("at")
+            val y = ThreadsApi.targetFor(c, at) ?: e.optString("nota").takeIf { it.isNotEmpty() }?.let { score(it) } ?: return@forEach
+            seen += e.optString("id") + "@" + (at / 3600_000L)
+            val video = e.optString("kind") == "video"
+            val extra = ArrayList<String>()
+            // ritmo: quanto tempo depois do post anterior do mesmo tipo, e a posição na dupla/trio
+            byKind[video]?.let { l -> val i = l.indexOfFirst { it.optLong("at") == at }; if (i > 0) extra += "g.gap:" + gapB(at - l[i - 1].optLong("at")) }
+            if (!video && e.optInt("rajada", 1) > 1) extra += "g.pos:" + e.optInt("pos", 1)
+            if (video) lib[e.optString("id")]?.let { out += Sample(videoFeats(c, it, e.optString("cap"), at) + extra, y, wt(at)) }
+            else q[e.optString("id")]?.let { out += Sample(photoFeats(c, it, e.optString("cap"), at) + extra, y, wt(at)) }
         }
         // notas antigas (antes do histórico de envios)
-        lib.values.forEach { o -> Learn.hist(o).forEach { (at, k) -> if (seen.add(o.optString("id") + "@" + (at / 3600_000L))) out += videoFeats(c, o, o.optString("legenda"), at) to score(k) } }
-        q.values.forEach { o -> Learn.hist(o).forEach { (at, k) -> if (seen.add(o.optString("id") + "@" + (at / 3600_000L))) out += photoFeats(c, o, PostQueue.captionOf(o), at) to score(k) } }
+        lib.values.forEach { o -> Learn.hist(o).forEach { (at, k) -> if (seen.add(o.optString("id") + "@" + (at / 3600_000L))) out += Sample(videoFeats(c, o, o.optString("legenda"), at), score(k), wt(at)) } }
+        q.values.forEach { o -> Learn.hist(o).forEach { (at, k) -> if (seen.add(o.optString("id") + "@" + (at / 3600_000L))) out += Sample(photoFeats(c, o, PostQueue.captionOf(o), at), score(k), wt(at)) } }
         return out
     }
 
-    /** Re-treina quando surgem notas novas (rápido). */
-    @Synchronized fun train(c: Context, force: Boolean = false) {
-        val s = SendLog.all(c).count { it.optString("nota").isNotEmpty() }.toString() + ":" + VideoExport.library(c).sumOf { Learn.rated(it) } + ":" + PostQueue.load(c).sumOf { Learn.rated(it) }
-        if (!force && s == sig) return
-        val data = samples(c)
-        sig = s; nTrain = data.size
-        if (data.size < 4) { w = emptyMap(); bias = 0.5; return }
+    private fun fit(data: List<Sample>, epochs: Int = 60): Pair<Map<String, Double>, Double> {
         val ww = HashMap<String, Double>()
-        featCount.clear(); data.forEach { (f, _) -> f.forEach { featCount[it] = (featCount[it] ?: 0) + 1 } }
-        var b = data.map { it.second }.average()
+        val tw = data.sumOf { it.w }
+        var b = if (tw > 0) data.sumOf { it.y * it.w } / tw else 0.5
         val lr = 0.05; val l2 = 0.02
-        repeat(60) {
-            data.shuffled().forEach { (f, y) ->
-                val pred = b + f.sumOf { ww[it] ?: 0.0 }
-                val err = (y - pred).coerceIn(-1.0, 1.0)
+        val rnd = java.util.Random(7)
+        repeat(epochs) {
+            data.shuffled(rnd).forEach { s ->
+                val pred = b + s.f.sumOf { ww[it] ?: 0.0 }
+                val err = (s.y - pred).coerceIn(-1.0, 1.0) * s.w
                 b += lr * 0.2 * err
-                f.forEach { k -> val cur = ww[k] ?: 0.0; ww[k] = cur + lr * (err - l2 * cur) }
+                s.f.forEach { k -> val cur = ww[k] ?: 0.0; ww[k] = cur + lr * (err - l2 * cur) }
             }
         }
+        return ww to b
+    }
+
+    @Volatile private var lastCheck = 0L
+    @Volatile private var pairAcc = -1.0   // % de comparações que o modelo acerta em posts que ele NÃO viu no treino
+    @Volatile private var skill = 0.0      // 0 = não ajuda; 1 = perfeito
+    @Volatile private var trust = 1.5      // quanto a previsão pesa contra o histórico do próprio item
+
+    /** Re-treina quando surgem notas novas (rápido). Confere no máximo a cada 30 s (antes relia 3 arquivos a cada consulta). */
+    @Synchronized fun train(c: Context, force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && sig.isNotEmpty() && now - lastCheck < 30_000L) return
+        lastCheck = now
+        val s = SendLog.all(c).count { it.optString("nota").isNotEmpty() }.toString() + ":" + VideoExport.library(c).sumOf { Learn.rated(it) } + ":" + PostQueue.load(c).sumOf { Learn.rated(it) } + ":" + ThreadsApi.posts(c).size
+        if (!force && s == sig) return
+        val raw = samples(c)
+        sig = s; nTrain = raw.size
+        if (raw.size < 4) { w = emptyMap(); bias = 0.5; pairAcc = -1.0; skill = 0.0; trust = 1.0; return }
+        featCount.clear(); raw.forEach { it.f.forEach { k -> featCount[k] = (featCount[k] ?: 0) + 1 } }
+        // palavra vista 1 vez só decora o post (não ensina nada): fica de fora
+        val data = raw.map { s0 -> Sample(s0.f.filter { !(it.contains("w:") && (featCount[it] ?: 0) < 2) }, s0.y, s0.w) }
+        // 🧪 prova: treina sem uma parte, prevê essa parte e mede o acerto (5 rodadas)
+        if (data.size >= 12) {
+            val k = 5; val idx = data.indices.shuffled(java.util.Random(11))
+            val preds = DoubleArray(data.size); val base = DoubleArray(data.size)
+            for (fold in 0 until k) {
+                val test = idx.filterIndexed { i, _ -> i % k == fold }.toSet()
+                val tr = data.filterIndexed { i, _ -> i !in test }
+                val (fw, fb) = fit(tr, 40)
+                val mean = tr.map { it.y }.average()
+                test.forEach { i -> preds[i] = (fb + data[i].f.sumOf { fw[it] ?: 0.0 }).coerceIn(0.02, 0.98); base[i] = mean }
+            }
+            val mae = data.indices.sumOf { Math.abs(preds[it] - data[it].y) } / data.size
+            val mae0 = data.indices.sumOf { Math.abs(base[it] - data[it].y) } / data.size
+            var ok = 0; var tot = 0
+            val smp = data.indices.shuffled(java.util.Random(3)).take(120)
+            for (a in smp) for (b2 in smp) if (a < b2 && Math.abs(data[a].y - data[b2].y) > 0.15) { tot++; if ((preds[a] - preds[b2]) * (data[a].y - data[b2].y) > 0) ok++ }
+            pairAcc = if (tot >= 10) ok.toDouble() / tot else -1.0
+            skill = if (mae0 > 0) (1 - mae / mae0).coerceIn(-0.5, 1.0) else 0.0
+            // confia na previsão na medida em que ela acerta: sem acerto quase não pesa; acertando bem pesa como 4–5 notas
+            trust = when { pairAcc < 0 -> 1.5; pairAcc <= 0.52 -> 0.4; else -> (0.4 + (pairAcc - 0.5) * 16).coerceAtMost(4.5) }
+        } else { pairAcc = -1.0; skill = 0.0; trust = 1.5 }
+        val (ww, b) = fit(data)
         w = ww; bias = b
-        Store.prefs(c).edit().putInt("pred_n", data.size).apply()
+        Store.prefs(c).edit().putInt("pred_n", data.size).putFloat("pred_acc", pairAcc.toFloat()).apply()
     }
 
     private fun predict(f: List<String>) = (bias + f.sumOf { w[it] ?: 0.0 }).coerceIn(0.02, 0.98)
@@ -137,8 +191,17 @@ object Predictor {
     fun ready(c: Context): Boolean { train(c); return w.isNotEmpty() }
     fun trainedOn() = nTrain
 
-    /** Junta o histórico do próprio item com a previsão: item com poucas notas confia mais na previsão. */
-    fun blend(itemMean: Double, rated: Int, pred: Double, k: Double = 3.0) = (itemMean * rated + pred * k) / (rated + k)
+    /** Junta o histórico do próprio item com a previsão. O peso da previsão vem da prova: modelo que acerta pouco quase não influencia. */
+    fun blend(itemMean: Double, rated: Int, pred: Double, k: Double = trust) = (0.5 + itemMean * rated + pred * k) / (1.0 + rated + k)
+
+    /** Quanto dá pra confiar no modelo, em palavras. */
+    fun accuracyText(c: Context): String {
+        train(c)
+        if (nTrain < 4) return "🎯 Modelo de previsão: ainda aprendendo ($nTrain posts com resultado; precisa de 12 pra se testar)."
+        if (pairAcc < 0) return "🎯 Modelo de previsão: treinado em $nTrain posts (precisa de 12 com resultados diferentes pra se testar)."
+        val lvl = when { pairAcc >= 0.70 -> "alta"; pairAcc >= 0.60 -> "média"; pairAcc > 0.52 -> "baixa"; else -> "nenhuma por enquanto (está no chute: pesa quase nada no sorteio)" }
+        return "🎯 Modelo de previsão: entre dois posts que ele nunca viu, acerta qual vai melhor em ${(pairAcc * 100).toInt()}% das vezes ($nTrain posts) · confiança $lvl"
+    }
 
     // ---------- o que aprendeu, em palavras
     private fun human(f: String): String? {
@@ -150,6 +213,8 @@ object Predictor {
             k.startsWith("dur:") -> "vídeo " + mapOf("curto" to "curto (até 7 s)", "medio" to "médio (8–11 s)", "longo" to "longo (12 s+)")[k.removePrefix("dur:")]
             k.startsWith("h:") -> "postar " + mapOf("madrugada" to "de madrugada", "manha" to "de manhã", "almoco" to "no almoço", "tarde" to "à tarde", "inicio_noite" to "no começo da noite", "noite" to "à noite")[k.removePrefix("h:")]
             k == "d:fds" -> "fim de semana"; k == "d:semana" -> "dia de semana"
+            k.startsWith("gap:") -> "postar " + mapOf("colado" to "colado no anterior (menos de 20 min)", "curto" to "20–60 min depois do anterior", "medio" to "1–3 h depois do anterior", "longo" to "mais de 3 h depois do anterior")[k.removePrefix("gap:")]
+            k.startsWith("pos:") -> k.removePrefix("pos:") + "º post da dupla/trio"
             k.startsWith("look:") -> null
             k.startsWith("cena:") -> null
             else -> {
@@ -168,7 +233,7 @@ object Predictor {
     fun insights(c: Context, video: Boolean?, n: Int = 5): Pair<List<String>, List<String>> {
         train(c)
         val pre = when (video) { true -> "v."; false -> "f."; null -> "" }
-        val e = w.entries.filter { it.key.startsWith(pre) && (featCount[it.key] ?: 0) >= 2 }.mapNotNull { en -> human(en.key)?.let { it to en.value } }
+        val e = w.entries.filter { (it.key.startsWith(pre) || it.key.startsWith("g.")) && (featCount[it.key] ?: 0) >= 2 }.mapNotNull { en -> human(en.key)?.let { it to en.value } }
             .groupBy { it.first }.map { (k, v) -> k to v.sumOf { it.second } }
         val pos = e.filter { it.second > 0.03 }.sortedByDescending { it.second }.take(n).map { "${it.first} (+${(it.second * 100).toInt()}%)" }
         val neg = e.filter { it.second < -0.03 }.sortedBy { it.second }.take(n).map { "${it.first} (${(it.second * 100).toInt()}%)" }

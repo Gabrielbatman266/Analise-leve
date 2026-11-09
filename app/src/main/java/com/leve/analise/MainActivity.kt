@@ -353,6 +353,11 @@ class MainActivity : Activity() {
         text("✋ Modo manual: role e abra os posts você mesmo; quando o leitor captar, aparece um aviso verde.", 12f, MUTED, parent = crk)
         text("📖 Forçar leitura: no Threads/Instagram aparece um botãozinho 📖 na borda. Abra o post ou o \"Ver insights\" e toque nele: lê, espera carregar, lê de novo, desce pra ver o resto e guarda (até post feito fora do app). Arraste pra mudar de lugar; segure pra esconder 30 min.", 12f, MUTED, parent = crk)
         chips(crk, listOf("📖 Botão de leitura ligado", "Sem botão"), { if (Macro.readBtn(this)) "📖 Botão de leitura ligado" else "Sem botão" }) { Macro.setReadBtn(this, it.startsWith("📖")) }
+        text("🎓 Ensinar: embaixo do 📖 tem o 🎓. Abra um post ou os insights, toque no 🎓 e marque o que é cada número (Views, Curtidas, Visitas…). Ele guarda e passa a ler sozinho naquele tipo de tela, na coleta e no modo manual.", 12f, MUTED, parent = crk)
+        val tvRules = text("🎓 Ensinado: " + ReaderRules.summary(this), 12f, OK, parent = crk)
+        button("Apagar o que ensinei", crk) { ReaderRules.clear(this); tvRules.text = "🎓 Ensinado: " + ReaderRules.summary(this); toast("Regras apagadas") }
+        text("✍ Legenda forçada: se ao mandar o post pro Threads/Instagram o campo da legenda vier vazio, o leitor de tela escreve a legenda lá (não publica nada, só preenche).", 12f, MUTED, parent = crk)
+        chips(crk, listOf("✍ Forçar legenda", "Não forçar"), { if (CapForce.on(this)) "✍ Forçar legenda" else "Não forçar" }) { CapForce.setOn(this, it.startsWith("✍")) }
         val rpz = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; crk.addView(rpz, lpMatch())
         val bPz = button("", rpz, weight = true) { }
         fun pzT() { bPz.text = if (Macro.paused(this)) "▶ Retomar o leitor de tela" else "⏸ Pausar o leitor por 1 h" }
@@ -1014,6 +1019,13 @@ class MainActivity : Activity() {
             tvG.text = r?.lines?.joinToString("\n\n") ?: "Sem dados ainda."
             tvR.text = r?.recs?.joinToString("\n") { "• $it" }.orEmpty(); tvR.visibility = if (r?.recs.isNullOrEmpty()) View.GONE else View.VISIBLE
         } }.start() }
+        val tvS = text("", 12f, FG, parent = cg)
+        fun sUi() { tvS.text = Study.text(this).takeIf { it.isNotBlank() }?.let { "🧪 Estudo da semana (" + android.text.format.DateFormat.format("dd/MM", Study.last(this)) + "):\n" + it } ?: "🧪 Toda semana a IA estuda todos os números e diz o que fazer mais, o que parar e o que testar. Também dá pra pedir agora." }
+        sUi()
+        button("🧪 Estudar meus números agora (IA)", cg) {
+            toast("Estudando… (1 pedido de IA)")
+            Thread { val m = try { Study.run(this); "✓ Estudo pronto" } catch (e: Exception) { "Erro: ${e.message}" }; ui.post { toast(m); sUi() } }.start()
+        }
         button("↻ Atualizar", rg, weight = true) { gUi() }
         button("📋 Copiar", rg, weight = true) { (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("crescimento", tvG.text.toString() + "\n" + tvR.text)); toast("Copiado") }
         gUi()

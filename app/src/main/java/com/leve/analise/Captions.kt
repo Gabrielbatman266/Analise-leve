@@ -52,6 +52,8 @@ object Captions {
         val ex = (refs + top).filter { it !in best }.distinct().take(14)
         return """Você escreve legendas para posts de foto no Threads, em português do Brasil, no estilo de perfis que viralizam.
 Vibe: ${vibe(c)}. Tamanho: ${size(c)}. Contexto: ${ctx(c).ifEmpty { "nenhum" }}.
+${MetaKnow.THREADS}
+${Study.aiText(c)}
 ${learnedText(c)}
 ${Predictor.insightsText(c, false)}
 ${ThreadsApi.aiText(c)}

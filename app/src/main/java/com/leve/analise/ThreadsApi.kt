@@ -64,8 +64,9 @@ object ThreadsApi {
         } catch (e: Exception) { ErrLog.log(c, "API Threads: renovar token", e) }
     }
 
-    fun posts(c: Context) = JsonFile.read(file(c))
-    fun followers(c: Context) = JsonFile.read(folFile(c))
+    /** Só pra consultar (lista em cache): quem for ALTERAR usa JsonFile.read/edit. */
+    fun posts(c: Context): List<JSONObject> = JsonFile.peek(file(c))
+    fun followers(c: Context): List<JSONObject> = JsonFile.peek(folFile(c))
     fun followersNow(c: Context) = followers(c).lastOrNull()?.optInt("n")
 
     private fun norm(s: String) = s.lowercase().replace(Regex("\\s+"), " ").trim()
@@ -86,7 +87,7 @@ object ThreadsApi {
             val fmt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", java.util.Locale.US)
             val now = System.currentTimeMillis()
             var n = 0
-            val store = posts(c).associateBy { it.optString("id") }.toMutableMap()
+            val store = JsonFile.read(file(c)).associateBy { it.optString("id") }.toMutableMap()
             for (i in 0 until list.length()) {
                 val m = list.getJSONObject(i)
                 val at = try { fmt.parse(m.optString("timestamp"))?.time ?: 0 } catch (e: Exception) { 0L }
@@ -99,6 +100,7 @@ object ThreadsApi {
                     val v = e.optJSONObject("total_value")?.optInt("value") ?: e.optJSONArray("values")?.optJSONObject(0)?.optInt("value") ?: 0
                     o.put(e.optString("name"), v)
                 }
+                snap(o, now)
                 store[o.optString("id")] = o; n++
             }
             attachToSends(c, store.values.toList())
@@ -151,29 +153,43 @@ object ThreadsApi {
         p(c).edit().putBoolean("repair_fol", true).apply()
     }
 
-    fun upsertLocal(c: Context, sendAt: Long, photoId: String, text: String, m0: Map<String, Int>, src: String, kind: String = "fila") {
+    /** Guarda uma "foto do momento" (idade do post + números) pra aprender a curva de crescimento dos SEUS posts. */
+    private fun snap(o: JSONObject, now: Long) {
+        val at = o.optLong("at"); if (at <= 0 || (o.optBoolean("orphan") && !o.optBoolean("atOk"))) return
+        val age = (now - at) / 3600_000.0; if (age < 0.05) return
+        val a = o.optJSONArray("snaps") ?: JSONArray().also { o.put("snaps", it) }
+        val last = a.optJSONObject(a.length() - 1)
+        val e = if (last != null && age - last.optDouble("a") < 0.5) last else JSONObject().also { a.put(it) }
+        e.put("a", Math.round(age * 10) / 10.0).put("v", o.optInt("views", -1)).put("l", o.optInt("likes", -1))
+        while (a.length() > 10) a.remove(1) // mantém a primeira e as mais novas
+    }
+
+    fun upsertLocal(c: Context, sendAt: Long, photoId: String, text: String, m0: Map<String, Int>, src: String, kind: String = "fila", force: Set<String> = emptySet()) {
         val m = sane(m0)
         if (m.isEmpty()) return
         JsonFile.edit(file(c)) { l ->
             val o = l.firstOrNull { it.optLong("send") == sendAt } ?: JSONObject().put("id", "$src:$sendAt").put("send", sendAt)
                 .put(if (kind == "video") "video" else "photo", photoId).put("kind", kind)
                 .put("at", sendAt).put("text", text).also { l.add(0, it) }
-            m.forEach { (k, v) -> if (v > o.optInt(k, -1)) o.put(k, v) }
+            m.forEach { (k, v) -> if (k in force || k.startsWith("vs_") || v > o.optInt(k, -1)) o.put(k, v) }
             o.put("upd", System.currentTimeMillis()).put("src", if (o.optString("src").isEmpty()) src else o.optString("src"))
+            snap(o, System.currentTimeMillis())
             while (l.size > 400) l.removeAt(l.size - 1)
         }
         p(c).edit().putLong("loc_last_$src", System.currentTimeMillis()).apply()
     }
 
     /** Post feito fora do app: guarda números pela legenda (sem foto ligada). */
-    fun upsertOrphan(c: Context, text: String, m0: Map<String, Int>, src: String, kind: String = "fila") {
+    fun upsertOrphan(c: Context, text: String, m0: Map<String, Int>, src: String, kind: String = "fila", force: Set<String> = emptySet(), postedAt: Long = 0) {
         val m = sane(m0)
         if (m.isEmpty() || text.length < 8) return
         val key = (if (kind == "video") "orfv:" else "orf:") + norm(text).take(60).hashCode()
         JsonFile.edit(file(c)) { l ->
             val o = l.firstOrNull { it.optString("id") == key } ?: JSONObject().put("id", key).put("kind", kind).put("text", text).put("at", System.currentTimeMillis()).put("orphan", true).also { l.add(0, it) }
-            m.forEach { (k, v) -> if (v > o.optInt(k, -1)) o.put(k, v) }
+            m.forEach { (k, v) -> if (k in force || k.startsWith("vs_") || v > o.optInt(k, -1)) o.put(k, v) }
+            if (postedAt > 0 && (!o.optBoolean("atOk") || kotlin.math.abs(o.optLong("at") - postedAt) > 36 * 3600_000L)) o.put("at", postedAt).put("atOk", true)
             o.put("upd", System.currentTimeMillis()).put("src", src)
+            snap(o, System.currentTimeMillis())
             while (l.size > 400) l.removeAt(l.size - 1)
         }
         invalidate()
@@ -193,9 +209,14 @@ object ThreadsApi {
     fun process(c: Context) {
         try { repair(c) } catch (e: Exception) { }
         try { repairFollowers(c) } catch (e: Exception) { }
-        val ps = posts(c); if (ps.isEmpty()) return
+        val ps = JsonFile.read(file(c)); if (ps.isEmpty()) return
         attributeFollowers(c, ps)
         JsonFile.write(file(c), ps)
+        // uma vez: a fórmula da nota mudou e números errados foram limpos → as notas automáticas são conferidas de novo
+        if (!p(c).getBoolean("rerate_v2", false)) {
+            JsonFile.edit(File(c.filesDir, "envios.json")) { l -> l.forEach { if (!it.optBoolean("mn")) it.remove("apiFinal") } }
+            p(c).edit().putBoolean("rerate_v2", true).apply()
+        }
         rateFromApi(c)
         invalidate()
         try { Predictor.train(c, force = true) } catch (e: Exception) { ErrLog.log(c, "modelo", e) }
@@ -236,49 +257,155 @@ object ThreadsApi {
         }
     }
 
-    // ---------- nota pelos números exatos
-    private fun pct(v: Double, all: List<Double>) = if (all.isEmpty()) 0.5 else all.count { it < v }.toDouble() / all.size
+    // ---------- curva de crescimento: quanto do número final um post já tem com X horas
+    private val AGES = doubleArrayOf(0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 24.0, 48.0, 96.0, 168.0)
+    private val DEF_T = doubleArrayOf(.10, .18, .30, .48, .68, .85, .92, .98, 1.0, 1.0)  // Threads: quase tudo no 1º dia
+    private val DEF_V = doubleArrayOf(.04, .07, .12, .20, .33, .50, .60, .78, .92, 1.0)  // Reels: cauda longa
+    @Volatile private var curves: Pair<List<JSONObject>, Pair<DoubleArray, DoubleArray>>? = null
 
-    /** Pontuação composta (0..1, relativa aos seus posts): curtidas, respostas, reposts/citações/compart., visualizações e seguidores. */
-    fun composite(c: Context, m: JSONObject, ps0: List<JSONObject> = posts(c)): Double {
-        val kind = m.optString("kind", "fila").ifEmpty { "fila" }
-        val ps = ps0.filter { it.optString("kind", "fila").ifEmpty { "fila" } == kind }.ifEmpty { ps0 } // vídeo compara com vídeo, foto com foto
-        fun col(k: String) = ps.map { it.optDouble(k, 0.0) }
-        val inter = { o: JSONObject -> o.optDouble("reposts", 0.0) + o.optDouble("quotes", 0.0) + o.optDouble("shares", 0.0) + o.optDouble("saves", 0.0) }
-        // 👤 visitas ao perfil = intenção de seguir: entra quando o post tem esse número
-        val hasVis = m.has("visits") && ps.count { it.has("visits") } >= 3
-        return (if (hasVis) 0.22 else 0.25) * pct(m.optDouble("likes", 0.0), col("likes")) +
-            (if (hasVis) 0.18 else 0.20) * pct(m.optDouble("replies", 0.0), col("replies")) +
-            0.10 * pct(inter(m), ps.map(inter)) +
-            (if (hasVis) 0.15 else 0.20) * pct(m.optDouble("views", 0.0), col("views")) +
-            (if (hasVis) 0.10 * pct(m.optDouble("visits", 0.0), ps.filter { it.has("visits") }.map { it.optDouble("visits", 0.0) }) else 0.0) +
-            0.25 * pct(m.optDouble("fol", 0.0), col("fol"))
+    private fun isVideo(o: JSONObject) = o.optString("kind", "fila") == "video"
+
+    private fun learnCurve(ps: List<JSONObject>, video: Boolean): DoubleArray {
+        val def = if (video) DEF_V else DEF_T
+        val obs = Array(AGES.size) { ArrayList<Double>() }
+        ps.filter { isVideo(it) == video }.forEach { o ->
+            val a = o.optJSONArray("snaps") ?: return@forEach; if (a.length() < 2) return@forEach
+            val last = a.getJSONObject(a.length() - 1); if (last.optDouble("a") < (if (video) 72.0 else 30.0)) return@forEach
+            val key = if (last.optInt("v", -1) > 0) "v" else "l"; val fin = last.optInt(key, -1).toDouble(); if (fin < 10) return@forEach
+            for (k in 0 until a.length() - 1) {
+                val sn = a.getJSONObject(k); val v = sn.optInt(key, -1); if (v < 0) continue
+                val la = Math.log(maxOf(0.25, sn.optDouble("a")))
+                val idx = AGES.indices.minByOrNull { kotlin.math.abs(Math.log(AGES[it]) - la) } ?: continue
+                obs[idx] += (v / fin).coerceIn(0.0, 1.0)
+            }
+        }
+        val out = DoubleArray(AGES.size) { i -> val l = obs[i].sorted(); if (l.size >= 3) (l[l.size / 2] * l.size + def[i] * 2) / (l.size + 2) else def[i] }
+        for (i in 1 until out.size) out[i] = maxOf(out[i], out[i - 1])
+        return out
     }
 
-    /** Dá a nota com os números exatos: com 6 h já marca os que bombam; com 24 h dá a nota final (pode corrigir notas automáticas). */
-    private fun rateFromApi(c: Context) {
-        val ps = posts(c).filter { it.optLong("send") > 0 }
-        if (posts(c).size < 5) return
-        val sends = SendLog.all(c).associateBy { it.optLong("at") }
-        ps.forEach { m ->
-            val e = sends[m.optLong("send")] ?: return@forEach
-            val age = (System.currentTimeMillis() - m.optLong("at")) / 3600_000.0
-            val s = composite(c, m)
-            val k = when { s >= 0.85 -> "top"; s >= 0.62 -> "good"; age >= 24 && s <= 0.3 -> "bad"; age >= 24 -> "meh"; else -> null } ?: return@forEach
-            val cur = e.optString("nota")
-            val final = age >= 24
-            if (e.optBoolean("mn")) return@forEach // nota que VOCÊ deu: não mexo
-            if (cur == k || (cur.isNotEmpty() && !final)) return@forEach
-            if (cur.isNotEmpty() && e.optBoolean("apiFinal")) return@forEach
-            try { SendLog.rate(c, e, k); if (final) SendLog.mark(c, e.optLong("at"), "apiFinal") } catch (x: Exception) { ErrLog.log(c, "API Threads: nota", x) }
+    private fun curve(ps: List<JSONObject>, video: Boolean): DoubleArray {
+        val c0 = curves
+        val pair = if (c0 != null && c0.first === ps) c0.second else (learnCurve(ps, false) to learnCurve(ps, true)).also { curves = ps to it }
+        return if (video) pair.second else pair.first
+    }
+
+    /** Fração (0..1) do resultado final que um post costuma ter com [ageH] horas. */
+    private fun grown(cv: DoubleArray, ageH: Double): Double {
+        if (ageH <= AGES[0]) return cv[0] * maxOf(0.2, ageH / AGES[0])
+        if (ageH >= AGES.last()) return 1.0
+        val i = AGES.indexOfFirst { it >= ageH }
+        val t = (Math.log(ageH) - Math.log(AGES[i - 1])) / (Math.log(AGES[i]) - Math.log(AGES[i - 1]))
+        return cv[i - 1] + (cv[i] - cv[i - 1]) * t
+    }
+
+    /** Com quantas horas de vida o post estava quando foi lido pela última vez (null = não dá pra saber). */
+    fun readAge(m: JSONObject): Double? {
+        if (m.optBoolean("orphan") && !m.optBoolean("atOk")) return null
+        val at = m.optLong("at"); val upd = m.optLong("upd"); if (at <= 0 || upd <= 0) return null
+        return maxOf(0.0, (upd - at) / 3600_000.0)
+    }
+
+    /** Posts lidos cedo demais (menos de 3 h de vida) e que já têm mais de 6 h: precisam de outra leitura pra nota ficar certa. */
+    fun needReread(c: Context) = posts(c).filter { it.optLong("send") > 0 && System.currentTimeMillis() - it.optLong("at") in 6 * 3600_000L..(4 * 86400_000L) && (readAge(it) ?: 99.0) < 3.0 }
+
+    // ---------- nota pelos números exatos
+    /** Posição do valor entre os seus posts (0..1). Empates ficam no meio (antes um monte de zeros puxava tudo pra baixo). */
+    private fun pct(v: Double, sorted: DoubleArray): Double {
+        if (sorted.isEmpty()) return 0.5
+        var lo = 0; var hi = sorted.size
+        while (lo < hi) { val mid = (lo + hi) / 2; if (sorted[mid] < v - 1e-9) lo = mid + 1 else hi = mid }
+        var up = lo; while (up < sorted.size && sorted[up] <= v + 1e-9) up++
+        return (lo + 0.5 * (up - lo)) / sorted.size
+    }
+
+    /**
+     * Pesos de cada número, seguindo o que a Meta diz que usa:
+     *  - Threads prevê curtir, abrir as respostas, SEGUIR e CLICAR NO PERFIL → seguidores, visitas e respostas pesam mais que curtidas;
+     *  - Reels: alcance (reproduções), envios/salvamentos e curtidas POR ALCANCE (taxa), não só o número bruto.
+     */
+    private val W_T = listOf("fol" to .26, "replies" to .20, "views" to .18, "likes" to .14, "visits" to .12, "inter" to .10)
+    private val W_V = listOf("views" to .25, "shares" to .18, "shareRate" to .15, "likes" to .10, "likeRate" to .10, "replies" to .09, "saves" to .08, "fol" to .05)
+
+    private class Pool(val ps: List<JSONObject>, val cols: Map<String, DoubleArray>)
+    @Volatile private var pools: Pair<List<JSONObject>, Map<Boolean, Pool>>? = null
+
+    /** Valor do número já "levado" pra idade adulta do post (um post lido com 2 h não perde pra um lido com 3 dias). */
+    private fun metric(o: JSONObject, k: String, cv: DoubleArray): Double? {
+        val f = readAge(o)?.let { 1.0 / maxOf(0.15, grown(cv, it)) } ?: 1.0
+        fun raw(key: String) = if (o.has(key)) o.optDouble(key, 0.0) else null
+        return when (k) {
+            "fol" -> raw("fol")
+            "inter" -> listOf("reposts", "quotes", "shares", "saves").mapNotNull { raw(it) }.takeIf { it.isNotEmpty() }?.sum()?.times(f)
+            "likeRate" -> raw("views")?.takeIf { it >= 50 }?.let { v -> raw("likes")?.div(v) }
+            "shareRate" -> raw("views")?.takeIf { it >= 50 }?.let { v -> listOf("shares", "saves").mapNotNull { raw(it) }.takeIf { it.isNotEmpty() }?.sum()?.div(v) }
+            else -> raw(k)?.times(f)
         }
     }
 
-    /** Valor (0..1) pro modelo de previsão, quando tem número exato. */
+    private fun pool(ps0: List<JSONObject>, video: Boolean): Pool {
+        val c0 = pools
+        val map = if (c0 != null && c0.first === ps0) c0.second else {
+            listOf(false, true).associateWith { vid ->
+                val cv = curve(ps0, vid)
+                val ps = ps0.filter { isVideo(it) == vid && (readAge(it) ?: 99.0) >= 1.0 } // lido com menos de 1 h não serve de régua
+                Pool(ps, (if (vid) W_V else W_T).associate { (k, _) -> k to ps.mapNotNull { metric(it, k, cv) }.sorted().toDoubleArray() })
+            }.also { pools = ps0 to it }
+        }
+        return map.getValue(video)
+    }
+
+    /**
+     * Pontuação composta (0..1, relativa aos SEUS posts do mesmo tipo). Só entram os números que o post tem
+     * (e que pelo menos 3 posts têm): número que falta não derruba a nota, o peso é redistribuído.
+     */
+    fun composite(c: Context, m: JSONObject, ps0: List<JSONObject> = posts(c)): Double {
+        val video = isVideo(m); val pl = pool(ps0, video); val cv = curve(ps0, video)
+        var sum = 0.0; var ws = 0.0
+        (if (video) W_V else W_T).forEach { (k, w) ->
+            val v = metric(m, k, cv) ?: return@forEach
+            val col = pl.cols[k] ?: return@forEach; if (col.size < 3) return@forEach
+            sum += w * pct(v, col); ws += w
+        }
+        return if (ws < 0.2) 0.5 else sum / ws
+    }
+
+    /** Dá a nota com os números: cedo só marca o que já bomba; a nota final espera uma leitura com 12 h+ de vida do post. */
+    private fun rateFromApi(c: Context) {
+        val all = posts(c); if (all.size < 5) return
+        val sends = SendLog.all(c).associateBy { it.optLong("at") }
+        val now = System.currentTimeMillis()
+        all.filter { it.optLong("send") > 0 }.forEach { m ->
+            val e = sends[m.optLong("send")] ?: return@forEach
+            if (e.optBoolean("mn")) return@forEach // nota que VOCÊ deu: não mexo
+            val age = (now - m.optLong("at")) / 3600_000.0
+            val ra = readAge(m) ?: age
+            val s = composite(c, m, all)
+            val final = ra >= 12.0
+            val k = when {
+                ra < 1.0 -> null
+                ra < 3.0 -> if (s >= 0.93) "top" else if (s >= 0.80) "good" else null // lido cedo: só o que já é claramente forte
+                s >= 0.85 -> "top"; s >= 0.62 -> "good"
+                age >= 24 && s <= 0.30 -> "bad"; age >= 24 -> "meh"; else -> null
+            } ?: return@forEach
+            val cur = e.optString("nota")
+            if (cur == k) { if (final && !e.optBoolean("apiFinal")) SendLog.mark(c, e.optLong("at"), "apiFinal"); return@forEach }
+            if (cur.isNotEmpty() && (!final || e.optBoolean("apiFinal"))) return@forEach
+            try { SendLog.rate(c, e, k); if (final) SendLog.mark(c, e.optLong("at"), "apiFinal") } catch (x: Exception) { ErrLog.log(c, "números: nota", x) }
+        }
+    }
+
+    /** Valor (0..1) pro modelo de previsão, quando tem número confiável (lido com 6 h+ de vida). */
     fun targetFor(c: Context, sendAt: Long): Double? {
-        val ps = posts(c); val m = ps.firstOrNull { it.optLong("send") == sendAt } ?: return null
-        if (System.currentTimeMillis() - m.optLong("at") < 12 * 3600_000L || ps.size < 5) return null
+        val ps = posts(c); if (ps.size < 5) return null
+        val m = bySend(ps)[sendAt] ?: return null
+        if ((readAge(m) ?: 99.0) < 6.0) return null
         return composite(c, m, ps)
+    }
+    @Volatile private var sendIdx: Pair<List<JSONObject>, Map<Long, JSONObject>>? = null
+    private fun bySend(ps: List<JSONObject>): Map<Long, JSONObject> {
+        val c0 = sendIdx; if (c0 != null && c0.first === ps) return c0.second
+        return ps.filter { it.optLong("send") > 0 }.associateBy { it.optLong("send") }.also { sendIdx = ps to it }
     }
 
     // ---------- números → sorteio (fotos e legendas que rendem saem mais)
@@ -290,9 +417,10 @@ object ThreadsApi {
 
     private fun maps(c: Context) {
         if (System.currentTimeMillis() - cacheAt < 60_000L) return
-        val ps = posts(c).filter { (it.optLong("send") > 0 || it.optBoolean("orphan")) && System.currentTimeMillis() - it.optLong("at") > 3 * 3600_000L }
-        if (ps.size < 3) { photoMap = emptyMap(); capMap = emptyMap(); cacheAt = System.currentTimeMillis(); return }
-        val sc = ps.map { it to composite(c, it, ps) }
+        val all = posts(c)
+        val ps = all.filter { (it.optLong("send") > 0 || it.optBoolean("orphan")) && (readAge(it) ?: 99.0) >= 1.0 }
+        if (ps.size < 3) { photoMap = emptyMap(); capMap = emptyMap(); videoMap = emptyMap(); cacheAt = System.currentTimeMillis(); return }
+        val sc = ps.map { it to composite(c, it, all) }
         videoMap = sc.filter { it.first.optString("video").isNotEmpty() }.groupBy { it.first.optString("video") }.mapValues { (_, v) -> v.map { it.second }.average() }
         photoMap = sc.filter { it.first.optString("photo").isNotEmpty() }.groupBy { it.first.optString("photo") }.mapValues { (_, v) -> v.map { it.second }.average() }
         capMap = sc.filter { it.first.optString("kind", "fila") != "video" }.groupBy { capKey(it.first.optString("text")) }.filterKeys { it.length >= 6 }.mapValues { (_, v) -> v.map { it.second }.average() }
@@ -307,7 +435,7 @@ object ThreadsApi {
     fun withNumbers(c: Context): Int { maps(c); return photoMap.size + videoMap.size }
     /** Pontuação real do vídeo (Instagram). */
     fun videoScore(c: Context, id: String): Double? { maps(c); return videoMap[id] }
-    fun topVideos(c: Context, n: Int = 5) = posts(c).filter { it.optString("kind") == "video" && it.optString("video").isNotEmpty() }.map { it to composite(c, it) }.sortedByDescending { it.second }.take(n)
+    fun topVideos(c: Context, n: Int = 5) = posts(c).let { all -> all.filter { it.optString("kind") == "video" && it.optString("video").isNotEmpty() }.map { it to composite(c, it, all) } }.sortedByDescending { it.second }.take(n)
     fun videoAiText(c: Context): String {
         val t = topVideos(c, 5); if (t.isEmpty()) return ""
         val lib = VideoExport.library(c).associateBy { it.optString("id") }

@@ -13,7 +13,7 @@ import java.io.File
 object SendLog {
     private fun file(c: Context) = File(c.filesDir, "envios.json")
 
-    fun all(c: Context): List<JSONObject> = JsonFile.read(file(c))
+    fun all(c: Context): List<JSONObject> = JsonFile.peek(file(c)) // só consulta (em cache); pra mudar: JsonFile.edit
 
     /** kind: "fila" (foto → Threads), "video" (→ Instagram), "fotoIg" (foto → Instagram) */
     fun add(c: Context, kind: String, id: String, cap: String, app: String, manual: Boolean = false) {
