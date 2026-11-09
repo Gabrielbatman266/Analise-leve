@@ -44,10 +44,12 @@ class MainActivity : Activity() {
     // paleta AMOLED
     private lateinit var meta: MetaPanel
     internal val BG = 0xFF000000.toInt()
-    internal val CARD = 0xFF121218.toInt()
-    internal val LINE = 0xFF262630.toInt()
-    internal val FG = 0xFFECEEF3.toInt()
-    internal val MUTED = 0xFF9A9EAB.toInt()
+    internal val CARD = 0xFF131319.toInt()
+    internal val SURF = 0xFF1E1E27.toInt()   // botões e campos (um tom acima do cartão)
+    internal val LINE = 0xFF23232D.toInt()
+    internal val FG = 0xFFF1F2F6.toInt()
+    internal val MUTED = 0xFF8F94A3.toInt()
+    private val cards = HashMap<String, View>()
     internal val ACCENT = 0xFFFF5C82.toInt()
     internal val OK = 0xFF4CC68E.toInt()
 
@@ -258,22 +260,32 @@ class MainActivity : Activity() {
         scroller = scroll
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(22), dp(18), dp(40))
+            setPadding(dp(14), dp(18), dp(14), dp(28))
         }
         scroll.addView(root)
-        setContentView(scroll)
+        // tela = conteúdo que rola + barra de abas fixa embaixo (sempre à mão, no alcance do polegar)
+        val outer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(BG) }
+        outer.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        outer.addView(View(this).apply { setBackgroundColor(LINE) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
+        tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setBackgroundColor(0xFF0C0C10.toInt()); setPadding(dp(4), dp(6), dp(4), dp(8)) }
+        outer.addView(tabRow, lpMatch())
+        setContentView(outer)
 
-        text("Post Leve", 30f, FG, bold = true)
-        text("Fotos do Flow sem metadados, legendas que viralizam, postagem em um toque.", 14f, MUTED)
+        // cabeçalho enxuto
+        val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        root.addView(head, lpMatch())
+        head.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(ACCENT, 0xFFFF8A65.toInt())).apply { cornerRadius = dp(5).toFloat() } }, LinearLayout.LayoutParams(dp(10), dp(26)).apply { rightMargin = dp(10) })
+        head.addView(TextView(this).apply { text = "Post Leve"; textSize = 24f; setTextColor(FG); typeface = Typeface.create("sans-serif-medium", Typeface.BOLD); letterSpacing = -0.01f })
 
-        tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        root.addView(tabRow, lpMatch().apply { topMargin = dp(12) })
-        for (name in listOf("Postar", "Legendas", "Instagram", "Refs", "Limpar", "Analisar", "Ajustes")) {
-            if (name == "Analisar") { pages[name] = LinearLayout(this); continue } // desativada
-            val pg = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            pages[name] = pg
-            val lab = mapOf("Postar" to "📸\nPostar", "Legendas" to "💬\nLegendas", "Instagram" to "🎬\nVídeos", "Refs" to "💡\nRefs", "Limpar" to "🧽\nLimpar", "Ajustes" to "⚙\nAjustes")[name] ?: name
-            button(lab, tabRow, weight = true) { showTab(name) }.apply { tag = name; textSize = 11.5f; maxLines = 2; setPadding(dp(2), dp(6), dp(2), dp(6)) }
+        val tabs = listOf("Postar" to ("📸" to "Postar"), "Legendas" to ("💬" to "Legendas"), "Instagram" to ("🎬" to "Vídeos"), "Números" to ("📊" to "Números"),
+            "Refs" to ("💡" to "Refs"), "Limpar" to ("🧽" to "Limpar"), "Ajustes" to ("⚙" to "Ajustes"))
+        pages["Analisar"] = LinearLayout(this) // desativada
+        for ((name, lab) in tabs) {
+            pages[name] = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            val t = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; tag = name; setOnClickListener { showTab(name) } }
+            t.addView(TextView(this).apply { text = lab.first; textSize = 17f; gravity = Gravity.CENTER; setPadding(dp(12), dp(3), dp(12), dp(3)) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            t.addView(TextView(this).apply { text = lab.second; textSize = 10.5f; gravity = Gravity.CENTER; maxLines = 1; setPadding(0, dp(2), 0, 0) })
+            tabRow.addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
 
         page = root
@@ -871,7 +883,30 @@ class MainActivity : Activity() {
             if (!clearArmed) { clearArmed = true; zero.text = "Toque de novo pra apagar tudo"; ui.postDelayed({ clearArmed = false; zero.text = "Zerar banco" }, 3000) }
             else { Store.clearAll(this); clearArmed = false; zero.text = "Zerar banco"; toast("Banco zerado"); refresh() }
         }
-        showTab((Store.prefs(this).getString("tab", "Postar") ?: "Postar").let { if (it == "Analisar") "Postar" else it })
+        arrange()
+        showTab((Store.prefs(this).getString("tab", "Postar") ?: "Postar").let { if (it == "Analisar" || pages[it] == null) "Postar" else it })
+    }
+
+    /** Título de seção (agrupa os cartões por assunto). */
+    private fun sectionView(t: String) = TextView(this).apply {
+        text = t.uppercase(); textSize = 11.5f; setTextColor(MUTED); letterSpacing = 0.12f; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        setPadding(dp(4), dp(22), 0, 0)
+    }
+
+    /** Organiza os cartões: cada aba com o que importa primeiro, agrupado por assunto. */
+    private fun arrange() {
+        fun place(pg: String, items: List<String>) {
+            val p = pages[pg] ?: return; var idx = 0
+            items.forEach { t ->
+                if (t.startsWith("#")) p.addView(sectionView(t.drop(1)), idx++, lpMatch())
+                else cards[t]?.let { v -> (v.parent as? ViewGroup)?.removeView(v); p.addView(v, idx++) }
+            }
+        }
+        place("Postar", listOf("✅ Configuração", "🏠 Painel", "#Postar no Threads", "Fila de posts", "📣 Divulgação do Instagram", "🕘 Envios e notas"))
+        place("Números", listOf("#Crescimento", "📈 Vigia do crescimento", "🧪 Laboratório", "#Posts e coleta", "🏆 Ranking e postagem perfeita", "🩺 Saúde das filas"))
+        place("Ajustes", listOf("#Automação", "🤖 Tudo automático", "🤖 Piloto automático", "📌 Botão de postar sempre à mão",
+            "#Conexões", "Configurações da IA", "🔗 API do Threads (números exatos)", "🔕 Notificações do Threads",
+            "#Manutenção", "🧪 Autoteste e diagnóstico", "💾 Backup", "Celular limpo", "Atualizações", "Se parar sozinho (Xiaomi)"))
     }
 
     private var asking = false
@@ -911,11 +946,12 @@ class MainActivity : Activity() {
         if (name == "Limpar" && ::meta.isInitialized) meta.renderHist()
         pages.forEach { (k, v) -> v.visibility = if (k == name) View.VISIBLE else View.GONE }
         for (i in 0 until tabRow.childCount) {
-            val b = tabRow.getChildAt(i) as Button
-            val on = b.tag == name
-            b.setTextColor(if (on) 0xFF1A0A10.toInt() else FG)
-            b.background = GradientDrawable().apply { setColor(if (on) ACCENT else 0xFF1C1C24.toInt()); cornerRadius = dp(10).toFloat() }
+            val t = tabRow.getChildAt(i) as LinearLayout
+            val on = t.tag == name
+            (t.getChildAt(0) as TextView).apply { background = if (on) GradientDrawable().apply { setColor(0x2EFF5C82); cornerRadius = dp(14).toFloat() } else null; alpha = if (on) 1f else 0.6f }
+            (t.getChildAt(1) as TextView).apply { setTextColor(if (on) 0xFFFF8FA9.toInt() else MUTED); typeface = if (on) Typeface.DEFAULT_BOLD else Typeface.DEFAULT }
         }
+        if (::scroller.isInitialized) scroller.scrollTo(0, 0)
     }
 
     // ------------------------------------------------------------------ aba Instagram
@@ -1089,10 +1125,11 @@ class MainActivity : Activity() {
                 wrap.addView(row, lpMatch())
                 pair.forEach { opt ->
                     val b = button(opt, row, weight = true) { pick(opt); draw() }
-                    b.textSize = 13f
+                    b.textSize = 13f; b.layoutParams.height = dp(40)
                     val on = opt == current()
-                    b.setTextColor(if (on) 0xFF1A0A10.toInt() else FG)
-                    b.background = GradientDrawable().apply { setColor(if (on) ACCENT else 0xFF1C1C24.toInt()); cornerRadius = dp(10).toFloat() }
+                    // escolhido: fundo rosa bem leve + borda rosa (lê melhor que um bloco cheio)
+                    b.setTextColor(if (on) 0xFFFF9DB4.toInt() else 0xFFC9CCD6.toInt())
+                    b.background = GradientDrawable().apply { setColor(if (on) 0x2EFF5C82 else SURF); cornerRadius = dp(20).toFloat(); if (on) setStroke(dp(1), ACCENT) }
                 }
                 if (pair.size == 1) row.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
             }
@@ -1260,19 +1297,24 @@ class MainActivity : Activity() {
     internal fun card(title: String? = null): LinearLayout {
         val c = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            background = GradientDrawable().apply { setColor(CARD); cornerRadius = dp(14).toFloat(); setStroke(dp(1), LINE) }
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            background = GradientDrawable().apply { setColor(CARD); cornerRadius = dp(20).toFloat() }
         }
-        page.addView(c, lpMatch().apply { topMargin = dp(12) })
+        page.addView(c, lpMatch().apply { topMargin = dp(10) })
         if (title == null) return c
-        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        cards[title] = c
+        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(6), 0, 0) }
         val key = "fold_" + title.hashCode()
-        val h = text("", 17f, FG, parent = c, bold = true)
-        c.addView(body, lpMatch())
-        fun draw() { val open = body.visibility == View.VISIBLE; h.text = (if (open) "▾  " else "▸  ") + title }
+        // título à esquerda, setinha discreta à direita (toque abre/fecha; o app lembra)
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(2), 0, dp(2)) }
+        row.addView(TextView(this).apply { text = title; textSize = 16f; setTextColor(FG); typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val chev = TextView(this).apply { textSize = 18f; setTextColor(MUTED); setPadding(dp(10), 0, dp(2), 0) }
+        row.addView(chev)
+        c.addView(row, lpMatch()); c.addView(body, lpMatch())
+        fun draw() { chev.text = if (body.visibility == View.VISIBLE) "⌄" else "›" }
         body.visibility = if (Store.prefs(this).getBoolean(key, title in FOLDED)) View.GONE else View.VISIBLE
         draw()
-        h.setOnClickListener {
+        row.setOnClickListener {
             body.visibility = if (body.visibility == View.VISIBLE) View.GONE else View.VISIBLE
             Store.prefs(this).edit().putBoolean(key, body.visibility != View.VISIBLE).apply(); draw()
         }
@@ -1283,7 +1325,7 @@ class MainActivity : Activity() {
         val v = TextView(this).apply {
             text = t; textSize = size; setTextColor(color)
             if (bold) typeface = Typeface.DEFAULT_BOLD
-            setLineSpacing(0f, 1.15f)
+            setLineSpacing(0f, 1.22f)
             setPadding(0, dp(3), 0, dp(3))
         }
         parent.addView(v, lpMatch())
@@ -1292,12 +1334,14 @@ class MainActivity : Activity() {
 
     internal fun button(t: String, parent: LinearLayout, primary: Boolean = false, weight: Boolean = false, onClick: () -> Unit): Button {
         val b = Button(this).apply {
-            text = t; isAllCaps = false; textSize = 15f
+            text = t; isAllCaps = false; textSize = 14.5f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            stateListAnimator = null; elevation = 0f
             setTextColor(if (primary) 0xFF1A0A10.toInt() else FG)
-            background = GradientDrawable().apply {
-                setColor(if (primary) ACCENT else 0xFF1C1C24.toInt()); cornerRadius = dp(10).toFloat()
-                if (!primary) setStroke(dp(1), LINE)
-            }
+            // principal: degradê rosa→coral; secundário: superfície lisa, sem borda
+            val shape = if (primary) GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(ACCENT, 0xFFFF8A65.toInt())) else GradientDrawable().apply { setColor(SURF) }
+            shape.cornerRadius = dp(14).toFloat()
+            background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x33FFFFFF), shape, null)
             setOnClickListener { onClick() }
         }
         val lp = if (weight) LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(dp(3), dp(6), dp(3), 0) }
@@ -1317,8 +1361,8 @@ class MainActivity : Activity() {
                 else -> InputType.TYPE_CLASS_TEXT
             }
             setSingleLine(true)
-            background = GradientDrawable().apply { setColor(BG); cornerRadius = dp(10).toFloat(); setStroke(dp(1), LINE) }
-            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = GradientDrawable().apply { setColor(SURF); cornerRadius = dp(12).toFloat() }
+            setPadding(dp(14), dp(11), dp(14), dp(11))
             addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
                 override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
@@ -1333,7 +1377,7 @@ class MainActivity : Activity() {
         if (save) Store.prefs(this).edit().putString("provider", p).apply()
         fun style(b: Button, on: Boolean) {
             b.setTextColor(if (on) 0xFF1A0A10.toInt() else FG)
-            b.background = GradientDrawable().apply { setColor(if (on) ACCENT else 0xFF1C1C24.toInt()); cornerRadius = dp(10).toFloat() }
+            b.background = GradientDrawable().apply { setColor(if (on) ACCENT else SURF); cornerRadius = dp(14).toFloat() }
         }
         style(btnClaude, p == "claude"); style(btnGemini, p == "gemini")
         etModel.hint = if (p == "gemini") Ai.DEFAULT_GEMINI else Ai.DEFAULT_CLAUDE
