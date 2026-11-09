@@ -127,6 +127,19 @@ object ThreadsApi {
         p(c).edit().putLong("loc_last_$src", System.currentTimeMillis()).apply()
     }
 
+    /** Post feito fora do app: guarda números pela legenda (sem foto ligada). */
+    fun upsertOrphan(c: Context, text: String, m: Map<String, Int>, src: String) {
+        if (m.isEmpty() || text.length < 8) return
+        val key = "orf:" + norm(text).take(60).hashCode()
+        JsonFile.edit(file(c)) { l ->
+            val o = l.firstOrNull { it.optString("id") == key } ?: JSONObject().put("id", key).put("kind", "fila").put("text", text).put("at", System.currentTimeMillis()).put("orphan", true).also { l.add(0, it) }
+            m.forEach { (k, v) -> if (v > o.optInt(k, -1)) o.put(k, v) }
+            o.put("upd", System.currentTimeMillis()).put("src", src)
+            while (l.size > 400) l.removeAt(l.size - 1)
+        }
+        invalidate()
+    }
+
     /** Seguidores lidos na tela do perfil (sem API). */
     fun addFollowers(c: Context, n: Int, src: String) {
         if (n <= 0) return
@@ -233,7 +246,7 @@ object ThreadsApi {
 
     private fun maps(c: Context) {
         if (System.currentTimeMillis() - cacheAt < 60_000L) return
-        val ps = posts(c).filter { it.optLong("send") > 0 && System.currentTimeMillis() - it.optLong("at") > 3 * 3600_000L }
+        val ps = posts(c).filter { (it.optLong("send") > 0 || it.optBoolean("orphan")) && System.currentTimeMillis() - it.optLong("at") > 3 * 3600_000L }
         if (ps.size < 3) { photoMap = emptyMap(); capMap = emptyMap(); cacheAt = System.currentTimeMillis(); return }
         val sc = ps.map { it to composite(c, it, ps) }
         videoMap = sc.filter { it.first.optString("video").isNotEmpty() }.groupBy { it.first.optString("video") }.mapValues { (_, v) -> v.map { it.second }.average() }

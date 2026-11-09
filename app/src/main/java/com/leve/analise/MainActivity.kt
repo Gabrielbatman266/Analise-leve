@@ -347,6 +347,7 @@ class MainActivity : Activity() {
                 .setMessage("Abre a aba Reels do seu perfil, abre cada Reel em ordem, confere pela legenda se é um vídeo do app, abre \"Ver insights\" se tiver, lê os números e volta. Só lê.\n\nLimite: ${Macro.maxPosts(this)} Reels ou 5 minutos. Pra parar: ⏹ na notificação.")
                 .setPositiveButton("Começar") { _, _ -> toast(Macro.startInstagram(this)) }.setNegativeButton("Cancelar", null).show()
         }
+        chips(crk, listOf("Ler todos os meus posts", "Só os do app"), { if (Macro.readAll(this)) "Ler todos os meus posts" else "Só os do app" }) { Macro.setReadAll(this, it.startsWith("Ler")) }
         text("✋ Modo manual: role e abra os posts você mesmo; quando o leitor captar, aparece um aviso verde.", 12f, MUTED, parent = crk)
         chips(crk, listOf("Aviso ligado", "Sem aviso"), { if (Macro.manualToast(this)) "Aviso ligado" else "Sem aviso" }) { Macro.setManualToast(this, it == "Aviso ligado") }
         Macro.lastRun(this).takeIf { it.isNotBlank() }?.let { text("Última coleta: $it", 11f, MUTED, parent = crk) }

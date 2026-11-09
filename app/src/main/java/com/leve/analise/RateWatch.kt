@@ -173,6 +173,9 @@ object Macro {
     fun igHandle(c: Context) = (p(c).getString("ig_handle", null) ?: handle(c)).trim().removePrefix("@")
     fun setIgHandle(c: Context, h: String) = p(c).edit().putString("ig_handle", h.trim().removePrefix("@")).apply()
     fun manualToast(c: Context) = p(c).getBoolean("reader_toast", true)
+    /** Também abre posts que você fez fora do app (guarda os números pela legenda). */
+    fun readAll(c: Context) = p(c).getBoolean("macro_all", true)
+    fun setReadAll(c: Context, v: Boolean) = p(c).edit().putBoolean("macro_all", v).apply()
     fun setManualToast(c: Context, v: Boolean) = p(c).edit().putBoolean("reader_toast", v).apply()
 
     fun startInstagram(c: Context): String {
@@ -230,6 +233,19 @@ class ScreenReader : AccessibilityService() {
     private val done = HashSet<String>()
     private var opened = 0; private var noNew = 0; private var triedInsights = false; private var offApp = 0
     private var lastTarget: AccessibilityNodeInfo? = null
+    private var currentCap = ""
+    private var waited = false
+
+    private val TIME = Regex("^\\d+\\s*(s|min|h|d|sem|w|m)$|^(ontem|yesterday)$", RegexOption.IGNORE_CASE)
+    /** Outro post seu na tela (só abaixo das abas do perfil, pra nunca tocar na bio, link ou botões). */
+    private fun otherPost(all: List<AccessibilityNodeInfo>): AccessibilityNodeInfo? {
+        val tab = all.firstOrNull { val t = txt(it); t == "respostas" || t == "replies" || t == "threads" }?.let { val r = android.graphics.Rect(); it.getBoundsInScreen(r); r.bottom } ?: return null
+        return all.firstOrNull { n ->
+            val t = (n.text ?: "").toString().trim(); val r = android.graphics.Rect(); n.getBoundsInScreen(r)
+            r.top > tab + dpx(30) && t.length >= 12 && !TIME.matches(t) && !t.contains("seguidores") && !t.startsWith("@") && !t.startsWith("http") &&
+                core(t).take(24) !in done && clickable(n) != null
+        }
+    }
     private var appPkg = ThreadsNotif.THREADS
 
     // ---------- 👀 visual: selo no topo, moldura no post, flash verde quando capta
@@ -343,18 +359,21 @@ class ScreenReader : AccessibilityService() {
         if (state != "PROFILE" && !capturedNow) got.maxByOrNull { it.size }?.let { captured(it) }
         if (appPkg == ThreadsNotif.INSTA && state == "PROFILE") { igProfile(all); return }
         val caps = SendLog.all(this).filter { it.optString("kind") == "fila" && System.currentTimeMillis() - it.optLong("at") < 30 * 86400_000L }
-            .map { norm(it.optString("cap")).take(28) }.filter { it.length >= 8 }.distinct()
+            .map { it.optString("cap") }.filter { core(it).length >= 8 }.distinctBy { core(it).take(24) }
         when (state) {
             "PROFILE" -> {
-                val target = all.firstOrNull { n -> val t = txt(n); t.length >= 8 && caps.any { k -> (t.startsWith(k) || k.startsWith(t.take(28))) && k !in done } }
+                // 1) posts do app (pela legenda)  2) qualquer outro post SEU no perfil (abaixo das abas Threads/Respostas)
+                var target = all.firstOrNull { n -> val t = txt(n); caps.any { k -> sameCap(t, k) && core(k).take(24) !in done } }
+                if (target == null && Macro.readAll(this)) target = otherPost(all)
                 if (target != null) {
-                    val t = txt(target); caps.firstOrNull { k -> t.startsWith(k) || k.startsWith(t.take(28)) }?.let { done += it }
+                    val t = txt(target); done += (caps.firstOrNull { k -> sameCap(t, k) }?.let { core(it).take(24) } ?: core(t).take(24))
+                    currentCap = (target.text ?: target.contentDescription ?: "").toString()
                     val cl = clickable(target)
                     mark(target)
                     sigBefore = sig(all); retried = false
                     // 1º: toque de dedo no texto da legenda; se não der, clique pelo Android
                     if (tapNode(target) || cl?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) {
-                        opened++; noNew = 0; state = "POST"; triedInsights = false; capturedNow = false; lastTarget = target
+                        opened++; noNew = 0; state = "POST"; triedInsights = false; capturedNow = false; lastTarget = target; waited = false
                         show("🎯 Abrindo post $opened/${Macro.maxPosts(this)}…"); next(rnd(2800, 4200)); return
                     }
                 }
@@ -367,6 +386,7 @@ class ScreenReader : AccessibilityService() {
                 next(rnd(2500, 4000))
             }
             "POST" -> {
+                if (!capturedNow && !waited) { waited = true; next(1500); return } // ainda carregando: espera e lê de novo
                 // a tela não mudou? o toque não abriu o post: tenta 1x pelo Android, senão pula
                 if (sig(all) == sigBefore) {
                     if (!retried) { retried = true; show("↻ Não abriu, tentando de novo…", 0xEEB45309.toInt()); clickable(lastTarget)?.performAction(AccessibilityNodeInfo.ACTION_CLICK); next(rnd(2500, 3500)); return }
@@ -378,11 +398,11 @@ class ScreenReader : AccessibilityService() {
                 val cl = clickable(ins)
                 if (cl != null) mark(cl)
                 if (ins != null && (tapNode(ins) || cl?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true)) { show("📊 Abrindo a atividade do post…"); state = "INSIGHTS"; next(rnd(3000, 4500)); return }
-                if (!capturedNow) show("⚠ Post $opened: não achei números nesta tela", 0xEEB45309.toInt())
+                if (!capturedNow) { orphan(texts); if (!capturedNow) { dump(texts); show("⚠ Post $opened: não achei números nesta tela", 0xEEB45309.toInt()) } }
                 performGlobalAction(GLOBAL_ACTION_BACK); state = "PROFILE"; next(rnd(2500, 3800))
             }
             "INSIGHTS" -> {
-                if (!capturedNow) show("⚠ Post $opened: não achei números na atividade", 0xEEB45309.toInt())
+                if (!capturedNow) { orphan(texts); if (!capturedNow) { dump(texts); show("⚠ Post $opened: não achei números na atividade", 0xEEB45309.toInt()) } }
                 performGlobalAction(GLOBAL_ACTION_BACK); state = "POST_BACK"; next(rnd(2000, 3000))
             }
             "POST_BACK" -> { performGlobalAction(GLOBAL_ACTION_BACK); state = "PROFILE"; next(rnd(2500, 3800)) }
@@ -413,6 +433,24 @@ class ScreenReader : AccessibilityService() {
         show("🔽 Descendo… ($opened/${Macro.maxPosts(this)} lidos)")
         if (++noNew >= 5) { finish("✓ fim dos Reels: $opened lidos"); return }
         next(rnd(2500, 4000))
+    }
+
+    /** Post que não veio do app: guarda os números pela legenda (vale pro ranking e pra IA saber que legenda rende). */
+    private fun orphan(texts: List<String>) {
+        if (currentCap.length < 8 || appPkg != ThreadsNotif.THREADS) return
+        val nt = texts.map { norm(it) }
+        val insights = nt.any { LABELS["views"]!!.matches(it) }
+        val m = pairs(nt, 0, nt.size).toMutableMap()
+        if (m.isEmpty()) return
+        m["follows"]?.let { m["fol"] = it; m.remove("follows") }
+        ThreadsApi.upsertOrphan(this, currentCap, m, if (insights) "insights" else "tela")
+        captured(m)
+    }
+
+    /** Guarda o que estava na tela quando não achou números (vai pro diagnóstico). */
+    private fun dump(texts: List<String>) {
+        Store.prefs(this).edit().putString("tela_dump", android.text.format.DateFormat.format("dd/MM HH:mm", System.currentTimeMillis()).toString() + " [" + state + "] " +
+            texts.take(70).joinToString(" | ") { it.replace('\n', ' ').take(40) }).apply()
     }
 
     /** Desliza o dedo de baixo pra cima, devagar (quando a lista não aceita "rolar"). */
@@ -455,6 +493,15 @@ class ScreenReader : AccessibilityService() {
     }
 
     private fun norm(s: String) = s.lowercase().replace(Regex("\\s+"), " ").trim()
+    /** Só letras e números (ignora emoji, aspas, pontuação, quebras e o "…mais"). */
+    private fun core(s: String) = java.text.Normalizer.normalize(s.lowercase(), java.text.Normalizer.Form.NFD).replace(Regex("\\p{M}"), "")
+        .replace(Regex("(\\.\\.\\.|…)\\s*(mais|more)$"), "").replace(Regex("[^a-z0-9 ]"), " ").replace(Regex("\\s+"), " ").trim()
+    private fun sameCap(screen: String, cap: String): Boolean {
+        val a = core(screen); val b = core(cap)
+        if (a.length < 8 || b.length < 8) return false
+        val k = b.take(24)
+        return a.startsWith(k) || (a.length >= 10 && k.startsWith(a.take(24))) || (k.length >= 14 && a.contains(k.take(18)))
+    }
     private val NUM = Regex("^(\\d[\\d.,]*)\\s*(mil|k)?$", RegexOption.IGNORE_CASE)
     private val LIKEWORD = Regex("(\\d[\\d.,]*)\\s*(mil|k)?\\s*(curtidas?|likes?)", RegexOption.IGNORE_CASE)
 
@@ -521,10 +568,8 @@ class ScreenReader : AccessibilityService() {
         val insights = nt.any { LABELS["views"]!!.matches(it) } && nt.count { t -> LABELS.values.any { it.matches(t) } } >= 3
         var found = 0
         sends.distinctBy { it.optString("cap").take(40) }.forEach { s ->
-            val cap = norm(s.optString("cap"))
-            if (cap.length < 8) return@forEach
-            val key = cap.take(28)
-            val idx = nt.indexOfFirst { it.length >= 8 && (it.startsWith(key) || key.startsWith(it.take(28)) && it.length >= 12) }
+            if (core(s.optString("cap")).length < 8) return@forEach
+            val idx = nt.indexOfFirst { sameCap(it, s.optString("cap")) }
             if (idx < 0) return@forEach
             found++
             // 2) tela de insights do post: pega todos os rótulos da tela; 3) feed/perfil: só os botões logo depois da legenda

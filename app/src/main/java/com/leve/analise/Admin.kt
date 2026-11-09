@@ -277,7 +277,7 @@ object Insights {
 
     /** 🏆 Ranking dos posts (pontuação composta: curtidas, respostas, reposts, visualizações e seguidores). */
     fun ranking(c: Context, n: Int = 15): List<Pair<JSONObject, Double>> {
-        val ps = ThreadsApi.posts(c).filter { it.optLong("send") > 0 && it.optString("kind") != "video" }
+        val ps = ThreadsApi.posts(c).filter { (it.optLong("send") > 0 || it.optBoolean("orphan")) && it.optString("kind") != "video" }
         if (ps.size < 3) return emptyList()
         return ps.map { it to ThreadsApi.composite(c, it, ps) }.sortedByDescending { it.second }.take(n)
     }
