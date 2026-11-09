@@ -210,16 +210,71 @@ class ScreenReader : AccessibilityService() {
     private val done = HashSet<String>()
     private var opened = 0; private var noNew = 0; private var triedInsights = false; private var offApp = 0
 
+    // ---------- 👀 visual: selo no topo, moldura no post, flash verde quando capta
+    private var pill: android.widget.TextView? = null
+    private var frame: android.view.View? = null
+    private val wm by lazy { getSystemService(android.view.WindowManager::class.java) }
+    private fun dpx(v: Int) = (v * resources.displayMetrics.density).toInt()
+    private fun lp(w: Int, h: Int) = android.view.WindowManager.LayoutParams(w, h, android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+        android.graphics.PixelFormat.TRANSLUCENT)
+
+    private fun show(msg: String, color: Int = 0xEE1C1C24.toInt()) {
+        try {
+            val v = pill ?: android.widget.TextView(this).apply {
+                textSize = 14f; setTextColor(0xFFFFFFFF.toInt()); setPadding(dpx(16), dpx(10), dpx(16), dpx(10)); gravity = android.view.Gravity.CENTER
+                elevation = dpx(8).toFloat()
+            }.also { tv ->
+                wm.addView(tv, lp(-2, -2).apply { gravity = android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL; y = dpx(70) }); pill = tv
+            }
+            v.text = msg
+            v.background = android.graphics.drawable.GradientDrawable().apply { setColor(color); cornerRadius = dpx(22).toFloat(); setStroke(dpx(2), 0x55FFFFFF) }
+        } catch (e: Exception) { }
+    }
+
+    /** Moldura em volta do post que vai abrir. */
+    private fun mark(n: AccessibilityNodeInfo) {
+        try {
+            val r = android.graphics.Rect(); n.getBoundsInScreen(r)
+            frame?.let { wm.removeView(it) }
+            val v = android.view.View(this).apply { background = android.graphics.drawable.GradientDrawable().apply { setColor(0x2236D399); cornerRadius = dpx(12).toFloat(); setStroke(dpx(3), 0xFF36D399.toInt()) } }
+            wm.addView(v, lp(r.width(), r.height()).apply { gravity = android.view.Gravity.TOP or android.view.Gravity.START; x = r.left; y = r.top })
+            frame = v
+            h.postDelayed({ try { if (frame === v) { wm.removeView(v); frame = null } } catch (e: Exception) { } }, 900)
+        } catch (e: Exception) { }
+    }
+
+    private fun buzz() = try { getSystemService(android.os.Vibrator::class.java)?.vibrate(android.os.VibrationEffect.createOneShot(35, 120)) } catch (e: Exception) { }
+
+    private fun captured(m: Map<String, Int>) {
+        val parts = listOfNotNull(m["views"]?.let { "👁 $it" }, m["likes"]?.let { "❤ $it" }, m["replies"]?.let { "💬 $it" }, m["reposts"]?.let { "🔁 $it" }, m["fol"]?.let { "👥 +$it" })
+        show("✓ Post $opened/${Macro.maxPosts(this)} captado  " + parts.joinToString("  "), 0xEE15803D.toInt())
+        buzz(); capturedNow = true
+    }
+    private var capturedNow = false
+
+    private fun clearOverlay() {
+        try { pill?.let { wm.removeView(it) } } catch (e: Exception) { }
+        try { frame?.let { wm.removeView(it) } } catch (e: Exception) { }
+        pill = null; frame = null
+    }
+
     private fun rnd(a: Long, b: Long) = (a..b).random()
     private fun next(ms: Long) { h.postDelayed({ step() }, ms) }
 
     private fun startMacro() {
         if (running) return
         running = true; state = "PROFILE"; done.clear(); opened = 0; noNew = 0; offApp = 0
+        show("🤖 Coleta começando… não toque na tela")
         next(3500)
     }
 
-    private fun finish(why: String) { running = false; h.removeCallbacksAndMessages(null); Macro.stop(this, why) }
+    private fun finish(why: String) {
+        running = false; h.removeCallbacksAndMessages(null)
+        show("🤖 $why", 0xEE1D4ED8.toInt())
+        h.postDelayed({ clearOverlay() }, 3500)
+        Macro.stop(this, why)
+    }
 
     private fun nodes(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
         val out = ArrayList<AccessibilityNodeInfo>()
@@ -244,7 +299,8 @@ class ScreenReader : AccessibilityService() {
         val all = nodes(root)
         // lê o que está na tela agora (números, seguidores)
         val texts = all.mapNotNull { (it.text ?: it.contentDescription)?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() } }
-        Thread { try { scan(ThreadsNotif.THREADS, texts) } catch (x: Exception) { } }.start()
+        val got = try { scan(ThreadsNotif.THREADS, texts) } catch (x: Exception) { emptyList() }
+        if (state != "PROFILE" && !capturedNow) got.maxByOrNull { it.size }?.let { captured(it) }
         val caps = SendLog.all(this).filter { it.optString("kind") == "fila" && System.currentTimeMillis() - it.optLong("at") < 30 * 86400_000L }
             .map { norm(it.optString("cap")).take(28) }.filter { it.length >= 8 }.distinct()
         when (state) {
@@ -253,12 +309,17 @@ class ScreenReader : AccessibilityService() {
                 if (target != null) {
                     val t = txt(target); caps.firstOrNull { k -> t.startsWith(k) || k.startsWith(t.take(28)) }?.let { done += it }
                     val cl = clickable(target)
-                    if (cl != null && cl.performAction(AccessibilityNodeInfo.ACTION_CLICK)) { opened++; noNew = 0; state = "POST"; triedInsights = false; next(rnd(2800, 4200)); return }
+                    mark(cl ?: target)
+                    if (cl != null && cl.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                        opened++; noNew = 0; state = "POST"; triedInsights = false; capturedNow = false
+                        show("🎯 Abrindo post $opened/${Macro.maxPosts(this)}…"); next(rnd(2800, 4200)); return
+                    }
                 }
                 // nenhum post novo visível: desce um pouco
                 val sc = all.firstOrNull { it.isScrollable && it.actionList.any { a -> a.id == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD } }
                 val ok = sc?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) ?: false
                 if (!ok) swipeUp()
+                show("🔽 Descendo… ($opened/${Macro.maxPosts(this)} lidos)")
                 if (++noNew >= 7) { finish("✓ fim dos posts recentes: $opened post(s) lidos"); return }
                 next(rnd(2500, 4000))
             }
@@ -267,10 +328,15 @@ class ScreenReader : AccessibilityService() {
                 val ins = if (triedInsights) null else all.firstOrNull { n -> Regex("ver atividade|view activity|insights|ver insights|atividade da publica|post activity|estatísticas").containsMatchIn(txt(n)) }
                 triedInsights = true
                 val cl = clickable(ins)
-                if (cl != null && cl.performAction(AccessibilityNodeInfo.ACTION_CLICK)) { state = "INSIGHTS"; next(rnd(3000, 4500)); return }
+                if (cl != null) mark(cl)
+                if (cl != null && cl.performAction(AccessibilityNodeInfo.ACTION_CLICK)) { show("📊 Abrindo a atividade do post…"); state = "INSIGHTS"; next(rnd(3000, 4500)); return }
+                if (!capturedNow) show("⚠ Post $opened: não achei números nesta tela", 0xEEB45309.toInt())
                 performGlobalAction(GLOBAL_ACTION_BACK); state = "PROFILE"; next(rnd(2500, 3800))
             }
-            "INSIGHTS" -> { performGlobalAction(GLOBAL_ACTION_BACK); state = "POST_BACK"; next(rnd(2000, 3000)) }
+            "INSIGHTS" -> {
+                if (!capturedNow) show("⚠ Post $opened: não achei números na atividade", 0xEEB45309.toInt())
+                performGlobalAction(GLOBAL_ACTION_BACK); state = "POST_BACK"; next(rnd(2000, 3000))
+            }
             "POST_BACK" -> { performGlobalAction(GLOBAL_ACTION_BACK); state = "PROFILE"; next(rnd(2500, 3800)) }
         }
     }
@@ -356,13 +422,14 @@ class ScreenReader : AccessibilityService() {
         return out
     }
 
-    private fun scan(pkg: String, texts: List<String>) {
+    private fun scan(pkg: String, texts: List<String>): List<Map<String, Int>> {
+        val got = ArrayList<Map<String, Int>>()
         val video = pkg == ThreadsNotif.INSTA
         val nt = texts.map { norm(it) }
         // 1) perfil: número de seguidores (vale pros 2 apps; guardamos só o do Threads)
         if (!video) nt.firstNotNullOfOrNull { FOLLOW.find(it) }?.let { m -> numOf(m.groupValues[1] + (m.groupValues[2].takeIf { it.isNotEmpty() }?.let { " $it" } ?: ""))?.let { ThreadsApi.addFollowers(this, it, "tela") } }
         val sends = SendLog.all(this).filter { System.currentTimeMillis() - it.optLong("at") < 30 * 86400_000L && (it.optString("kind") == "video") == video }
-        if (sends.isEmpty()) return
+        if (sends.isEmpty()) return got
         val insights = nt.any { LABELS["views"]!!.matches(it) } && nt.count { t -> LABELS.values.any { it.matches(t) } } >= 3
         var found = 0
         sends.distinctBy { it.optString("cap").take(40) }.forEach { s ->
@@ -380,6 +447,7 @@ class ScreenReader : AccessibilityService() {
             }
             if (mm.isEmpty()) return@forEach
             mm["follows"]?.let { mm["fol"] = it; mm.remove("follows") }
+            got += mm
             if (video) mm["likes"]?.let { Likes.record(this, "video", s.optString("id"), it, "tela") }
             else {
                 mm["likes"]?.let { Likes.record(this, "fila", s.optString("id"), it, "tela") }
@@ -387,6 +455,7 @@ class ScreenReader : AccessibilityService() {
             }
         }
         if (found > 0) Store.prefs(this).edit().putLong("tela_last", System.currentTimeMillis()).putInt("tela_found", found).apply()
+        return got
     }
 
     override fun onInterrupt() {}
