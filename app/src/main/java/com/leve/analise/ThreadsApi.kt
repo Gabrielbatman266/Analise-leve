@@ -113,6 +113,37 @@ object ThreadsApi {
         }
     }
 
+    /** Guarda números vindos da TELA ou de um PRINT (sem API). Mantém o maior valor de cada métrica. */
+    fun upsertLocal(c: Context, sendAt: Long, photoId: String, text: String, m: Map<String, Int>, src: String) {
+        if (m.isEmpty()) return
+        JsonFile.edit(file(c)) { l ->
+            val o = l.firstOrNull { it.optLong("send") == sendAt } ?: JSONObject().put("id", "$src:$sendAt").put("send", sendAt).put("photo", photoId)
+                .put("at", sendAt).put("text", text).also { l.add(0, it) }
+            m.forEach { (k, v) -> if (v > o.optInt(k, -1)) o.put(k, v) }
+            o.put("upd", System.currentTimeMillis()).put("src", if (o.optString("src").isEmpty()) src else o.optString("src"))
+            while (l.size > 400) l.removeAt(l.size - 1)
+        }
+        p(c).edit().putLong("loc_last_$src", System.currentTimeMillis()).apply()
+    }
+
+    /** Seguidores lidos na tela do perfil (sem API). */
+    fun addFollowers(c: Context, n: Int, src: String) {
+        if (n <= 0) return
+        JsonFile.edit(folFile(c)) { l ->
+            val last = l.lastOrNull()
+            if (last != null && last.optInt("n") == n && System.currentTimeMillis() - last.optLong("t") < 20 * 60_000L) return@edit
+            l.add(JSONObject().put("t", System.currentTimeMillis()).put("n", n).put("src", src)); while (l.size > 2000) l.removeAt(0)
+        }
+    }
+
+    /** Sem rede: distribui seguidores e dá as notas com o que já se sabe (API, tela ou print). */
+    fun process(c: Context) {
+        val ps = posts(c); if (ps.isEmpty()) return
+        attributeFollowers(c, ps)
+        JsonFile.write(file(c), ps)
+        rateFromApi(c)
+    }
+
     /** Liga cada post da API ao envio do app (mesma legenda, horário próximo). */
     private fun attachToSends(c: Context, ps: List<JSONObject>) {
         val sends = SendLog.all(c).filter { it.optString("kind") == "fila" }
@@ -198,7 +229,7 @@ object ThreadsApi {
     }
 
     fun summary(c: Context): String {
-        if (!on(c)) return "Não conectado."
+        if (!on(c)) return "Não conectado (sem problema: o leitor de tela e os prints também trazem os números)."
         val f = followers(c)
         val now = f.lastOrNull()?.optInt("n")
         val day = f.lastOrNull { it.optLong("t") < System.currentTimeMillis() - 86400_000L }?.optInt("n")

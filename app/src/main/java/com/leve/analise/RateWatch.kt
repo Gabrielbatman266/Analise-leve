@@ -84,6 +84,7 @@ object RateWatch {
     fun run(c: Context, notify: Boolean = true): Int {
         val now = System.currentTimeMillis()
         if (ThreadsApi.on(c)) try { ThreadsApi.sync(c) } catch (x: Exception) { ErrLog.log(c, "API Threads", x) }
+        else try { ThreadsApi.process(c) } catch (x: Exception) { ErrLog.log(c, "números da tela", x) }
         val sends = SendLog.all(c).filter { now - it.optLong("at") < 3 * 86400_000L && it.optString("nota").isEmpty() }
         var auto = 0
         // 1) dá nota com as curtidas que já se sabe
@@ -189,28 +190,71 @@ class ScreenReader : AccessibilityService() {
         return ((clean.toDoubleOrNull() ?: 0.0) * mult).toInt()
     }
 
+    private val FOLLOW = Regex("(\\d[\\d.,]*)\\s*(mil|k|mi|m)?\\s*(seguidores|followers)", RegexOption.IGNORE_CASE)
+    private val LABELS = mapOf(
+        "views" to Regex("^(visualiza[cç][oõ]es|views|visualizações)$", RegexOption.IGNORE_CASE),
+        "likes" to Regex("^(curtidas?|likes?|curtir|like)$", RegexOption.IGNORE_CASE),
+        "replies" to Regex("^(respostas?|replies|reply|responder)$", RegexOption.IGNORE_CASE),
+        "reposts" to Regex("^(reposts?|repostar|republica[cç][oõ]es)$", RegexOption.IGNORE_CASE),
+        "quotes" to Regex("^(cita[cç][oõ]es|quotes?|citar)$", RegexOption.IGNORE_CASE),
+        "shares" to Regex("^(compartilhamentos|shares?|compartilhar|enviar)$", RegexOption.IGNORE_CASE),
+        "follows" to Regex("^(seguidores|follows|novos seguidores|seguiram)$", RegexOption.IGNORE_CASE))
+
+    private fun numOf(t: String): Int? {
+        val m = Regex("^(\\d[\\d.,]*)\\s*(mil|k|mi|m)?$", RegexOption.IGNORE_CASE).find(t.trim()) ?: return null
+        val mult = when (m.groupValues[2].lowercase()) { "mil", "k" -> 1000.0; "mi", "m" -> 1_000_000.0; else -> 1.0 }
+        val s = m.groupValues[1]; val clean = if (mult > 1) s.replace(',', '.') else s.replace(".", "").replace(",", "")
+        return ((clean.toDoubleOrNull() ?: return null) * mult).toInt()
+    }
+
+    /** Número logo antes ou logo depois de um rótulo ("52" "Curtidas" ou "Curtidas" "52"). */
+    private fun pairs(nt: List<String>, from: Int, to: Int): Map<String, Int> {
+        val out = HashMap<String, Int>()
+        for (i in from until to) {
+            val key = LABELS.entries.firstOrNull { it.value.matches(nt[i]) }?.key ?: run {
+                // "52 curtidas" num texto só
+                LABELS.entries.firstNotNullOfOrNull { (k, _) ->
+                    Regex("^(\\d[\\d.,]*\\s*(?:mil|k|mi)?)\\s+(.+)$", RegexOption.IGNORE_CASE).find(nt[i])?.let { mm -> if (LABELS[k]!!.matches(mm.groupValues[2])) { numOf(mm.groupValues[1])?.let { v -> out.putIfAbsent(k, v) }; null } else null }
+                }
+                null
+            } ?: continue
+            val v = (if (i + 1 < nt.size) numOf(nt[i + 1]) else null) ?: (if (i > 0) numOf(nt[i - 1]) else null) ?: continue
+            out.putIfAbsent(key, v)
+        }
+        return out
+    }
+
     private fun scan(pkg: String, texts: List<String>) {
         val video = pkg == ThreadsNotif.INSTA
-        val sends = SendLog.all(this).filter { System.currentTimeMillis() - it.optLong("at") < 7 * 86400_000L && (it.optString("kind") == "video") == video }
-        if (sends.isEmpty()) return
         val nt = texts.map { norm(it) }
-        sends.distinctBy { it.optString("id") }.forEach { s ->
+        // 1) perfil: número de seguidores (vale pros 2 apps; guardamos só o do Threads)
+        if (!video) nt.firstNotNullOfOrNull { FOLLOW.find(it) }?.let { m -> numOf(m.groupValues[1] + (m.groupValues[2].takeIf { it.isNotEmpty() }?.let { " $it" } ?: ""))?.let { ThreadsApi.addFollowers(this, it, "tela") } }
+        val sends = SendLog.all(this).filter { System.currentTimeMillis() - it.optLong("at") < 30 * 86400_000L && (it.optString("kind") == "video") == video }
+        if (sends.isEmpty()) return
+        val insights = nt.any { LABELS["views"]!!.matches(it) } && nt.count { t -> LABELS.values.any { it.matches(t) } } >= 3
+        var found = 0
+        sends.distinctBy { it.optString("cap").take(40) }.forEach { s ->
             val cap = norm(s.optString("cap"))
             if (cap.length < 8) return@forEach
             val key = cap.take(28)
             val idx = nt.indexOfFirst { it.length >= 8 && (it.startsWith(key) || key.startsWith(it.take(28)) && it.length >= 12) }
             if (idx < 0) return@forEach
-            var likes: Int? = null
-            for (j in idx + 1..minOf(nt.size - 1, idx + 14)) {
-                val m = LIKEWORD.find(nt[j])
-                if (m != null) { likes = num(m.groupValues[1], m.groupValues[2]); break }
+            found++
+            // 2) tela de insights do post: pega todos os rótulos da tela; 3) feed/perfil: só os botões logo depois da legenda
+            val m = if (insights) pairs(nt, 0, nt.size) else pairs(nt, idx + 1, minOf(nt.size, idx + 16))
+            val mm = m.toMutableMap()
+            if (!insights && mm["likes"] == null) { // sem rótulo: 1º número depois da legenda = curtidas
+                for (j in idx + 1..minOf(nt.size - 1, idx + 10)) { numOf(nt[j])?.let { mm["likes"] = it }; if (mm["likes"] != null) break }
             }
-            if (likes == null) for (j in idx + 1..minOf(nt.size - 1, idx + 10)) {
-                val m = NUM.find(nt[j])
-                if (m != null) { likes = num(m.groupValues[1], m.groupValues[2]); break }
+            if (mm.isEmpty()) return@forEach
+            mm["follows"]?.let { mm["fol"] = it; mm.remove("follows") }
+            if (video) mm["likes"]?.let { Likes.record(this, "video", s.optString("id"), it, "tela") }
+            else {
+                mm["likes"]?.let { Likes.record(this, "fila", s.optString("id"), it, "tela") }
+                ThreadsApi.upsertLocal(this, s.optLong("at"), s.optString("id"), s.optString("cap"), mm, if (insights) "insights" else "tela")
             }
-            likes?.let { Likes.record(this, if (video) "video" else "fila", s.optString("id"), it, "tela") }
         }
+        if (found > 0) Store.prefs(this).edit().putLong("tela_last", System.currentTimeMillis()).putInt("tela_found", found).apply()
     }
 
     override fun onInterrupt() {}

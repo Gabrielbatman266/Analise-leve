@@ -201,7 +201,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         Auto.migrate(this)
-        PostBar.update(this); keysRedraw?.invoke(); tnRedraw?.invoke(); healthRedraw?.invoke(); histRedraw?.invoke(); panelRedraw?.invoke(); setupRedraw?.invoke()
+        PostBar.update(this); keysRedraw?.invoke(); tnRedraw?.invoke(); healthRedraw?.invoke(); histRedraw?.invoke(); panelRedraw?.invoke(); setupRedraw?.invoke(); rankRedraw?.invoke()
         if (ThreadsNotif.on(this) && ThreadsNotif.hasAccess(this) && !ThreadsNotif.live(this)) ThreadsNotif.rebind(this)
         ui.postDelayed({ askPending() }, 600)
         ui.postDelayed({ if (::insta.isInitialized) insta.maybeRefill() }, 2500)
@@ -325,6 +325,34 @@ class MainActivity : Activity() {
             tvAuto.text = Auto.summary(this)
         }
         panelUi(); panelRedraw = { panelUi() }
+
+        // 🏆 ranking + ✨ postagem perfeita
+        val crk = card("🏆 Ranking e postagem perfeita")
+        button("✨ Montar a postagem perfeita", crk, primary = true) { showPerfect(false) }
+        val rkBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        crk.addView(rkBox, lpMatch())
+        text("De onde vêm os números (sem API): 1) abra seu PERFIL no Threads e role devagar — o leitor de tela pega seguidores e os números de cada post; 2) abra \"Ver insights/atividade\" de um post — pega visualizações, respostas, reposts e seguidores; 3) compartilhe o PRINT dos insights com o Post Leve (a IA lê).", 11f, MUTED, parent = crk)
+        fun rankUi() {
+            rkBox.removeAllViews()
+            val ps = ThreadsApi.posts(this)
+            val src = ps.groupBy { it.optString("src").ifEmpty { "api" } }.mapValues { it.value.size }
+            val fol = ThreadsApi.followersNow(this)
+            text((fol?.let { "👥 $it seguidores · " } ?: "") + "${ps.size} post(s) com números" + (if (src.isNotEmpty()) " (" + src.entries.joinToString(", ") { "${it.key} ${it.value}" } + ")" else ""), 12f, FG, parent = rkBox)
+            val r = Insights.ranking(this, 10)
+            if (r.isEmpty()) { text("O ranking aparece com 3+ posts com números.", 12f, MUTED, parent = rkBox); return }
+            r.forEachIndexed { i, (m, s) ->
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                rkBox.addView(row, lpMatch().apply { topMargin = dp(6) })
+                row.addView(ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF1C1C24.toInt())
+                    SendLog.thumb(this@MainActivity, "foto", m.optString("photo"))?.let { setImageBitmap(it) } }, LinearLayout.LayoutParams(dp(40), dp(56)).apply { rightMargin = dp(8) })
+                row.addView(TextView(this).apply {
+                    text = "${i + 1}º · ${(s * 100).toInt()} pts · " + listOfNotNull(m.optInt("views", 0).takeIf { it > 0 }?.let { "👁 $it" }, "❤ ${m.optInt("likes")}", "💬 ${m.optInt("replies")}",
+                        m.optDouble("fol", 0.0).takeIf { it > 0 }?.let { "👥 +${"%.1f".format(it)}" }).joinToString(" ") + "\n" + m.optString("text").replace('\n', ' ').take(60)
+                    textSize = 12f; setTextColor(if (i < 3) OK else FG)
+                }, LinearLayout.LayoutParams(0, -2, 1f))
+            }
+        }
+        rankUi(); rankRedraw = { rankUi() }
 
         // atalhos sempre à mão (ficam em Ajustes)
         page = pages["Ajustes"]!!
@@ -1483,12 +1511,54 @@ class MainActivity : Activity() {
         }
         if (uris.isEmpty()) return
         AlertDialog.Builder(this).setTitle("Guardar ${uris.size} foto(s) onde?")
-            .setItems(arrayOf("🖼  Estoque de referência", "📮  Fila de posts (Threads)")) { _, w ->
-                if (w == 0) { showTab("Refs"); refs.addPhotos(uris) } else { showTab("Postar"); importPosts(uris) }
+            .setItems(arrayOf("🖼  Estoque de referência", "📮  Fila de posts (Threads)", "📊  Números de um post (print dos insights/perfil)")) { _, w ->
+                when (w) {
+                    0 -> { showTab("Refs"); refs.addPhotos(uris) }
+                    1 -> { showTab("Postar"); importPosts(uris) }
+                    else -> readPrints(uris)
+                }
             }.show()
     }
 
-    private fun pickPosts() = pickImages(REQ_POSTS, true)
+    /** 📊 A IA lê os prints do Threads (insights do post ou perfil) e guarda os números. */
+    private fun readPrints(uris: List<Uri>) {
+        toast("Lendo ${uris.size} print(s)…")
+        Thread {
+            val out = uris.mapIndexed { i, u ->
+                try {
+                    val f = java.io.File(cacheDir, "print_$i.jpg"); contentResolver.openInputStream(u)?.use { ins -> f.outputStream().use { ins.copyTo(it) } }
+                    Insights.fromPrint(this, f).also { f.delete() }
+                } catch (e: Exception) { ErrLog.log(this, "ler print", e); "⚠ " + (e.message ?: "erro") }
+            }
+            ui.post {
+                AlertDialog.Builder(this).setTitle("📊 Prints lidos").setMessage(out.joinToString("\n\n")).setPositiveButton("Ok", null).show()
+                rankRedraw?.invoke()
+            }
+        }.start()
+    }
+
+    private var rankRedraw: (() -> Unit)? = null
+
+    /** ✨ Mostra a postagem perfeita (foto + legenda + horário) com o porquê. */
+    private fun showPerfect(ai: Boolean) {
+        toast(if (ai) "A IA está escrevendo legendas pra essa foto…" else "Montando…")
+        Thread {
+            val p = try { Perfect.build(this, ai) } catch (e: Exception) { ErrLog.log(this, "postagem perfeita", e); null }
+            ui.post {
+                if (p == null) { toast("Fila vazia"); return@post }
+                val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0) }
+                SendLog.thumb(this, "foto", p.photoId)?.let { b -> box.addView(ImageView(this).apply { setImageBitmap(b); scaleType = ImageView.ScaleType.CENTER_CROP }, LinearLayout.LayoutParams(-1, dp(260))) }
+                text(p.caption, 15f, FG, parent = box, bold = true)
+                text("🎯 Chance estimada: ${(p.chance * 100).toInt()}%" + (if (Predictor.trainedOn() < 15) " (ainda aprendendo: ${Predictor.trainedOn()} posts com nota)" else ""), 13f, OK, parent = box)
+                p.bestTime?.let { text("⏰ Melhor horário: $it", 13f, FG, parent = box) }
+                if (p.why.isNotEmpty()) text("Por que: " + p.why.joinToString(" · "), 12f, MUTED, parent = box)
+                AlertDialog.Builder(this).setTitle("✨ Postagem perfeita agora").setView(ScrollView(this).apply { addView(box) })
+                    .setPositiveButton("📸 Postar") { _, _ -> startActivity(Intent(this, PostActivity::class.java).putExtra("id", p.photoId).putExtra("caption", p.caption)) }
+                    .setNeutralButton("✨ Legendas novas (IA)") { _, _ -> showPerfect(true) }
+                    .setNegativeButton("Fechar", null).show()
+            }
+        }.start()
+    }
 
     /** Galeria (seletor de fotos do celular) ou Arquivos. */
     internal fun pickImages(req: Int, multiple: Boolean) {

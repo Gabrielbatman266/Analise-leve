@@ -251,3 +251,60 @@ class AdminReceiver : BroadcastReceiver() {
         }
     }
 }
+
+
+// ============================================================ 📸 print dos insights + 🏆 ranking + ✨ postagem perfeita
+object Insights {
+    /** IA lê o print, acha o post pela legenda e guarda os números. */
+    fun fromPrint(c: Context, img: File): String {
+        val o = Ai.readInsights(c, img)
+        o.optInt("seguidores_perfil", 0).takeIf { it > 0 }?.let { ThreadsApi.addFollowers(c, it, "print") }
+        val txt = o.optString("texto").lowercase().replace(Regex("\\s+"), " ").trim()
+        val m = HashMap<String, Int>()
+        listOf("views", "likes", "replies", "reposts", "quotes", "shares").forEach { k -> o.optInt(k, -1).takeIf { it >= 0 && !o.isNull(k) }?.let { m[k] = it } }
+        o.optInt("follows", -1).takeIf { it >= 0 && !o.isNull("follows") }?.let { m["fol"] = it }
+        if (m.isEmpty()) return if (o.optInt("seguidores_perfil", 0) > 0) "✓ Seguidores do perfil: ${o.optInt("seguidores_perfil")}" else "Não achei números nesse print"
+        val e = SendLog.all(c).filter { it.optString("kind") == "fila" }.firstOrNull { s ->
+            val cap = s.optString("cap").lowercase().replace(Regex("\\s+"), " ").trim()
+            txt.length >= 6 && cap.isNotEmpty() && (cap.startsWith(txt.take(25)) || txt.startsWith(cap.take(25)))
+        } ?: return "Li os números (${m.entries.joinToString { "${it.key} ${it.value}" }}), mas não achei o post pela legenda. Tire o print mostrando o texto do post."
+        ThreadsApi.upsertLocal(c, e.optLong("at"), e.optString("id"), e.optString("cap"), m, "print")
+        m["likes"]?.let { Likes.record(c, "fila", e.optString("id"), it, "print") }
+        ThreadsApi.process(c)
+        return "✓ Números guardados: " + m.entries.joinToString(" · ") { "${it.key} ${it.value}" }
+    }
+
+    /** 🏆 Ranking dos posts (pontuação composta: curtidas, respostas, reposts, visualizações e seguidores). */
+    fun ranking(c: Context, n: Int = 15): List<Pair<JSONObject, Double>> {
+        val ps = ThreadsApi.posts(c).filter { it.optLong("send") > 0 }
+        if (ps.size < 3) return emptyList()
+        return ps.map { it to ThreadsApi.composite(c, it, ps) }.sortedByDescending { it.second }.take(n)
+    }
+}
+
+object Perfect {
+    /** ✨ Postagem perfeita: a foto com maior chance agora + a legenda com maior chance pra ela + o melhor horário. */
+    data class Plan(val photoId: String, val caption: String, val chance: Double, val why: List<String>, val bestTime: String?)
+
+    fun build(c: Context, aiCaption: Boolean): Plan? {
+        val q = PostQueue.load(c).filter { PostQueue.imageFile(c, it.optString("id")).exists() && it.optString("status") != "arquivada" }
+        if (q.isEmpty()) return null
+        val rec = Captions.recentPhotos(c).take(maxOf(3, (q.size * 0.4).toInt()))
+        val cand = q.filter { it.optString("id") !in rec }.ifEmpty { q }
+        val best = cand.maxBy { Predictor.blend(Learn.chanceMean(c, it), Learn.rated(it), Predictor.photo(c, it)) }
+        val own = best.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
+        var pool = (own + Captions.mine(c) + CaptionDB.winners(c, 30).map { it.optString("t") } + CaptionDB.texts(c, "var").take(40) +
+            ThreadsApi.topFollowers(c, 5).map { it.optString("text") })
+            .filter { it.isNotBlank() && Captions.fitsToday(it) && it.trim() !in Captions.capAvoid(c) }.distinct()
+        if (aiCaption && Auto.canSpend(c) || aiCaption && pool.isEmpty()) try {
+            val novas = Ai.captions(c, PostQueue.imageFile(c, best.optString("id")))
+            pool = pool + novas.filter { Captions.fitsToday(it) }
+        } catch (e: Exception) { ErrLog.log(c, "postagem perfeita", e) }
+        if (pool.isEmpty()) pool = listOf(Captions.randomCaption(c))
+        val bonus = Captions.capBonus(c, best.optString("id"))
+        val cap = pool.maxBy { Predictor.photo(c, best, it) * bonus(it) }
+        val chance = Predictor.photo(c, best, cap)
+        val (pos, _) = Predictor.insights(c, false, 4)
+        return Plan(best.optString("id"), cap, chance, pos, Learn.bestBucket(c))
+    }
+}

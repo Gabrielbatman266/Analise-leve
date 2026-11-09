@@ -193,6 +193,15 @@ Responda só com JSON: {"regras":["...","..."]}"""
         throw AiException(-2, "A IA não devolveu imagem (talvez ela tenha recusado essa edição)")
     }
 
+    /** 📸 Lê um PRINT do Threads (insights de um post ou o perfil) e devolve os números. */
+    fun readInsights(c: Context, img: File): JSONObject {
+        val prompt = """Este é um print do app Threads (tela de insights/atividade de um post, ou o perfil).
+Extraia os números exatamente como aparecem (converta "1,2 mil" pra 1200). Se não houver, use null.
+Também copie o começo do texto/legenda do post, se aparecer.
+Responda só com JSON: {"texto":"...","views":0,"likes":0,"replies":0,"reposts":0,"quotes":0,"shares":0,"follows":0,"seguidores_perfil":0}"""
+        return parseObj(ask(c, prompt, listOf(Base64.encodeToString(shrink(img), Base64.NO_WRAP))))
+    }
+
     /** 💬 3 respostas curtas pra um comentário, no jeito da criadora. */
     fun replies(c: Context, ctx: String, app: String): List<String> {
         val mine = (Captions.mine(c).take(10) + OverlayDB.all(c, null).filter { it.optString("src") == "meu" }.take(8).map { it.optString("t") })
