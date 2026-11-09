@@ -114,10 +114,11 @@ object ThreadsApi {
     }
 
     /** Guarda números vindos da TELA ou de um PRINT (sem API). Mantém o maior valor de cada métrica. */
-    fun upsertLocal(c: Context, sendAt: Long, photoId: String, text: String, m: Map<String, Int>, src: String) {
+    fun upsertLocal(c: Context, sendAt: Long, photoId: String, text: String, m: Map<String, Int>, src: String, kind: String = "fila") {
         if (m.isEmpty()) return
         JsonFile.edit(file(c)) { l ->
-            val o = l.firstOrNull { it.optLong("send") == sendAt } ?: JSONObject().put("id", "$src:$sendAt").put("send", sendAt).put("photo", photoId)
+            val o = l.firstOrNull { it.optLong("send") == sendAt } ?: JSONObject().put("id", "$src:$sendAt").put("send", sendAt)
+                .put(if (kind == "video") "video" else "photo", photoId).put("kind", kind)
                 .put("at", sendAt).put("text", text).also { l.add(0, it) }
             m.forEach { (k, v) -> if (v > o.optInt(k, -1)) o.put(k, v) }
             o.put("upd", System.currentTimeMillis()).put("src", if (o.optString("src").isEmpty()) src else o.optString("src"))
@@ -159,8 +160,9 @@ object ThreadsApi {
     }
 
     /** Seguidores ganhos em cada post: ganho entre o post e o próximo (máx. 6 h), dividido pelos posts do período (pelo tanto de visualizações). */
-    private fun attributeFollowers(c: Context, ps: List<JSONObject>) {
+    private fun attributeFollowers(c: Context, ps0: List<JSONObject>) {
         val f = followers(c); if (f.size < 2) return
+        val ps = ps0.filter { it.optString("kind", "fila").ifEmpty { "fila" } == "fila" } // seguidores do Threads só pros posts do Threads
         fun at(t: Long) = f.minByOrNull { kotlin.math.abs(it.optLong("t") - t) }?.takeIf { kotlin.math.abs(it.optLong("t") - t) < 90 * 60_000L }?.optInt("n")
         val sorted = ps.sortedBy { it.optLong("at") }
         // agrupa posts próximos (bloco), mede o ganho do bloco
@@ -184,9 +186,11 @@ object ThreadsApi {
     private fun pct(v: Double, all: List<Double>) = if (all.isEmpty()) 0.5 else all.count { it < v }.toDouble() / all.size
 
     /** Pontuação composta (0..1, relativa aos seus posts): curtidas, respostas, reposts/citações/compart., visualizações e seguidores. */
-    fun composite(c: Context, m: JSONObject, ps: List<JSONObject> = posts(c)): Double {
+    fun composite(c: Context, m: JSONObject, ps0: List<JSONObject> = posts(c)): Double {
+        val kind = m.optString("kind", "fila").ifEmpty { "fila" }
+        val ps = ps0.filter { it.optString("kind", "fila").ifEmpty { "fila" } == kind }.ifEmpty { ps0 } // vídeo compara com vídeo, foto com foto
         fun col(k: String) = ps.map { it.optDouble(k, 0.0) }
-        val inter = { o: JSONObject -> o.optDouble("reposts", 0.0) + o.optDouble("quotes", 0.0) + o.optDouble("shares", 0.0) }
+        val inter = { o: JSONObject -> o.optDouble("reposts", 0.0) + o.optDouble("quotes", 0.0) + o.optDouble("shares", 0.0) + o.optDouble("saves", 0.0) }
         return 0.25 * pct(m.optDouble("likes", 0.0), col("likes")) +
             0.20 * pct(m.optDouble("replies", 0.0), col("replies")) +
             0.10 * pct(inter(m), ps.map(inter)) +
@@ -224,6 +228,7 @@ object ThreadsApi {
     @Volatile private var cacheAt = 0L
     @Volatile private var photoMap: Map<String, Double> = emptyMap()
     @Volatile private var capMap: Map<String, Double> = emptyMap()
+    @Volatile private var videoMap: Map<String, Double> = emptyMap()
     private fun capKey(s: String) = norm(s).take(30)
 
     private fun maps(c: Context) {
@@ -231,8 +236,9 @@ object ThreadsApi {
         val ps = posts(c).filter { it.optLong("send") > 0 && System.currentTimeMillis() - it.optLong("at") > 3 * 3600_000L }
         if (ps.size < 3) { photoMap = emptyMap(); capMap = emptyMap(); cacheAt = System.currentTimeMillis(); return }
         val sc = ps.map { it to composite(c, it, ps) }
+        videoMap = sc.filter { it.first.optString("video").isNotEmpty() }.groupBy { it.first.optString("video") }.mapValues { (_, v) -> v.map { it.second }.average() }
         photoMap = sc.filter { it.first.optString("photo").isNotEmpty() }.groupBy { it.first.optString("photo") }.mapValues { (_, v) -> v.map { it.second }.average() }
-        capMap = sc.groupBy { capKey(it.first.optString("text")) }.filterKeys { it.length >= 6 }.mapValues { (_, v) -> v.map { it.second }.average() }
+        capMap = sc.filter { it.first.optString("kind", "fila") != "video" }.groupBy { capKey(it.first.optString("text")) }.filterKeys { it.length >= 6 }.mapValues { (_, v) -> v.map { it.second }.average() }
         cacheAt = System.currentTimeMillis()
     }
     fun invalidate() { cacheAt = 0 }
@@ -241,7 +247,18 @@ object ThreadsApi {
     fun photoScore(c: Context, id: String): Double? { maps(c); return photoMap[id] }
     /** Pontuação real da legenda (em qualquer foto). */
     fun captionScore(c: Context, cap: String): Double? { maps(c); return capMap[capKey(cap)] }
-    fun withNumbers(c: Context): Int { maps(c); return photoMap.size }
+    fun withNumbers(c: Context): Int { maps(c); return photoMap.size + videoMap.size }
+    /** Pontuação real do vídeo (Instagram). */
+    fun videoScore(c: Context, id: String): Double? { maps(c); return videoMap[id] }
+    fun topVideos(c: Context, n: Int = 5) = posts(c).filter { it.optString("kind") == "video" }.map { it to composite(c, it) }.sortedByDescending { it.second }.take(n)
+    fun videoAiText(c: Context): String {
+        val t = topVideos(c, 5); if (t.isEmpty()) return ""
+        val lib = VideoExport.library(c).associateBy { it.optString("id") }
+        return "🎬 REELS QUE MAIS RENDERAM (números reais):\n" + t.joinToString("\n") { (m, s) ->
+            val v = lib[m.optString("video")]
+            "- texto no vídeo \"${v?.optString("texto")?.replace('\n', ' ')?.take(60) ?: "?"}\" · categoria ${v?.optString("ctx") ?: "?"} → ${m.optInt("views")} reproduções, ${m.optInt("likes")} curtidas, ${m.optInt("replies")} comentários, ${m.optInt("shares")} compart., ${m.optInt("saves")} salvos, +${m.optInt("fol")} seguidores (${(s * 100).toInt()} pts)"
+        } + "\nFaça mais do que trouxe SEGUIDORES e compartilhamentos."
+    }
 
     /** Posts que mais trouxeram seguidores (pra IA e pra tela). */
     fun topFollowers(c: Context, n: Int = 5) = posts(c).filter { it.optDouble("fol", 0.0) > 0 }.sortedByDescending { it.optDouble("fol") }.take(n)

@@ -338,6 +338,17 @@ class MainActivity : Activity() {
                 .setMessage("O app vai abrir seu perfil no Threads, descer devagar, abrir só os SEUS posts (pela legenda), abrir a atividade/insights, ler os números e voltar. Não curte, não comenta, não clica em mais nada.\n\nLimite: ${Macro.maxPosts(this)} posts ou 5 minutos. Não mexa no celular enquanto roda; pra parar, use ⏹ na notificação.\n\nA Meta não permite coleta automática: vai devagar pra ser discreto, mas use com moderação (1x por dia).")
                 .setPositiveButton("Começar") { _, _ -> toast(Macro.start(this)) }.setNegativeButton("Cancelar", null).show()
         }
+        val rmi = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; crk.addView(rmi, lpMatch())
+        val etI = EditText(this).apply { hint = "seu @ no Instagram"; setText(Macro.igHandle(this@MainActivity)); setSingleLine(true); setTextColor(FG); setHintTextColor(MUTED); textSize = 13f }
+        rmi.addView(etI, LinearLayout.LayoutParams(0, -2, 1f))
+        button("🤖 Coletar Reels", rmi) {
+            Macro.setIgHandle(this, etI.text.toString())
+            AlertDialog.Builder(this).setTitle("🤖 Coleta dos Reels")
+                .setMessage("Abre a aba Reels do seu perfil, abre cada Reel em ordem, confere pela legenda se é um vídeo do app, abre \"Ver insights\" se tiver, lê os números e volta. Só lê.\n\nLimite: ${Macro.maxPosts(this)} Reels ou 5 minutos. Pra parar: ⏹ na notificação.")
+                .setPositiveButton("Começar") { _, _ -> toast(Macro.startInstagram(this)) }.setNegativeButton("Cancelar", null).show()
+        }
+        text("✋ Modo manual: role e abra os posts você mesmo; quando o leitor captar, aparece um aviso verde.", 12f, MUTED, parent = crk)
+        chips(crk, listOf("Aviso ligado", "Sem aviso"), { if (Macro.manualToast(this)) "Aviso ligado" else "Sem aviso" }) { Macro.setManualToast(this, it == "Aviso ligado") }
         Macro.lastRun(this).takeIf { it.isNotBlank() }?.let { text("Última coleta: $it", 11f, MUTED, parent = crk) }
         val rkBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         crk.addView(rkBox, lpMatch())
@@ -348,8 +359,25 @@ class MainActivity : Activity() {
             val src = ps.groupBy { it.optString("src").ifEmpty { "api" } }.mapValues { it.value.size }
             val fol = ThreadsApi.followersNow(this)
             text((fol?.let { "👥 $it seguidores · " } ?: "") + "${ps.size} post(s) com números" + (if (src.isNotEmpty()) " (" + src.entries.joinToString(", ") { "${it.key} ${it.value}" } + ")" else ""), 12f, FG, parent = rkBox)
+            // 🎬 vídeos
+            val tv = ThreadsApi.topVideos(this, 5)
+            if (tv.isNotEmpty()) {
+                text("🎬 Reels que mais renderam:", 13f, FG, parent = rkBox, bold = true)
+                tv.forEachIndexed { i, (m, s) ->
+                    val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                    rkBox.addView(row, lpMatch().apply { topMargin = dp(6) })
+                    row.addView(ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF1C1C24.toInt())
+                        SendLog.thumb(this@MainActivity, "video", m.optString("video"))?.let { setImageBitmap(it) } }, LinearLayout.LayoutParams(dp(36), dp(60)).apply { rightMargin = dp(8) })
+                    row.addView(TextView(this).apply {
+                        text = "${i + 1}º · ${(s * 100).toInt()} pts · " + listOfNotNull(m.optInt("views").takeIf { it > 0 }?.let { "▶ $it" }, "❤ ${m.optInt("likes")}", "💬 ${m.optInt("replies")}",
+                            m.optInt("shares").takeIf { it > 0 }?.let { "↗ $it" }, m.optInt("saves").takeIf { it > 0 }?.let { "🔖 $it" }, m.optInt("fol").takeIf { it > 0 }?.let { "👥 +$it" }).joinToString(" ")
+                        textSize = 12f; setTextColor(if (i < 2) OK else FG)
+                    }, LinearLayout.LayoutParams(0, -2, 1f))
+                }
+                text("📸 Fotos do Threads:", 13f, FG, parent = rkBox, bold = true)
+            }
             val r = Insights.ranking(this, 10)
-            if (r.isEmpty()) { text("O ranking aparece com 3+ posts com números.", 12f, MUTED, parent = rkBox); return }
+            if (r.isEmpty()) { text("O ranking das fotos aparece com 3+ posts com números.", 12f, MUTED, parent = rkBox); return }
             r.forEachIndexed { i, (m, s) ->
                 val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
                 rkBox.addView(row, lpMatch().apply { topMargin = dp(6) })

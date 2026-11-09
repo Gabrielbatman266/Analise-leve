@@ -151,6 +151,7 @@ object Learn {
                 o.optString("modelo").takeIf { it.isNotBlank() }?.let { append(" · edição: ").append(it) }
                 o.optString("legenda").takeIf { it.isNotBlank() }?.let { append(" · legenda: ").append(it.replace('\n', ' ').take(80)) }
                 histText(o).takeIf { it.isNotEmpty() }?.let { append(" · ").append(it) }
+                ThreadsApi.posts(c).firstOrNull { it.optString("video") == o.optString("id") }?.let { m -> append(" · números: ${m.optInt("views")} reproduções, ${m.optInt("likes")} curtidas, ${m.optInt("replies")} coment., ${m.optInt("shares")} compart., ${m.optInt("saves")} salvos, +${m.optInt("fol")} seguidores") }
             }
             Triple(File(VideoExport.videoDir(c), "${o.optString("id")}.jpg"), desc, verdict(o))
         }
