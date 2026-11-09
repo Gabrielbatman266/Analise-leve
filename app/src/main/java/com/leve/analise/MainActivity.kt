@@ -398,8 +398,7 @@ class MainActivity : Activity() {
         val cmc = card("🧽 Remover metadados")
         val tvMc = text("", 12f, MUTED, parent = cmc)
         fun mcT() { val h = MetaClean.history(this); tvMc.text = "Qualquer foto ou vídeo → cópia limpa em Download/PostLeve Limpos, com histórico, e o original vai pra lixeira (ou é apagado, ou fica: você escolhe). Também pela galeria: Compartilhar → 🧽 Limpar metadados." +
-            (if (h.isNotEmpty()) "
-Já limpou ${h.count { it.optBoolean("ok") }} arquivo(s)." else "") }
+            (if (h.isNotEmpty()) "\nJá limpou ${h.count { it.optBoolean("ok") }} arquivo(s)." else "") }
         mcT()
         button("🧽 Abrir", cmc, primary = true) { startActivity(Intent(this, MetaActivity::class.java)) }
 
