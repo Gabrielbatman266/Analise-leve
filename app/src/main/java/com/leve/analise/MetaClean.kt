@@ -221,73 +221,70 @@ object MetaClean {
     fun mb(b: Long) = if (b < 0) "?" else String.format("%.1f MB", b / 1_048_576.0)
 }
 
-/** Tela do 🧽 Remover metadados (abre pelo app ou pelo "Compartilhar" da galeria). */
-class MetaActivity : Activity() {
-    private val BG = 0xFF000000.toInt(); private val CARD = 0xFF121218.toInt(); private val LINE = 0xFF262630.toInt()
+/**
+ * Painel do 🧽 Remover metadados. Usado na aba "Limpar" do app e na tela que abre pelo "Compartilhar" da galeria.
+ * A tela dona encaminha onActivityResult pra [onResult].
+ */
+class MetaPanel(private val a: Activity) {
+    private val CARD = 0xFF121218.toInt(); private val LINE = 0xFF262630.toInt()
     private val FG = 0xFFECEEF3.toInt(); private val MUTED = 0xFF9A9EAB.toInt(); private val ACCENT = 0xFFFF5C82.toInt(); private val OK = 0xFF4CC68E.toInt()
     private val ui = Handler(Looper.getMainLooper())
-    private lateinit var tvStatus: TextView; private lateinit var bar: ProgressBar; private lateinit var hist: LinearLayout
-    private val REQ_PICK = 1; private val REQ_DEL = 2
+    private lateinit var tvStatus: TextView; private lateinit var bar: ProgressBar; private lateinit var hist: LinearLayout; private lateinit var tvCount: TextView
+    companion object { const val REQ_PICK = 71; const val REQ_DEL = 72 }
     private var pendingDel: List<String> = emptyList()
     private var working = false
 
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-    private fun tv(t: String, s: Float, c: Int, p: LinearLayout, bold: Boolean = false) = TextView(this).apply {
+    private fun dp(v: Int) = (v * a.resources.displayMetrics.density).toInt()
+    private fun tv(t: String, s: Float, c: Int, p: LinearLayout, bold: Boolean = false) = TextView(a).apply {
         text = t; textSize = s; setTextColor(c); if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD); setPadding(0, dp(3), 0, dp(3)); p.addView(this)
     }
-    private fun btn(t: String, p: LinearLayout, primary: Boolean = false, onClick: () -> Unit) = Button(this).apply {
+    private fun btn(t: String, p: LinearLayout, primary: Boolean = false, onClick: () -> Unit) = Button(a).apply {
         text = t; isAllCaps = false; textSize = 14f; setTextColor(if (primary) 0xFF1A0A10.toInt() else FG)
-        background = GradientDrawable().apply { setColor(if (primary) ACCENT else 0xFF1C1C24.toInt()); cornerRadius = dp(10).toFloat(); if (!primary) setStroke(dp(1), LINE) }
+        background = GradientDrawable().apply { setColor(if (primary) ACCENT else 0xFF1C1C24.toInt()); cornerRadius = dp(12).toFloat(); if (!primary) setStroke(dp(1), LINE) }
+        stateListAnimator = null; elevation = 0f
         setOnClickListener { onClick() }
-        p.addView(this, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(dp(3), dp(4), dp(3), dp(4)) })
+        p.addView(this, LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(dp(3), dp(4), dp(3), dp(4)) })
     }
-    private fun card(p: LinearLayout) = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(12), dp(14), dp(12))
-        background = GradientDrawable().apply { setColor(CARD); cornerRadius = dp(14).toFloat(); setStroke(dp(1), LINE) }
+    private fun card(p: LinearLayout) = LinearLayout(a).apply {
+        orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(14), dp(16), dp(14))
+        background = GradientDrawable().apply { setColor(CARD); cornerRadius = dp(16).toFloat(); setStroke(dp(1), LINE) }
         p.addView(this, LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, dp(6), 0, dp(6)) })
     }
-    private fun row(p: LinearLayout) = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; p.addView(this, LinearLayout.LayoutParams(-1, -2)) }
+    private fun row(p: LinearLayout) = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; p.addView(this, LinearLayout.LayoutParams(-1, -2)) }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        window.statusBarColor = BG
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(18), dp(16), dp(24)) }
-        setContentView(ScrollView(this).apply { setBackgroundColor(BG); addView(root) })
-        tv("🧽 Remover metadados", 22f, FG, root, true)
-        tv("Qualquer foto ou vídeo do celular vira uma cópia limpa, salva sozinha em Download/PostLeve Limpos. Sai: localização, aparelho, data, programa, XMP e a credencial de IA (C2PA). Foto JPEG sai sem perder nenhuma qualidade; vídeo sai sem reprocessar a imagem.", 13f, MUTED, root)
-        tv("Dica: na galeria, segure fotos/vídeos → Compartilhar → 🧽 Limpar metadados.", 12f, MUTED, root)
-
+    fun build(root: LinearLayout) {
         val c1 = card(root)
+        tv("🧽 Remover metadados", 18f, FG, c1, true)
+        tv("Cópia limpa salva sozinha em Download/PostLeve Limpos. Sai: localização, aparelho, data, programa, XMP e credencial de IA (C2PA). JPEG sem perder qualidade; vídeo sem reprocessar.", 12.5f, MUTED, c1)
         val r1 = row(c1)
         btn("🖼 Fotos", r1, true) { pick("image/*") }
         btn("🎬 Vídeos", r1, true) { pick("video/*") }
-        btn("📁 Arquivos", row(c1)) { pickFiles() }
-        tv("Depois de limpar, o original:", 13f, FG, c1)
-        val r2 = row(c1)
+        btn("📁 Arquivos (fotos e vídeos)", row(c1)) { pickFiles() }
+        tvStatus = tv("", 13f, OK, c1)
+        bar = ProgressBar(a, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100; visibility = View.GONE }
+        c1.addView(bar, LinearLayout.LayoutParams(-1, dp(8)))
+
+        val c3 = card(root)
+        tv("Depois de limpar, o original:", 14f, FG, c3, true)
+        val r2 = row(c3)
         val opts = listOf("lixeira" to "🗑 Lixeira", "apagar" to "❌ Apagar", "manter" to "📌 Manter")
         val bs = ArrayList<Button>()
-        fun paint() { bs.forEachIndexed { i, b -> val on = MetaClean.delMode(this) == opts[i].first
-            b.setTextColor(if (on) 0xFF1A0A10.toInt() else FG); b.background = GradientDrawable().apply { setColor(if (on) OK else 0xFF1C1C24.toInt()); cornerRadius = dp(10).toFloat() } } }
-        opts.forEach { (k, l) -> bs += btn(l, r2) { MetaClean.setDelMode(this, k); paint() } }
+        fun paint() { bs.forEachIndexed { i, b -> val on = MetaClean.delMode(a) == opts[i].first
+            b.setTextColor(if (on) 0xFF06140D.toInt() else FG); b.background = GradientDrawable().apply { setColor(if (on) OK else 0xFF1C1C24.toInt()); cornerRadius = dp(12).toFloat(); if (!on) setStroke(dp(1), LINE) } } }
+        opts.forEach { (k, l) -> bs += btn(l, r2) { MetaClean.setDelMode(a, k); paint() } }
         paint()
-        tv("Lixeira = volta em até 30 dias. O Android sempre pede pra você confirmar antes de mexer no original.", 11f, MUTED, c1)
-        tvStatus = tv("", 13f, OK, c1)
-        bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100; visibility = View.GONE }
-        c1.addView(bar, LinearLayout.LayoutParams(-1, dp(8)))
+        tv("Lixeira = volta em até 30 dias. O Android sempre pede confirmação antes de mexer no original.\nDica: na galeria, Compartilhar → 🧽 Limpar metadados.", 11.5f, MUTED, c3)
 
         val c2 = card(root)
         val hr = row(c2)
-        TextView(this).apply { text = "🕘 Histórico"; textSize = 16f; setTextColor(FG); setTypeface(typeface, android.graphics.Typeface.BOLD); hr.addView(this, LinearLayout.LayoutParams(0, -2, 1f)) }
-        TextView(this).apply { text = "Limpar"; textSize = 13f; setTextColor(MUTED); setPadding(dp(8), dp(4), dp(8), dp(4)); hr.addView(this)
-            setOnClickListener { AlertDialog.Builder(this@MetaActivity).setMessage("Limpar o histórico? (os arquivos limpos continuam em Download)").setPositiveButton("Limpar") { _, _ -> MetaClean.clearHistory(this@MetaActivity); renderHist() }.setNegativeButton("Cancelar", null).show() } }
-        hist = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }; c2.addView(hist)
+        tvCount = TextView(a).apply { textSize = 16f; setTextColor(FG); setTypeface(typeface, android.graphics.Typeface.BOLD); hr.addView(this, LinearLayout.LayoutParams(0, -2, 1f)) }
+        TextView(a).apply { text = "Limpar"; textSize = 13f; setTextColor(MUTED); setPadding(dp(8), dp(4), dp(8), dp(4)); hr.addView(this)
+            setOnClickListener { AlertDialog.Builder(a).setMessage("Limpar o histórico? (os arquivos limpos continuam em Download)").setPositiveButton("Limpar") { _, _ -> MetaClean.clearHistory(a); renderHist() }.setNegativeButton("Cancelar", null).show() } }
+        hist = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }; c2.addView(hist)
         renderHist()
-        handleShare(intent)
     }
 
-    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); handleShare(intent) }
-
-    private fun handleShare(i: Intent?) {
+    fun handleShare(i: Intent?) {
         val uris = ArrayList<Uri>()
         when (i?.action) {
             Intent.ACTION_SEND -> (if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java) else @Suppress("DEPRECATION") i.getParcelableExtra(Intent.EXTRA_STREAM))?.let { uris += it }
@@ -300,106 +297,125 @@ class MetaActivity : Activity() {
         if (working) { toast("Espere terminar"); return }
         val i = if (Build.VERSION.SDK_INT >= 33) Intent(MediaStore.ACTION_PICK_IMAGES).apply { type = mime; putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, minOf(50, MediaStore.getPickImagesMaxLimit())) }
                 else Intent(Intent.ACTION_PICK, if (mime.startsWith("video")) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI).apply { type = mime; putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true) }
-        try { @Suppress("DEPRECATION") startActivityForResult(i, REQ_PICK) } catch (e: Exception) { pickFiles() }
+        try { @Suppress("DEPRECATION") a.startActivityForResult(i, REQ_PICK) } catch (e: Exception) { pickFiles() }
     }
 
     private fun pickFiles() {
         if (working) { toast("Espere terminar"); return }
         val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { type = "*/*"; addCategory(Intent.CATEGORY_OPENABLE); putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/*", "video/*")); putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true) }
-        try { @Suppress("DEPRECATION") startActivityForResult(i, REQ_PICK) } catch (e: Exception) { toast("Não abriu o seletor") }
+        try { @Suppress("DEPRECATION") a.startActivityForResult(i, REQ_PICK) } catch (e: Exception) { toast("Não abriu o seletor") }
     }
 
-    @Deprecated("Deprecated in Java")
-    override fun onActivityResult(req: Int, res: Int, data: Intent?) {
-        @Suppress("DEPRECATION") super.onActivityResult(req, res, data)
+    /** true se o resultado era deste painel. */
+    fun onResult(req: Int, res: Int, data: Intent?): Boolean {
         if (req == REQ_DEL) {
-            if (res == RESULT_OK) { MetaClean.markOriginal(this, pendingDel, MetaClean.delMode(this)); toast(if (MetaClean.delMode(this) == "apagar") "Originais apagados" else "Originais na lixeira") }
+            if (res == Activity.RESULT_OK) { MetaClean.markOriginal(a, pendingDel, MetaClean.delMode(a)); toast(if (MetaClean.delMode(a) == "apagar") "Originais apagados" else "Originais na lixeira") }
             else toast("Originais mantidos")
-            pendingDel = emptyList(); renderHist(); return
+            pendingDel = emptyList(); renderHist(); return true
         }
-        if (req != REQ_PICK || res != RESULT_OK || data == null) return
+        if (req != REQ_PICK) return false
+        if (res != Activity.RESULT_OK || data == null) return true
         val uris = ArrayList<Uri>()
         data.clipData?.let { cd -> for (k in 0 until cd.itemCount) uris.add(cd.getItemAt(k).uri) }
         if (uris.isEmpty()) data.data?.let { uris.add(it) }
-        uris.forEach { try { contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) } catch (e: Exception) { } }
+        uris.forEach { try { a.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) } catch (e: Exception) { } }
         if (uris.isNotEmpty()) process(uris)
+        return true
     }
 
     /** Limpa um por um (fotos numa thread, vídeos pelo editor) e no fim cuida dos originais. */
-    private fun process(uris: List<Uri>) {
+    fun process(uris: List<Uri>) {
         if (working) { toast("Espere terminar"); return }
-        working = true; window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        working = true; a.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val done = ArrayList<MetaClean.Res>()
         fun finishAll() {
-            working = false; window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); bar.visibility = View.GONE
+            working = false; a.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); bar.visibility = View.GONE
             val ok = done.filter { it.ok }; val bad = done.size - ok.size
             tvStatus.setTextColor(if (bad == 0) OK else 0xFFF5A524.toInt())
             tvStatus.text = "✓ ${ok.size} de ${done.size} limpo(s) e salvos em Download/PostLeve Limpos" + (if (bad > 0) "\n⚠ $bad não deu: " + done.filter { !it.ok }.joinToString("; ") { "${it.name}: ${it.err}" } else "")
             renderHist()
-            if (ok.isNotEmpty() && MetaClean.delMode(this) != "manter") deleteOriginals(ok)
+            if (ok.isNotEmpty() && MetaClean.delMode(a) != "manter") deleteOriginals(ok)
         }
         fun go(k: Int) {
             if (k >= uris.size) { finishAll(); return }
             val u = uris[k]
             tvStatus.setTextColor(FG); tvStatus.text = "Limpando ${k + 1} de ${uris.size}…"; bar.visibility = View.VISIBLE; bar.progress = (k * 100) / uris.size
-            if (MetaClean.isVideo(this, u)) {
+            if (MetaClean.isVideo(a, u)) {
                 fun start() {
                     if (VideoExport.busy() || AutoProducer.running) { tvStatus.text = "Esperando o editor terminar o que está fazendo…"; ui.postDelayed({ start() }, 3000); return }
-                    MetaClean.cleanVideo(this, u, { p -> bar.progress = (k * 100 + p) / uris.size }) { r -> MetaClean.record(this, r); done += r; go(k + 1) }
+                    MetaClean.cleanVideo(a, u, { p -> bar.progress = (k * 100 + p) / uris.size }) { r -> MetaClean.record(a, r); done += r; go(k + 1) }
                 }
                 start()
-            } else Thread { val r = MetaClean.cleanPhoto(this, u); MetaClean.record(this, r); ui.post { done += r; go(k + 1) } }.start()
+            } else Thread { val r = MetaClean.cleanPhoto(a, u); MetaClean.record(a, r); ui.post { done += r; go(k + 1) } }.start()
         }
         go(0)
     }
 
     private fun deleteOriginals(ok: List<MetaClean.Res>) {
         val media = ArrayList<Uri>(); val docs = ArrayList<Uri>()
-        ok.forEach { r -> val m = MetaClean.mediaUri(this, r.src, r.kind == "video"); if (m != null) media += m else if (DocumentsContract.isDocumentUri(this, r.src)) docs += r.src }
+        ok.forEach { r -> val m = MetaClean.mediaUri(a, r.src, r.kind == "video"); if (m != null) media += m else if (DocumentsContract.isDocumentUri(a, r.src)) docs += r.src }
         pendingDel = ok.map { it.src.toString() }
         if (media.isNotEmpty() && Build.VERSION.SDK_INT >= 30) {
             try {
-                val pi = if (MetaClean.delMode(this) == "apagar") MediaStore.createDeleteRequest(contentResolver, media) else MediaStore.createTrashRequest(contentResolver, media, true)
-                @Suppress("DEPRECATION") startIntentSenderForResult(pi.intentSender, REQ_DEL, null, 0, 0, 0)
+                val pi = if (MetaClean.delMode(a) == "apagar") MediaStore.createDeleteRequest(a.contentResolver, media) else MediaStore.createTrashRequest(a.contentResolver, media, true)
+                @Suppress("DEPRECATION") a.startIntentSenderForResult(pi.intentSender, REQ_DEL, null, 0, 0, 0)
             } catch (e: Exception) { toast("Não consegui pedir pra apagar: ${e.message}") }
         }
-        if (docs.isNotEmpty()) AlertDialog.Builder(this).setTitle("Apagar ${docs.size} original(is) de vez?")
+        if (docs.isNotEmpty()) AlertDialog.Builder(a).setTitle("Apagar ${docs.size} original(is) de vez?")
             .setMessage("Esses vieram de Arquivos e não têm lixeira: somem pra sempre. As cópias limpas já estão em Download/PostLeve Limpos.")
             .setPositiveButton("Apagar") { _, _ ->
-                var n = 0; docs.forEach { try { if (DocumentsContract.deleteDocument(contentResolver, it)) n++ } catch (e: Exception) { } }
-                MetaClean.markOriginal(this, docs.map { it.toString() }, "apagar"); toast("$n original(is) apagado(s)"); renderHist()
+                var n = 0; docs.forEach { try { if (DocumentsContract.deleteDocument(a.contentResolver, it)) n++ } catch (e: Exception) { } }
+                MetaClean.markOriginal(a, docs.map { it.toString() }, "apagar"); toast("$n original(is) apagado(s)"); renderHist()
             }.setNegativeButton("Manter", null).show()
         if (media.isEmpty() && docs.isEmpty()) toast("Não deu pra apagar o original por aqui: apague pela galeria")
     }
 
-    private fun renderHist() {
+    fun renderHist() {
+        if (!::hist.isInitialized) return
         hist.removeAllViews()
-        val l = MetaClean.history(this)
+        val l = MetaClean.history(a)
+        tvCount.text = "🕘 Histórico" + if (l.isNotEmpty()) " · ${l.count { it.optBoolean("ok") }} limpo(s)" else ""
         if (l.isEmpty()) { tv("Nada ainda. O que você limpar aparece aqui.", 12f, MUTED, hist); return }
         l.take(60).forEach { o ->
-            val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(8), 0, dp(8)) }
+            val box = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(8), 0, dp(8)) }
             hist.addView(box)
             val ico = if (o.optString("kind") == "video") "🎬" else "📸"
             val dt = android.text.format.DateFormat.format("dd/MM HH:mm", o.optLong("at"))
             tv("$ico ${o.optString("name").take(38)}  ·  $dt", 13f, if (o.optBoolean("ok")) FG else 0xFFF5A524.toInt(), box, true)
             if (!o.optBoolean("ok")) { tv("⚠ " + o.optString("err"), 12f, MUTED, box); return@forEach }
-            val rm = o.optJSONArray("removed")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList()
+            val rm = o.optJSONArray("removed")?.let { x -> (0 until x.length()).map { x.optString(it) } } ?: emptyList()
             tv("Tirado: " + rm.joinToString(", ") + "\n" + MetaClean.mb(o.optLong("before")) + " → " + MetaClean.mb(o.optLong("after")) +
                 when (o.optString("orig")) { "lixeira" -> "  ·  🗑 original na lixeira"; "apagar" -> "  ·  ❌ original apagado"; else -> "  ·  📌 original mantido" }, 12f, MUTED, box)
             val out = o.optString("out").takeIf { it.isNotEmpty() }?.let { Uri.parse(it) } ?: return@forEach
             val mime = if (o.optString("kind") == "video") "video/mp4" else "image/*"
             val r = row(box)
-            btn("👁 Abrir", r) { try { startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(out, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) } catch (e: Exception) { toast("O arquivo não existe mais") } }
-            btn("↗ Enviar", r) { try { startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType(mime).putExtra(Intent.EXTRA_STREAM, out).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "Enviar")) } catch (e: Exception) { toast("Não deu pra enviar") } }
+            btn("👁 Abrir", r) { try { a.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(out, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) } catch (e: Exception) { toast("O arquivo não existe mais") } }
+            btn("↗ Enviar", r) { try { a.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType(mime).putExtra(Intent.EXTRA_STREAM, out).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "Enviar")) } catch (e: Exception) { toast("Não deu pra enviar") } }
             btn("🗑 Cópia", r) {
-                AlertDialog.Builder(this).setMessage("Apagar a cópia limpa de Download? Não dá pra desfazer.").setPositiveButton("Apagar") { _, _ ->
-                    try { contentResolver.delete(out, null, null) } catch (e: Exception) { }
-                    JsonFile.edit(File(filesDir, "metadados.json")) { ll -> ll.firstOrNull { it.optLong("at") == o.optLong("at") }?.put("out", "") }; renderHist()
+                AlertDialog.Builder(a).setMessage("Apagar a cópia limpa de Download? Não dá pra desfazer.").setPositiveButton("Apagar") { _, _ ->
+                    try { a.contentResolver.delete(out, null, null) } catch (e: Exception) { }
+                    JsonFile.edit(File(a.filesDir, "metadados.json")) { ll -> ll.firstOrNull { it.optLong("at") == o.optLong("at") }?.put("out", "") }; renderHist()
                 }.setNegativeButton("Cancelar", null).show()
             }
-            box.addView(View(this).apply { setBackgroundColor(LINE) }, LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(6) })
+            box.addView(View(a).apply { setBackgroundColor(LINE) }, LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(6) })
         }
     }
 
-    private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
+    private fun toast(s: String) = Toast.makeText(a, s, Toast.LENGTH_SHORT).show()
+}
+
+/** Tela que abre pelo "Compartilhar → 🧽 Limpar metadados" da galeria. */
+class MetaActivity : Activity() {
+    private lateinit var panel: MetaPanel
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.statusBarColor = 0xFF000000.toInt()
+        val d = resources.displayMetrics.density
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding((16 * d).toInt(), (18 * d).toInt(), (16 * d).toInt(), (24 * d).toInt()) }
+        setContentView(ScrollView(this).apply { setBackgroundColor(0xFF000000.toInt()); addView(root) })
+        panel = MetaPanel(this); panel.build(root); panel.handleShare(intent)
+    }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); panel.handleShare(intent) }
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(req: Int, res: Int, data: Intent?) { @Suppress("DEPRECATION") super.onActivityResult(req, res, data); panel.onResult(req, res, data) }
 }

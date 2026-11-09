@@ -41,6 +41,7 @@ class MainActivity : Activity() {
     private val REQ_IGPHOTO = 16
 
     // paleta AMOLED
+    private lateinit var meta: MetaPanel
     internal val BG = 0xFF000000.toInt()
     internal val CARD = 0xFF121218.toInt()
     internal val LINE = 0xFF262630.toInt()
@@ -266,11 +267,11 @@ class MainActivity : Activity() {
 
         tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         root.addView(tabRow, lpMatch().apply { topMargin = dp(12) })
-        for (name in listOf("Postar", "Legendas", "Instagram", "Refs", "Analisar", "Ajustes")) {
+        for (name in listOf("Postar", "Legendas", "Instagram", "Refs", "Limpar", "Analisar", "Ajustes")) {
             if (name == "Analisar") { pages[name] = LinearLayout(this); continue } // desativada
             val pg = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             pages[name] = pg
-            val lab = mapOf("Postar" to "📸\nPostar", "Legendas" to "💬\nLegendas", "Instagram" to "🎬\nVídeos", "Refs" to "💡\nRefs", "Ajustes" to "⚙\nAjustes")[name] ?: name
+            val lab = mapOf("Postar" to "📸\nPostar", "Legendas" to "💬\nLegendas", "Instagram" to "🎬\nVídeos", "Refs" to "💡\nRefs", "Limpar" to "🧽\nLimpar", "Ajustes" to "⚙\nAjustes")[name] ?: name
             button(lab, tabRow, weight = true) { showTab(name) }.apply { tag = name; textSize = 11.5f; maxLines = 2; setPadding(dp(2), dp(6), dp(2), dp(6)) }
         }
 
@@ -393,14 +394,8 @@ class MainActivity : Activity() {
         }
         rankUi(); rankRedraw = { rankUi() }
 
-        // 🧽 remover metadados avulso
-        page = pages["Ajustes"]!!
-        val cmc = card("🧽 Remover metadados")
-        val tvMc = text("", 12f, MUTED, parent = cmc)
-        fun mcT() { val h = MetaClean.history(this); tvMc.text = "Qualquer foto ou vídeo → cópia limpa em Download/PostLeve Limpos, com histórico, e o original vai pra lixeira (ou é apagado, ou fica: você escolhe). Também pela galeria: Compartilhar → 🧽 Limpar metadados." +
-            (if (h.isNotEmpty()) "\nJá limpou ${h.count { it.optBoolean("ok") }} arquivo(s)." else "") }
-        mcT()
-        button("🧽 Abrir", cmc, primary = true) { startActivity(Intent(this, MetaActivity::class.java)) }
+        // ===== 🧽 Limpar (remover metadados)
+        meta = MetaPanel(this); meta.build(pages["Limpar"]!!)
 
         // atalhos sempre à mão (ficam em Ajustes)
         val ck = card("📌 Botão de postar sempre à mão")
@@ -899,6 +894,7 @@ class MainActivity : Activity() {
     private fun showTab(name: String) {
         Store.prefs(this).edit().putString("tab", name).apply()
         if (name == "Legendas") { renderLearn(); renderMine(); renderRefs() }
+        if (name == "Limpar" && ::meta.isInitialized) meta.renderHist()
         pages.forEach { (k, v) -> v.visibility = if (k == name) View.VISIBLE else View.GONE }
         for (i in 0 until tabRow.childCount) {
             val b = tabRow.getChildAt(i) as Button
@@ -1479,6 +1475,7 @@ class MainActivity : Activity() {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
         if (::insta.isInitialized && insta.onResult(requestCode, resultCode, data)) return
+        if (::meta.isInitialized && meta.onResult(requestCode, resultCode, data)) return
         if (::refs.isInitialized && refs.onResult(requestCode, resultCode, data)) return
         if (requestCode == REQ_RESTORE) {
             val u = data?.data ?: return
