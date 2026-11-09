@@ -172,6 +172,10 @@ class FloatService : Service() {
         item("📸", "Postar no Threads", "foto")
         item("🎬", "Postar no Instagram", "video")
         item("🤖", "Produzir vídeos", "produzir")
+        item("📖", "Ler esta tela (números)", "x").setOnClickListener {
+            closeMenu(); val r = ScreenReader.instance
+            if (r == null) android.widget.Toast.makeText(this, "Ligue o Leitor de tela (✅ Configuração)", android.widget.Toast.LENGTH_SHORT).show() else r.forceRead()
+        }
         item("🧽", "Limpar metadados", "x").setOnClickListener {
             closeMenu(); startActivity(Intent(this, MetaActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }

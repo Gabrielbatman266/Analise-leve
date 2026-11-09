@@ -351,6 +351,8 @@ class MainActivity : Activity() {
         }
         chips(crk, listOf("Ler todos os meus posts", "Só os do app"), { if (Macro.readAll(this)) "Ler todos os meus posts" else "Só os do app" }) { Macro.setReadAll(this, it.startsWith("Ler")) }
         text("✋ Modo manual: role e abra os posts você mesmo; quando o leitor captar, aparece um aviso verde.", 12f, MUTED, parent = crk)
+        text("📖 Forçar leitura: no Threads/Instagram aparece um botãozinho 📖 na borda. Abra o post ou o \"Ver insights\" e toque nele: lê, espera carregar, lê de novo, desce pra ver o resto e guarda (até post feito fora do app). Arraste pra mudar de lugar; segure pra esconder 30 min.", 12f, MUTED, parent = crk)
+        chips(crk, listOf("📖 Botão de leitura ligado", "Sem botão"), { if (Macro.readBtn(this)) "📖 Botão de leitura ligado" else "Sem botão" }) { Macro.setReadBtn(this, it.startsWith("📖")) }
         val rpz = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; crk.addView(rpz, lpMatch())
         val bPz = button("", rpz, weight = true) { }
         fun pzT() { bPz.text = if (Macro.paused(this)) "▶ Retomar o leitor de tela" else "⏸ Pausar o leitor por 1 h" }

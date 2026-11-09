@@ -178,6 +178,9 @@ object Macro {
     /** Também abre posts que você fez fora do app (guarda os números pela legenda). */
     fun readAll(c: Context) = p(c).getBoolean("macro_all", true)
     fun setReadAll(c: Context, v: Boolean) = p(c).edit().putBoolean("macro_all", v).apply()
+    /** 📖 Botão "Ler agora" flutuando no Threads/Instagram. */
+    fun readBtn(c: Context) = p(c).getBoolean("read_btn", true)
+    fun setReadBtn(c: Context, v: Boolean) = p(c).edit().putBoolean("read_btn", v).apply()
     /** ⏸ Pausa o leitor de tela (pra testar se ele atrapalha algo no Threads). */
     fun paused(c: Context) = p(c).getLong("reader_pause", 0) > System.currentTimeMillis()
     fun pause(c: Context, ms: Long) = p(c).edit().putLong("reader_pause", if (ms > 0) System.currentTimeMillis() + ms else 0).apply()
@@ -229,7 +232,123 @@ object Macro {
 }
 
 class ScreenReader : AccessibilityService() {
+    companion object { @Volatile var instance: ScreenReader? = null }
     private var last = 0L
+
+    override fun onServiceConnected() { super.onServiceConnected(); instance = this }
+    override fun onDestroy() { instance = null; hideReadBtn(); super.onDestroy() }
+
+    // ================= 📖 botão "Ler agora" (aparece só no Threads/Instagram) =================
+    private var readBtn: android.widget.TextView? = null
+    private var readLp: android.view.WindowManager.LayoutParams? = null
+    private var btnHiddenUntil = 0L
+    private var forcing = false
+    private var appHit = false
+    private val fgCheck = object : Runnable { override fun run() {
+        val pk = try { rootInActiveWindow?.packageName?.toString() } catch (e: Exception) { null }
+        if (pk != ThreadsNotif.THREADS && pk != ThreadsNotif.INSTA) hideReadBtn() else h.postDelayed(this, 2000)
+    } }
+
+    private fun showReadBtn() {
+        if (readBtn != null || running || !Macro.readBtn(this) || System.currentTimeMillis() < btnHiddenUntil) return
+        try {
+            val v = android.widget.TextView(this).apply {
+                text = "📖"; textSize = 18f; gravity = android.view.Gravity.CENTER; alpha = 0.55f
+                background = android.graphics.drawable.GradientDrawable().apply { shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(0xB3121216.toInt()); setStroke(dpx(1), 0x40FFFFFF) }
+            }
+            val lp = android.view.WindowManager.LayoutParams(dpx(44), dpx(44), android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, android.graphics.PixelFormat.TRANSLUCENT).apply {
+                gravity = android.view.Gravity.TOP or android.view.Gravity.END; x = dpx(4); y = Store.prefs(this@ScreenReader).getInt("readbtn_y", (resources.displayMetrics.heightPixels * 0.42).toInt())
+            }
+            var sy = 0; var ty = 0f; var moved = false; var down = 0L
+            v.setOnTouchListener { _, e ->
+                when (e.action) {
+                    android.view.MotionEvent.ACTION_DOWN -> { sy = lp.y; ty = e.rawY; moved = false; down = System.currentTimeMillis(); v.alpha = 1f }
+                    android.view.MotionEvent.ACTION_MOVE -> { val dy = e.rawY - ty; if (Math.abs(dy) > dpx(8)) moved = true; if (moved) { lp.y = sy + dy.toInt(); try { wm.updateViewLayout(v, lp) } catch (x: Exception) { } } }
+                    android.view.MotionEvent.ACTION_UP -> {
+                        v.alpha = 0.55f
+                        if (moved) Store.prefs(this).edit().putInt("readbtn_y", lp.y).apply()
+                        else if (System.currentTimeMillis() - down > 700) { btnHiddenUntil = System.currentTimeMillis() + 30 * 60_000L; hideReadBtn(); show("📖 Botão escondido por 30 min"); h.postDelayed({ if (!running) clearOverlay() }, 1800) }
+                        else forceRead()
+                    }
+                }
+                true
+            }
+            wm.addView(v, lp); readBtn = v; readLp = lp
+            h.removeCallbacks(fgCheck); h.postDelayed(fgCheck, 2000)
+        } catch (e: Exception) { }
+    }
+    private fun hideReadBtn() { try { readBtn?.let { wm.removeView(it) } } catch (e: Exception) { }; readBtn = null }
+
+    /** Todos os textos da tela (no Instagram só o visível). */
+    private fun collect(pkg: String, max: Int = 1500): List<String> {
+        val root = rootInActiveWindow ?: return emptyList()
+        val out = ArrayList<String>()
+        fun walk(n: AccessibilityNodeInfo?, d: Int) {
+            if (n == null || d > 60 || out.size > max) return
+            val visOk = pkg != ThreadsNotif.INSTA || n.isVisibleToUser
+            if (visOk) { n.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { out += it }; n.contentDescription?.toString()?.trim()?.takeIf { it.isNotEmpty() && it != n.text?.toString()?.trim() }?.let { out += it } }
+            for (k in 0 until n.childCount) walk(n.getChild(k), d + 1)
+        }
+        try { walk(root, 0) } catch (e: Exception) { }
+        return out
+    }
+
+    /** A legenda do post na tela (o 1º texto longo antes dos números), pra guardar post feito fora do app. */
+    private fun guessCap(nt: List<String>, raw: List<String>): String {
+        val me = Macro.handle(this).lowercase(); val ig = Macro.igHandle(this).lowercase()
+        val firstNum = nt.indexOfFirst { numOf(it) != null }.let { if (it < 0) nt.size else it }
+        val bad = Regex("insights|meta ai|this one|esse post|este post|your |seus |suas |summar|resum|views over|visualiza[cç][oõ]es ao longo|seguir|follow|traduz|translat|curtido por|liked by")
+        val i = (0 until firstNum).firstOrNull { k -> val t = nt[k]; t.length >= 8 && !TIME.matches(t) && t != me && t != ig && !t.startsWith("@") && !t.startsWith("http") && !bad.containsMatchIn(t) && LABELS.values.none { it.matches(t) } }
+            ?: nt.indices.filter { k -> nt[k].length >= 12 && !bad.containsMatchIn(nt[k]) && nt[k] != me }.maxByOrNull { nt[it].length } ?: return ""
+        return raw[i]
+    }
+
+    /** 📖 Ler esta tela agora: lê, espera carregar e lê de novo, desce 1x nos insights pra ver o resto, e guarda (post do app ou de fora). */
+    fun forceRead() {
+        if (forcing || running) return
+        val pkg = try { rootInActiveWindow?.packageName?.toString() } catch (e: Exception) { null }
+        if (pkg != ThreadsNotif.THREADS && pkg != ThreadsNotif.INSTA) { show("📖 Abra um post do Threads/Instagram primeiro"); h.postDelayed({ clearOverlay() }, 2000); return }
+        forcing = true; capturedNow = false
+        show("📖 Lendo esta tela…")
+        val all = LinkedHashMap<String, Int>(); var lastTexts: List<String> = emptyList(); var cap = ""; appHit = false
+        fun take() {
+            val raw = collect(pkg); lastTexts = raw
+            val nt = raw.map { norm(it) }
+            val got = try { scan(pkg, raw) } catch (e: Exception) { emptyList() }
+            if (got.isNotEmpty()) appHit = true
+            got.forEach { m -> m.forEach { (k, v) -> if (v > (all[k] ?: -2)) all[k] = v } }
+            // post de fora do app (ou legenda que não bateu): números da tela inteira + legenda achada na tela
+            val m = pairs(nt, 0, nt.size).toMutableMap(); extras(nt, m)
+            m.forEach { (k, v) -> if (v > (all[k] ?: -2)) all[k] = v }
+            if (cap.isEmpty()) cap = guessCap(nt, raw)
+        }
+        take()
+        h.postDelayed({
+            take()
+            val insights = lastTexts.any { LABELS["views"]!!.matches(norm(it)) }
+            val sc = rootInActiveWindow?.let { r -> nodes(r).firstOrNull { it.isScrollable && it.actionList.any { a -> a.id == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD } } }
+            if (insights && sc != null && sc.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) {
+                h.postDelayed({ take(); try { rootInActiveWindow?.let { r -> nodes(r).firstOrNull { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) } } catch (e: Exception) { }; done(pkg, all, cap, lastTexts) }, 1300)
+            } else done(pkg, all, cap, lastTexts)
+        }, 1300)
+    }
+
+    private fun done(pkg: String, all0: Map<String, Int>, cap: String, texts: List<String>) {
+        forcing = false
+        val all = all0.toMutableMap(); all["follows"]?.let { all["fol"] = it; all.remove("follows") }
+        val clean = ThreadsApi.sane(all)
+        if (clean.keys.none { !it.startsWith("vs_") }) {
+            dump(texts); show("⚠ Não achei números nesta tela. Abra o post (ou \"Ver insights\") e toque de novo.\nA tela foi salva no 📋 diagnóstico.", 0xEEB45309.toInt())
+            h.postDelayed({ if (!running) clearOverlay() }, 4500); return
+        }
+        val fromApp = appHit
+        if (!fromApp && core(cap).length >= 8) ThreadsApi.upsertOrphan(this, cap, clean, "forcado", if (pkg == ThreadsNotif.INSTA) "video" else "fila")
+        opened = 0; captured(clean, manual = true)
+        pill?.text = (pill?.text ?: "").toString() + if (fromApp) "\n📌 post do app" else if (core(cap).length >= 8) "\n📌 post de fora: \"" + cap.replace('\n', ' ').take(30) + "…\"" else "\n⚠ não achei a legenda: abra o post"
+        Thread { try { ThreadsApi.process(this) } catch (e: Exception) { } }.start()
+        h.postDelayed({ if (!running) clearOverlay() }, 4500)
+    }
 
     // ---------- 🤖 macro: rola o perfil, abre cada post SEU, abre a atividade, lê e volta
     private val h = android.os.Handler(android.os.Looper.getMainLooper())
@@ -325,6 +444,7 @@ class ScreenReader : AccessibilityService() {
 
     private fun startMacro() {
         if (running) return
+        hideReadBtn()
         running = true; state = "PROFILE"; done.clear(); opened = 0; noNew = 0; offApp = 0
         igPrevKey = ""; igSame = 0; igPtr = 0; igNotMine = 0; gridViews = emptyList(); igIndex = -1; igSends = null
         show("🤖 Coleta começando… não toque na tela")
@@ -609,6 +729,7 @@ class ScreenReader : AccessibilityService() {
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
         val ep = e?.packageName?.toString()
         if (!running && Macro.on(this) && ep == Macro.app(this)) { appPkg = ep; doneCells.clear(); startMacro() }
+        if ((ep == ThreadsNotif.THREADS || ep == ThreadsNotif.INSTA) && !running) h.post { showReadBtn() }
         if (ep == ThreadsRefs.THREADS) ThreadsRefs.threadsActive(this) // 📌 salvou mídia no Threads? já puxa pras Referências
         if (running) return // durante a coleta, quem lê é o próprio macro
         if (Macro.paused(this)) return // ⏸ pausado: não lê nada
@@ -736,6 +857,9 @@ class ScreenReader : AccessibilityService() {
         }
         for (i in from until to) Regex("^(\\d[\\d.,]*\\s*(?:mil|k|mi)?)\\s+(.+)$", RegexOption.IGNORE_CASE).find(nt[i])?.let { mm ->
             lab(mm.groupValues[2])?.let { k -> numOf(mm.groupValues[1])?.let { v -> out.putIfAbsent(k, v) } } }
+        // "Curtir, 57" / "Like 57" / "Curtidas: 57" (botão com descrição)
+        for (i in from until to) Regex("^(.+?)[,:]?\\s+(\\d[\\d.,]*\\s*(?:mil|k|mi)?)$", RegexOption.IGNORE_CASE).find(nt[i])?.let { mm ->
+            lab(mm.groupValues[1].trim())?.let { k -> numOf(mm.groupValues[2])?.let { v -> out.putIfAbsent(k, v) } } }
         return out
     }
 
@@ -747,7 +871,7 @@ class ScreenReader : AccessibilityService() {
         val me = Macro.handle(this).lowercase()
         val ownProfile = nt.any { it == "editar perfil" || it == "edit profile" || it == "compartilhar perfil" || it == "share profile" } || (me.isNotEmpty() && nt.any { it == me || it == "@$me" })
         if (!video && ownProfile) nt.firstNotNullOfOrNull { FOLLOW.find(it) }?.let { m -> numOf(m.groupValues[1] + (m.groupValues[2].takeIf { it.isNotEmpty() }?.let { " $it" } ?: ""))?.let { ThreadsApi.addFollowers(this, it, "tela") } }
-        val sends = SendLog.all(this).filter { System.currentTimeMillis() - it.optLong("at") < 30 * 86400_000L && (it.optString("kind") == "video") == video }
+        val sends = SendLog.all(this).filter { System.currentTimeMillis() - it.optLong("at") < 60 * 86400_000L && (it.optString("kind") == "video") == video }
         if (sends.isEmpty()) return got
         val insights = nt.any { LABELS["views"]!!.matches(it) } && nt.count { t -> LABELS.values.any { it.matches(t) } } >= 3
         var found = 0
