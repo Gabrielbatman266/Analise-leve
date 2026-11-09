@@ -207,20 +207,31 @@ class ScreenReader : AccessibilityService() {
         return ((clean.toDoubleOrNull() ?: return null) * mult).toInt()
     }
 
-    /** Número logo antes ou logo depois de um rótulo ("52" "Curtidas" ou "Curtidas" "52"). */
+    /** Número de cada rótulo. Descobre se a tela mostra "Curtidas 52" ou "52 Curtidas" e usa só esse lado. */
     private fun pairs(nt: List<String>, from: Int, to: Int): Map<String, Int> {
         val out = HashMap<String, Int>()
-        for (i in from until to) {
-            val key = LABELS.entries.firstOrNull { it.value.matches(nt[i]) }?.key ?: run {
-                // "52 curtidas" num texto só
-                LABELS.entries.firstNotNullOfOrNull { (k, _) ->
-                    Regex("^(\\d[\\d.,]*\\s*(?:mil|k|mi)?)\\s+(.+)$", RegexOption.IGNORE_CASE).find(nt[i])?.let { mm -> if (LABELS[k]!!.matches(mm.groupValues[2])) { numOf(mm.groupValues[1])?.let { v -> out.putIfAbsent(k, v) }; null } else null }
-                }
-                null
-            } ?: continue
-            val v = (if (i + 1 < nt.size) numOf(nt[i + 1]) else null) ?: (if (i > 0) numOf(nt[i - 1]) else null) ?: continue
-            out.putIfAbsent(key, v)
+        fun lab(t: String) = LABELS.entries.firstOrNull { it.value.matches(t) }?.key
+        val idx = (from until to).filter { lab(nt[it]) != null }
+        if (idx.isEmpty()) {
+            // "52 curtidas" num texto só
+            for (i in from until to) Regex("^(\\d[\\d.,]*\\s*(?:mil|k|mi)?)\\s+(.+)$", RegexOption.IGNORE_CASE).find(nt[i])?.let { mm ->
+                lab(mm.groupValues[2])?.let { k -> numOf(mm.groupValues[1])?.let { v -> out.putIfAbsent(k, v) } } }
+            return out
         }
+        val after = idx.count { it + 1 < nt.size && numOf(nt[it + 1]) != null }
+        val before = idx.count { it > 0 && numOf(nt[it - 1]) != null && lab(nt.getOrElse(it - 2) { "" }) == null }
+        // tela "52 Curtidas": começa com número antes do 1º rótulo e o último rótulo não tem número depois
+        val first = idx.first(); val last = idx.last()
+        val startsWithNum = first > 0 && numOf(nt[first - 1]) != null
+        val lastAlone = last + 1 >= nt.size || numOf(nt[last + 1]) == null
+        val useBefore = (startsWithNum && lastAlone) || before > after
+        idx.forEach { i ->
+            val k = lab(nt[i]) ?: return@forEach
+            val v = if (useBefore) (if (i > 0) numOf(nt[i - 1]) else null) else (if (i + 1 < nt.size) numOf(nt[i + 1]) else null)
+            v?.let { out.putIfAbsent(k, it) }
+        }
+        for (i in from until to) Regex("^(\\d[\\d.,]*\\s*(?:mil|k|mi)?)\\s+(.+)$", RegexOption.IGNORE_CASE).find(nt[i])?.let { mm ->
+            lab(mm.groupValues[2])?.let { k -> numOf(mm.groupValues[1])?.let { v -> out.putIfAbsent(k, v) } } }
         return out
     }
 
