@@ -140,6 +140,17 @@ object ThreadsApi {
         return n
     }
 
+    /** Uma vez: tira da série os "seguidores" que eram de OUTROS perfis (bem longe dos vizinhos). */
+    fun repairFollowers(c: Context) {
+        if (p(c).getBoolean("repair_fol", false)) return
+        JsonFile.edit(folFile(c)) { l ->
+            val api = l.filter { it.optString("src") == "api" }.map { it.optInt("n") }
+            val ref = (api.ifEmpty { l.map { it.optInt("n") } }).sorted().let { if (it.isEmpty()) 0 else it[it.size / 2] }
+            if (ref > 0) l.removeAll { o -> o.optString("src") != "api" && (o.optInt("n") > ref * 1.4 || o.optInt("n") < ref * 0.6) }
+        }
+        p(c).edit().putBoolean("repair_fol", true).apply()
+    }
+
     fun upsertLocal(c: Context, sendAt: Long, photoId: String, text: String, m0: Map<String, Int>, src: String, kind: String = "fila") {
         val m = sane(m0)
         if (m.isEmpty()) return
@@ -181,6 +192,7 @@ object ThreadsApi {
     /** Sem rede: distribui seguidores e dá as notas com o que já se sabe (API, tela ou print). */
     fun process(c: Context) {
         try { repair(c) } catch (e: Exception) { }
+        try { repairFollowers(c) } catch (e: Exception) { }
         val ps = posts(c); if (ps.isEmpty()) return
         attributeFollowers(c, ps)
         JsonFile.write(file(c), ps)
