@@ -1520,6 +1520,8 @@ class MainActivity : Activity() {
             }.show()
     }
 
+    private fun pickPosts() = pickImages(REQ_POSTS, true)
+
     /** 📊 A IA lê os prints do Threads (insights do post ou perfil) e guarda os números. */
     private fun readPrints(uris: List<Uri>) {
         toast("Lendo ${uris.size} print(s)…")
