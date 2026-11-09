@@ -118,9 +118,9 @@ object ThreadsApi {
     const val MAXV = 3_000_000
     /** Bom senso: tira número impossível (curtidas > visualizações, valor gigante) antes de guardar. */
     fun sane(m0: Map<String, Int>): Map<String, Int> {
-        val m = m0.filterValues { it in 0..MAXV }.toMutableMap()
+        val m = m0.filter { (k, v) -> v in (if (k.startsWith("vs_")) -1 else 0)..MAXV }.toMutableMap()
         val v = m["views"]
-        if (v != null && v >= 30) listOf("likes", "replies", "reposts", "quotes", "shares", "saves", "fol").forEach { k -> m[k]?.let { if (it > v * 1.2) m.remove(k) } }
+        if (v != null && v >= 30) listOf("likes", "replies", "reposts", "quotes", "shares", "saves", "fol", "viewers", "visits").forEach { k -> m[k]?.let { if (it > v * 1.2) m.remove(k) } }
         if (v == null) m["likes"]?.let { lk -> m.filterKeys { it != "likes" }.values.maxOrNull()?.let { other -> if (other > 0 && lk > other * 400) m.remove("likes") } }
         return m
     }
@@ -245,10 +245,13 @@ object ThreadsApi {
         val ps = ps0.filter { it.optString("kind", "fila").ifEmpty { "fila" } == kind }.ifEmpty { ps0 } // vídeo compara com vídeo, foto com foto
         fun col(k: String) = ps.map { it.optDouble(k, 0.0) }
         val inter = { o: JSONObject -> o.optDouble("reposts", 0.0) + o.optDouble("quotes", 0.0) + o.optDouble("shares", 0.0) + o.optDouble("saves", 0.0) }
-        return 0.25 * pct(m.optDouble("likes", 0.0), col("likes")) +
-            0.20 * pct(m.optDouble("replies", 0.0), col("replies")) +
+        // 👤 visitas ao perfil = intenção de seguir: entra quando o post tem esse número
+        val hasVis = m.has("visits") && ps.count { it.has("visits") } >= 3
+        return (if (hasVis) 0.22 else 0.25) * pct(m.optDouble("likes", 0.0), col("likes")) +
+            (if (hasVis) 0.18 else 0.20) * pct(m.optDouble("replies", 0.0), col("replies")) +
             0.10 * pct(inter(m), ps.map(inter)) +
-            0.20 * pct(m.optDouble("views", 0.0), col("views")) +
+            (if (hasVis) 0.15 else 0.20) * pct(m.optDouble("views", 0.0), col("views")) +
+            (if (hasVis) 0.10 * pct(m.optDouble("visits", 0.0), ps.filter { it.has("visits") }.map { it.optDouble("visits", 0.0) }) else 0.0) +
             0.25 * pct(m.optDouble("fol", 0.0), col("fol"))
     }
 
@@ -320,7 +323,7 @@ object ThreadsApi {
     fun aiText(c: Context): String {
         val tf = topFollowers(c, 5); if (tf.isEmpty()) return ""
         return "👥 POSTS QUE MAIS TROUXERAM SEGUIDORES (números exatos da API):\n" +
-            tf.joinToString("\n") { "- \"${it.optString("text").replace('\n', ' ').take(90)}\" → +${"%.1f".format(it.optDouble("fol"))} seguidores, ${it.optInt("views")} visualizações, ${it.optInt("likes")} curtidas, ${it.optInt("replies")} respostas" } +
+            tf.joinToString("\n") { "- \"${it.optString("text").replace('\n', ' ').take(90)}\" → +${"%.1f".format(it.optDouble("fol"))} seguidores, ${it.optInt("views")} visualizações" + (if (it.has("visits")) ", ${it.optInt("visits")} visitas ao perfil" else "") + ", ${it.optInt("likes")} curtidas, ${it.optInt("replies")} respostas" + (if (it.optInt("xviews") > 0) " (Meta: ${it.optInt("xviews") / 10.0}x mais views que o normal)" else "") } +
             "\nPriorize o tipo de legenda/conteúdo que traz SEGUIDORES, não só curtidas."
     }
 

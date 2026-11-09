@@ -291,7 +291,7 @@ class ScreenReader : AccessibilityService() {
 
     private fun captured(m: Map<String, Int>, manual: Boolean = false) {
         val parts = listOfNotNull(m["views"]?.let { "👁 $it" }, m["likes"]?.let { "❤ $it" }, m["replies"]?.let { "💬 $it" }, m["reposts"]?.let { "🔁 $it" },
-            m["shares"]?.let { "↗ $it" }, m["saves"]?.let { "🔖 $it" }, m["fol"]?.let { "👥 +$it" })
+            m["shares"]?.let { "↗ $it" }, m["saves"]?.let { "🔖 $it" }, m["visits"]?.let { "👤 $it" }, m["fol"]?.let { "👥 +$it" }, m["xviews"]?.let { "⚡${it / 10.0}x" })
         show((if (manual) "✓ Captado  " else "✓ Post $opened/${Macro.maxPosts(this)} captado  ") + parts.joinToString("  "), 0xEE15803D.toInt())
         buzz(); capturedNow = true
     }
@@ -586,6 +586,7 @@ class ScreenReader : AccessibilityService() {
         val nt = texts.map { norm(it) }
         val insights = nt.any { LABELS["views"]!!.matches(it) }
         val m = pairs(nt, 0, nt.size).toMutableMap()
+        if (insights) extras(nt, m)
         if (m.isEmpty()) return
         m["follows"]?.let { m["fol"] = it; m.remove("follows") }
         ThreadsApi.upsertOrphan(this, currentCap, m, if (insights) "insights" else "tela")
@@ -670,6 +671,8 @@ class ScreenReader : AccessibilityService() {
         "reposts" to Regex("^(reposts?|repostar|republica[cç][oõ]es)$", RegexOption.IGNORE_CASE),
         "quotes" to Regex("^(cita[cç][oõ]es|quotes?|citar)$", RegexOption.IGNORE_CASE),
         "shares" to Regex("^(compartilhamentos|shares?|compartilhar|enviar|envios|sends?)$", RegexOption.IGNORE_CASE),
+        "viewers" to Regex("^(viewers|espectadores|pessoas alcan[cç]adas|contas que viram|alcance)$", RegexOption.IGNORE_CASE),
+        "visits" to Regex("^(profile visits|visitas ao perfil|visitas no perfil)$", RegexOption.IGNORE_CASE),
         "follows" to Regex("^(seguidores|follows|novos seguidores|seguiram|seguimentos|follows gained)$", RegexOption.IGNORE_CASE))
 
     private fun numOf(t: String): Int? {
@@ -678,6 +681,34 @@ class ScreenReader : AccessibilityService() {
         val mult = when (m.groupValues[2].lowercase().trimEnd('.')) { "mil", "k" -> 1000.0; "mi", "milhões", "milhoes" -> 1_000_000.0; else -> 1.0 }
         val s = m.groupValues[1]; val clean = if (mult > 1) s.replace(',', '.') else s.replace(".", "").replace(",", "")
         return ((clean.toDoubleOrNull() ?: return null) * mult).toInt()
+    }
+
+    private val VS = Regex("^(higher|lower|typical|maior|menor|t[ií]pico|t[ií]pica|acima( do normal)?|abaixo( do normal)?|normal|mais alto|mais baixo|above|below)$", RegexOption.IGNORE_CASE)
+
+    /**
+     * Tela de insights do post: o que vai além dos rótulos.
+     * - a comparação da própria Meta embaixo de cada número (Higher/Typical/Lower) → vs_views, vs_fol...
+     * - o resumo da Meta AI ("16x more views") → xviews (x10)
+     * - a fileira de ícones do post (❤ 57 · 💬 24 · 🔁 0 · ↗ 0), que não tem rótulo
+     */
+    private fun extras(nt: List<String>, m: MutableMap<String, Int>) {
+        fun lab(t: String) = LABELS.entries.firstOrNull { it.value.matches(t) }?.key
+        for (i in nt.indices) {
+            val k = lab(nt[i]) ?: continue
+            val j = (i + 1..minOf(nt.size - 1, i + 3)).firstOrNull { VS.matches(nt[it]) } ?: continue
+            if ((i + 1 until j).none { numOf(nt[it]) != null }) continue
+            val v = nt[j].lowercase()
+            m["vs_" + (if (k == "follows") "fol" else k)] = when { Regex("high|maior|acima|mais alto|above").containsMatchIn(v) -> 1; Regex("low|menor|abaixo|mais baixo|below").containsMatchIn(v) -> -1; else -> 0 }
+        }
+        nt.firstNotNullOfOrNull { Regex("(\\d+(?:[.,]\\d+)?)\\s*(?:x|vezes)\\s+(?:more|mais)").find(it) }?.let { r ->
+            r.groupValues[1].replace(',', '.').toDoubleOrNull()?.let { if (it in 0.1..500.0) m["xviews"] = (it * 10).toInt() }
+        }
+        if (m["likes"] == null) {
+            val stop = nt.indexOfFirst { it == "summary" || it == "resumo" || lab(it) != null }.let { if (it < 0) nt.size else it }
+            var run = ArrayList<Int>()
+            for (i in 0 until stop) { val v = numOf(nt[i]); if (v != null) run.add(v) else if (run.size in 1..2) run = ArrayList() else if (run.size >= 3) break }
+            if (run.size >= 3) listOf("likes", "replies", "reposts", "shares").forEachIndexed { k, key -> run.getOrNull(k)?.let { m.putIfAbsent(key, it) } }
+        }
     }
 
     /** Número de cada rótulo. Descobre se a tela mostra "Curtidas 52" ou "52 Curtidas" e usa só esse lado. */
@@ -728,6 +759,7 @@ class ScreenReader : AccessibilityService() {
             // 2) tela de insights do post: pega todos os rótulos da tela; 3) feed/perfil: só os botões logo depois da legenda
             val m = if (insights) pairs(nt, 0, nt.size) else pairs(nt, idx + 1, minOf(nt.size, idx + 16))
             val mm = m.toMutableMap()
+            if (insights) extras(nt, mm)
             if (!insights && mm["likes"] == null) { // sem rótulo: 1º número depois da legenda = curtidas
                 for (j in idx + 1..minOf(nt.size - 1, idx + 10)) { numOf(nt[j])?.let { mm["likes"] = it }; if (mm["likes"] != null) break }
             }

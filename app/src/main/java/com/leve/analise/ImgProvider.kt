@@ -17,7 +17,7 @@ class ImgProvider : ContentProvider() {
     private fun fileFor(uri: Uri): File {
         val name = uri.lastPathSegment ?: throw FileNotFoundException()
         val f = when {
-            Regex("[a-z0-9]+\\.jpg").matches(name) -> File(PostQueue.dir(context!!), name)
+            Regex("[a-z0-9_]+\\.jpg").matches(name) -> File(PostQueue.dir(context!!), name)
             Regex("[a-z0-9]+\\.mp4").matches(name) -> File(VideoExport.videoDir(context!!), name) // vídeos prontos, direto do app
             name == Updater.FILE -> File(context!!.cacheDir, name) // APK da atualização, só pro instalador
             else -> throw FileNotFoundException()
