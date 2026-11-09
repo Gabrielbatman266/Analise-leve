@@ -160,10 +160,131 @@ class RateWatchReceiver : BroadcastReceiver() {
 }
 
 /** 👀 Leitor de tela: só no Threads/Instagram, só lê o número de curtidas perto da legenda dos SEUS posts. */
+/** 🤖 Coleta automática (macro): liga/desliga e guarda o resultado. */
+object Macro {
+    private fun p(c: Context) = Store.prefs(c)
+    fun on(c: Context) = p(c).getBoolean("macro_on", false)
+    fun handle(c: Context) = (p(c).getString("th_handle", null) ?: ThreadsApi.user(c)).trim().removePrefix("@")
+    fun setHandle(c: Context, h: String) = p(c).edit().putString("th_handle", h.trim().removePrefix("@")).apply()
+    fun maxPosts(c: Context) = p(c).getInt("macro_max", 15)
+    fun lastRun(c: Context) = p(c).getString("macro_last", "") ?: ""
+
+    fun start(c: Context): String {
+        if (!RateWatch.readerOn(c)) return "Ligue o Leitor de tela primeiro (✅ Configuração)"
+        p(c).edit().putBoolean("macro_on", true).putLong("macro_start", System.currentTimeMillis()).apply()
+        notifyRunning(c)
+        val h = handle(c)
+        val i = if (h.isNotEmpty()) Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://www.threads.com/@$h")).setPackage(ThreadsNotif.THREADS)
+                else c.packageManager.getLaunchIntentForPackage(ThreadsNotif.THREADS)
+        return try { c.startActivity(i!!.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); if (h.isEmpty()) "Abra o SEU perfil no Threads: a coleta começa sozinha" else "Abrindo seu perfil… não toque na tela por uns minutos" }
+        catch (e: Exception) { stop(c, "não consegui abrir o Threads"); "Não consegui abrir o Threads" }
+    }
+
+    fun stop(c: Context, why: String) {
+        p(c).edit().putBoolean("macro_on", false).putString("macro_last", android.text.format.DateFormat.format("dd/MM HH:mm", System.currentTimeMillis()).toString() + " · " + why).apply()
+        c.getSystemService(NotificationManager::class.java).cancel(95)
+        try { ThreadsApi.process(c) } catch (e: Exception) { }
+        val nm = c.getSystemService(NotificationManager::class.java)
+        val b = Notification.Builder(c, "estoque").setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("🤖 Coleta terminada").setContentText(why).setAutoCancel(true)
+        try { nm.createNotificationChannel(NotificationChannel("estoque", "Estoque", NotificationManager.IMPORTANCE_DEFAULT)); nm.notify(94, b.build()) } catch (e: Exception) { }
+    }
+
+    private fun notifyRunning(c: Context) {
+        val nm = c.getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(NotificationChannel("macro", "Coleta automática", NotificationManager.IMPORTANCE_LOW))
+        val stop = PendingIntent.getBroadcast(c, 99, Intent(c, AdminReceiver::class.java).setAction("macro_stop"), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val n = Notification.Builder(c, "macro").setSmallIcon(android.R.drawable.ic_menu_search).setContentTitle("🤖 Coletando números do Threads…")
+            .setContentText("Rolando devagar e abrindo só os seus posts. Toque em Parar quando quiser.").setOngoing(true)
+            .addAction(Notification.Action.Builder(null, "⏹ Parar", stop).build()).build()
+        try { nm.notify(95, n) } catch (e: Exception) { }
+    }
+}
+
 class ScreenReader : AccessibilityService() {
     private var last = 0L
 
+    // ---------- 🤖 macro: rola o perfil, abre cada post SEU, abre a atividade, lê e volta
+    private val h = android.os.Handler(android.os.Looper.getMainLooper())
+    private var running = false
+    private var state = "PROFILE"
+    private val done = HashSet<String>()
+    private var opened = 0; private var noNew = 0; private var triedInsights = false; private var offApp = 0
+
+    private fun rnd(a: Long, b: Long) = (a..b).random()
+    private fun next(ms: Long) { h.postDelayed({ step() }, ms) }
+
+    private fun startMacro() {
+        if (running) return
+        running = true; state = "PROFILE"; done.clear(); opened = 0; noNew = 0; offApp = 0
+        next(3500)
+    }
+
+    private fun finish(why: String) { running = false; h.removeCallbacksAndMessages(null); Macro.stop(this, why) }
+
+    private fun nodes(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
+        val out = ArrayList<AccessibilityNodeInfo>()
+        fun walk(n: AccessibilityNodeInfo?, d: Int) { if (n == null || d > 40 || out.size > 900) return; out += n; for (k in 0 until n.childCount) walk(n.getChild(k), d + 1) }
+        walk(root, 0); return out
+    }
+    private fun txt(n: AccessibilityNodeInfo) = norm((n.text ?: n.contentDescription ?: "").toString())
+    private fun clickable(n: AccessibilityNodeInfo?): AccessibilityNodeInfo? { var x = n; var d = 0; while (x != null && d < 8) { if (x.isClickable) return x; x = x.parent; d++ }; return null }
+
+    private fun step() {
+        if (!running) return
+        if (!Macro.on(this)) { finish("parada por você"); return }
+        val st = Store.prefs(this).getLong("macro_start", 0)
+        if (System.currentTimeMillis() - st > 5 * 60_000L) { finish("tempo máximo (5 min): $opened post(s) lidos"); return }
+        if (opened >= Macro.maxPosts(this)) { finish("✓ $opened post(s) lidos"); return }
+        val root = rootInActiveWindow
+        if (root == null || root.packageName?.toString() != ThreadsNotif.THREADS) {
+            if (++offApp >= 4) { finish("saiu do Threads: $opened post(s) lidos"); return }
+            next(2500); return
+        }
+        offApp = 0
+        val all = nodes(root)
+        // lê o que está na tela agora (números, seguidores)
+        val texts = all.mapNotNull { (it.text ?: it.contentDescription)?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() } }
+        Thread { try { scan(ThreadsNotif.THREADS, texts) } catch (x: Exception) { } }.start()
+        val caps = SendLog.all(this).filter { it.optString("kind") == "fila" && System.currentTimeMillis() - it.optLong("at") < 30 * 86400_000L }
+            .map { norm(it.optString("cap")).take(28) }.filter { it.length >= 8 }.distinct()
+        when (state) {
+            "PROFILE" -> {
+                val target = all.firstOrNull { n -> val t = txt(n); t.length >= 8 && caps.any { k -> (t.startsWith(k) || k.startsWith(t.take(28))) && k !in done } }
+                if (target != null) {
+                    val t = txt(target); caps.firstOrNull { k -> t.startsWith(k) || k.startsWith(t.take(28)) }?.let { done += it }
+                    val cl = clickable(target)
+                    if (cl != null && cl.performAction(AccessibilityNodeInfo.ACTION_CLICK)) { opened++; noNew = 0; state = "POST"; triedInsights = false; next(rnd(2800, 4200)); return }
+                }
+                // nenhum post novo visível: desce um pouco
+                val sc = all.firstOrNull { it.isScrollable && it.actionList.any { a -> a.id == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD } }
+                val ok = sc?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) ?: false
+                if (!ok) swipeUp()
+                if (++noNew >= 7) { finish("✓ fim dos posts recentes: $opened post(s) lidos"); return }
+                next(rnd(2500, 4000))
+            }
+            "POST" -> {
+                // abre "Ver atividade"/"Insights" se existir
+                val ins = if (triedInsights) null else all.firstOrNull { n -> Regex("ver atividade|view activity|insights|ver insights|atividade da publica|post activity|estatísticas").containsMatchIn(txt(n)) }
+                triedInsights = true
+                val cl = clickable(ins)
+                if (cl != null && cl.performAction(AccessibilityNodeInfo.ACTION_CLICK)) { state = "INSIGHTS"; next(rnd(3000, 4500)); return }
+                performGlobalAction(GLOBAL_ACTION_BACK); state = "PROFILE"; next(rnd(2500, 3800))
+            }
+            "INSIGHTS" -> { performGlobalAction(GLOBAL_ACTION_BACK); state = "POST_BACK"; next(rnd(2000, 3000)) }
+            "POST_BACK" -> { performGlobalAction(GLOBAL_ACTION_BACK); state = "PROFILE"; next(rnd(2500, 3800)) }
+        }
+    }
+
+    /** Desliza o dedo de baixo pra cima, devagar (quando a lista não aceita "rolar"). */
+    private fun swipeUp() {
+        val dm = resources.displayMetrics
+        val path = android.graphics.Path().apply { moveTo(dm.widthPixels * 0.5f, dm.heightPixels * 0.72f); lineTo(dm.widthPixels * 0.5f, dm.heightPixels * 0.32f) }
+        try { dispatchGesture(android.accessibilityservice.GestureDescription.Builder().addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 650)).build(), null, null) } catch (e: Exception) { }
+    }
+
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
+        if (!running && Macro.on(this) && e?.packageName?.toString() == ThreadsNotif.THREADS) startMacro()
+        if (running) return // durante a coleta, quem lê é o próprio macro
         val now = System.currentTimeMillis()
         if (now - last < 1500) return
         last = now

@@ -245,6 +245,7 @@ object AB {
 
 class AdminReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
+        if (i.action == "macro_stop") { Store.prefs(c).edit().putBoolean("macro_on", false).apply(); c.getSystemService(NotificationManager::class.java).cancel(95); return }
         if (i.action == "copiar_ideia") {
             Stock.ideas(c).firstOrNull()?.let { c.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("ideia", it)) }
             android.widget.Toast.makeText(c, "Ideia copiada: cole no Flow", android.widget.Toast.LENGTH_SHORT).show()

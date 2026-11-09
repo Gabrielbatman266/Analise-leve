@@ -329,6 +329,16 @@ class MainActivity : Activity() {
         // 🏆 ranking + ✨ postagem perfeita
         val crk = card("🏆 Ranking e postagem perfeita")
         button("✨ Montar a postagem perfeita", crk, primary = true) { showPerfect(false) }
+        val rmc = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; crk.addView(rmc, lpMatch())
+        val etH = EditText(this).apply { hint = "seu @ no Threads"; setText(Macro.handle(this@MainActivity)); setSingleLine(true); setTextColor(FG); setHintTextColor(MUTED); textSize = 13f }
+        rmc.addView(etH, LinearLayout.LayoutParams(0, -2, 1f))
+        button("🤖 Coletar números", rmc) {
+            Macro.setHandle(this, etH.text.toString())
+            AlertDialog.Builder(this).setTitle("🤖 Coleta automática")
+                .setMessage("O app vai abrir seu perfil no Threads, descer devagar, abrir só os SEUS posts (pela legenda), abrir a atividade/insights, ler os números e voltar. Não curte, não comenta, não clica em mais nada.\n\nLimite: ${Macro.maxPosts(this)} posts ou 5 minutos. Não mexa no celular enquanto roda; pra parar, use ⏹ na notificação.\n\nA Meta não permite coleta automática: vai devagar pra ser discreto, mas use com moderação (1x por dia).")
+                .setPositiveButton("Começar") { _, _ -> toast(Macro.start(this)) }.setNegativeButton("Cancelar", null).show()
+        }
+        Macro.lastRun(this).takeIf { it.isNotBlank() }?.let { text("Última coleta: $it", 11f, MUTED, parent = crk) }
         val rkBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         crk.addView(rkBox, lpMatch())
         text("De onde vêm os números (sem API): 1) abra seu PERFIL no Threads e role devagar — o leitor de tela pega seguidores e os números de cada post; 2) abra \"Ver insights/atividade\" de um post — pega visualizações, respostas, reposts e seguidores; 3) compartilhe o PRINT dos insights com o Post Leve (a IA lê).", 11f, MUTED, parent = crk)
