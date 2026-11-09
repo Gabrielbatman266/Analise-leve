@@ -122,7 +122,7 @@ object SelfTest {
         val src = Uri.fromFile(Projects.srcFile(c, p.optString("id"), photo))
         val t0 = System.currentTimeMillis()
         try {
-            VideoExport.export(c, VideoExport.Job(src, photo, 2, "teste", VideoExport.TextStyle(), null, true, "1080p", 0, if (photo) 0 else 2000), {}) { f, err ->
+            VideoExport.export(c, VideoExport.Job(src, photo, 2, "teste", TextStyle(), null, true, "1080p", 0, if (photo) 0 else 2000), {}) { f, err ->
                 if (f != null && f.length() > 0) { val kb = f.length() / 1024; f.delete(); done(R("Produção de vídeo", true, "2 s exportados ($kb KB, ${(System.currentTimeMillis() - t0) / 1000} s)")) }
                 else { ErrLog.log(c, "autoteste: produção", Exception(err)); done(R("Produção de vídeo", false, err ?: "falhou")) }
             }
@@ -139,7 +139,7 @@ object SelfTest {
             appendLine("Notas: notif ${ThreadsNotif.hasAccess(c)}/${ThreadsNotif.live(c)} · tela ${RateWatch.readerOn(c)} · limite ${ThreadsNotif.min(c)}/${ThreadsNotif.igMin(c)}")
             appendLine("Vigia: " + RateWatch.diag(c).replace('\n', ' ').take(300))
             appendLine("Envios: ${SendLog.all(c).size} · sem nota: ${SendLog.pending(c).size}")
-            appendLine("Threads (últimas): " + ThreadsNotif.logText(c).replace('\n', ' | ').take(400))
+            appendLine("Threads (últimas): " + ThreadsNotif.logText(c).replace("\n", " | ").take(400))
             appendLine("— Testes —")
             rs.forEach { appendLine((if (it.ok) "✓ " else "✗ ") + it.name + ": " + it.detail) }
             appendLine("— Erros recentes —")
