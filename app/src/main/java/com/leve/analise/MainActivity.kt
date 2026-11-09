@@ -943,10 +943,21 @@ class MainActivity : Activity() {
         val cpr = card("📣 Divulgação do Instagram")
         text("Entre os posts do Threads, de vez em quando sai uma foto com o seu @ do Instagram pedindo pra seguir. A legenda vem de um banco só de divulgação que aprende com a nota e com os SEGUIDORES que cada uma trouxe: a melhor vira a \"legenda perfeita\".", 12f, MUTED, parent = cpr)
         val tvSt = text("", 13f, OK, parent = cpr, bold = true)
-        val rh = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; cpr.addView(rh, lpMatch())
-        val et = EditText(this).apply { hint = "seu @ no Instagram"; setText(Macro.igHandle(this@MainActivity)); setSingleLine(true); setTextColor(FG); setHintTextColor(MUTED); textSize = 13f }
+        text("📸 Seu @ do Instagram (o que vai na imagem e na legenda):", 13f, FG, parent = cpr, bold = true)
+        val rh = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }; cpr.addView(rh, lpMatch())
+        val et = EditText(this).apply {
+            hint = "ex.: seuperfil"; setText(Macro.igHandle(this@MainActivity)); setSingleLine(true); setTextColor(FG); setHintTextColor(MUTED); textSize = 16f
+            setPadding(dp(14), dp(10), dp(14), dp(10)); inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            background = GradientDrawable().apply { setColor(0xFF1C1C24.toInt()); cornerRadius = dp(10).toFloat(); setStroke(dp(1), ACCENT) }
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(s: android.text.Editable?) { Macro.setIgHandle(this@MainActivity, s?.toString().orEmpty().trim().removePrefix("@").substringAfterLast("instagram.com/").trim('/')); promoRedraw() }
+            })
+        }
+        rh.addView(TextView(this).apply { text = "@"; textSize = 18f; setTextColor(MUTED); setPadding(0, 0, dp(6), 0) })
         rh.addView(et, LinearLayout.LayoutParams(0, -2, 1f))
-        button("Salvar", rh) { Macro.setIgHandle(this, et.text.toString()); toast("@ salvo"); promoRedraw() }
+        button("✓", rh) { Macro.setIgHandle(this, et.text.toString()); hideKeyboard(et); toast(if (Promo.handle(this).isEmpty()) "Escreva seu @" else "@${Promo.handle(this)} salvo"); promoRedraw() }
         chips(cpr, listOf("📣 Ligada", "Desligada"), { if (Promo.on(this)) "📣 Ligada" else "Desligada" }) { Promo.setOn(this, it.startsWith("📣")); promoRedraw() }
         text("Frequência:", 12f, FG, parent = cpr)
         chips(cpr, listOf("1 a cada 4", "1 a cada 6", "1 a cada 8", "1 a cada 10"), { "1 a cada " + Promo.every(this) }) { Promo.setEvery(this, it.substringAfterLast(' ').toInt()); promoRedraw() }
@@ -1000,6 +1011,8 @@ class MainActivity : Activity() {
         button("📋 Copiar", rg, weight = true) { (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("crescimento", tvG.text.toString() + "\n" + tvR.text)); toast("Copiado") }
         gUi()
     }
+
+    private fun hideKeyboard(v: View) = try { (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(v.windowToken, 0) } catch (e: Exception) { false }
 
     private fun promoStats(o: org.json.JSONObject): String {
         val n = Promo.tested(o)
@@ -1262,6 +1275,7 @@ class MainActivity : Activity() {
             setOnClickListener { onClick() }
         }
         val lp = if (weight) LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(dp(3), dp(6), dp(3), 0) }
+                 else if ((parent as? LinearLayout)?.orientation == LinearLayout.HORIZONTAL) LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)).apply { setMargins(dp(6), dp(6), 0, 0); b.setPadding(dp(14), 0, dp(14), 0) }
                  else LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(8) }
         parent.addView(b, lp)
         return b
