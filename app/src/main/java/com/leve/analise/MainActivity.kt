@@ -393,8 +393,17 @@ class MainActivity : Activity() {
         }
         rankUi(); rankRedraw = { rankUi() }
 
-        // atalhos sempre à mão (ficam em Ajustes)
+        // 🧽 remover metadados avulso
         page = pages["Ajustes"]!!
+        val cmc = card("🧽 Remover metadados")
+        val tvMc = text("", 12f, MUTED, parent = cmc)
+        fun mcT() { val h = MetaClean.history(this); tvMc.text = "Qualquer foto ou vídeo → cópia limpa em Download/PostLeve Limpos, com histórico, e o original vai pra lixeira (ou é apagado, ou fica: você escolhe). Também pela galeria: Compartilhar → 🧽 Limpar metadados." +
+            (if (h.isNotEmpty()) "
+Já limpou ${h.count { it.optBoolean("ok") }} arquivo(s)." else "") }
+        mcT()
+        button("🧽 Abrir", cmc, primary = true) { startActivity(Intent(this, MetaActivity::class.java)) }
+
+        // atalhos sempre à mão (ficam em Ajustes)
         val ck = card("📌 Botão de postar sempre à mão")
         val rk = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         ck.addView(rk, lpMatch())
