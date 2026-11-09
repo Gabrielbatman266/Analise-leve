@@ -113,6 +113,21 @@ class MainActivity : Activity() {
     private var healthRedraw: (() -> Unit)? = null
     private var histRedraw: (() -> Unit)? = null
     private var panelRedraw: (() -> Unit)? = null
+    private var setupRedraw: (() -> Unit)? = null
+
+    private fun fixSetup(name: String) {
+        when (name) {
+            "Chave da IA" -> { showTab("Ajustes"); toast("Cole a chave no cartão da IA, em Ajustes") }
+            "Notificações do app" -> if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 41)
+            "Acesso às fotos e vídeos" -> requestPermissions(FolderScan.perms, 42)
+            "Pasta do Flow" -> askFolder()
+            "Leitor de notificações" -> if (ThreadsNotif.hasAccess(this)) { ThreadsNotif.rebind(this); toast("Reconectando…") } else { ThreadsNotif.setOn(this, true); toast("Ative o Post Leve. Se bloquear: Informações do app › ⋮ › Permitir configurações restritas"); ThreadsNotif.openAccess(this) }
+            "Backup recente" -> Thread { val m = try { Backup.run(this) } catch (e: Exception) { "Erro: ${e.message}" }; ui.post { toast(m); setupRedraw?.invoke() } }.start()
+            "Leitor de tela" -> { toast("Ative \"Post Leve: ler curtidas\". Se bloquear: ⋮ › Permitir configurações restritas"); Setup.open(this, name) }
+            else -> if (!Setup.open(this, name)) toast("Não consegui abrir essa configuração")
+        }
+        ui.postDelayed({ setupRedraw?.invoke() }, 1500)
+    }
     private var healthDrawFn: ((LinearLayout, List<Health.Issue>) -> Unit)? = null
     private fun healthDraw(box: LinearLayout, issues: List<Health.Issue>) { healthDrawFn?.invoke(box, issues) }
 
@@ -185,7 +200,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         Auto.migrate(this)
-        PostBar.update(this); keysRedraw?.invoke(); tnRedraw?.invoke(); healthRedraw?.invoke(); histRedraw?.invoke(); panelRedraw?.invoke()
+        PostBar.update(this); keysRedraw?.invoke(); tnRedraw?.invoke(); healthRedraw?.invoke(); histRedraw?.invoke(); panelRedraw?.invoke(); setupRedraw?.invoke()
         if (ThreadsNotif.on(this) && ThreadsNotif.hasAccess(this) && !ThreadsNotif.live(this)) ThreadsNotif.rebind(this)
         ui.postDelayed({ askPending() }, 600)
         ui.postDelayed({ if (::insta.isInitialized) insta.maybeRefill() }, 2500)
@@ -266,6 +281,31 @@ class MainActivity : Activity() {
 
         // ===== Postar
         page = pages["Postar"]!!
+        // ✅ checklist de configuração (some quando está tudo ok)
+        val cset = card("✅ Configuração")
+        val setBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        cset.addView(setBox, lpMatch())
+        var setOpen = false
+        fun setupUi() {
+            setBox.removeAllViews()
+            val items = Setup.items(this)
+            val (ok, tot) = items.count { it.ok } to items.size
+            val missingImportant = items.count { !it.ok && it.important }
+            text("$ok de $tot prontos" + if (missingImportant > 0) " · ⚠ $missingImportant importante(s) faltando" else " ✓", 14f, if (missingImportant > 0) ACCENT else OK, parent = setBox, bold = true)
+            val show = setOpen || missingImportant > 0
+            if (show) items.forEach { i ->
+                val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                setBox.addView(r, lpMatch().apply { topMargin = dp(6) })
+                r.addView(TextView(this).apply {
+                    text = (if (i.ok) "✓ " else if (i.important) "✗ " else "○ ") + i.name + (if (!i.ok) "\n   " + i.why else "")
+                    textSize = 13f; setTextColor(if (i.ok) OK else if (i.important) ACCENT else MUTED)
+                }, LinearLayout.LayoutParams(0, -2, 1f))
+                if (!i.ok && i.fixLabel != null) button(i.fixLabel, r) { fixSetup(i.name) }
+            }
+            button(if (show && missingImportant == 0) "Esconder" else if (!show) "Ver tudo" else "↻ Conferir de novo", setBox) { if (missingImportant == 0) setOpen = !setOpen; setupUi() }
+        }
+        setupUi(); setupRedraw = { setupUi() }
+
         // 🏠 painel: o essencial em cima
         val cpn = card("🏠 Painel")
         val tvPanel = text("", 14f, FG, parent = cpn, bold = true)
@@ -332,6 +372,42 @@ class MainActivity : Activity() {
         chips(cau, listOf("Ligado", "Desligado"), { if (Archive.on(this)) "Ligado" else "Desligado" }) { Archive.setOn(this, it == "Ligado") }
         text("🧪 Teste A/B: 1 em cada 4 posts repete uma foto avaliada com legenda nova, pra descobrir se é a foto ou a legenda que bomba:", 12f, MUTED, parent = cau)
         chips(cau, listOf("Ligado", "Desligado"), { if (AB.on(this)) "Ligado" else "Desligado" }) { AB.setOn(this, it == "Ligado") }
+
+        val cdg = card("🧪 Autoteste e diagnóstico")
+        text("Testa as peças principais (filas, dados, legenda, cenas, produção de um vídeo de 2 s, permissões) e guarda os erros que acontecem. \"Copiar diagnóstico\" copia tudo (sem a sua chave) pra você colar no chat.", 12f, MUTED, parent = cdg)
+        val tvDg = text("", 12f, FG, parent = cdg)
+        var lastRs: List<SelfTest.R> = emptyList()
+        fun errLine() = ErrLog.all(this).let { e -> if (e.isEmpty()) "Nenhum erro registrado." else "${e.size} erro(s) registrado(s); último: " + e[0].optString("w") + " – " + e[0].optString("e").take(80) }
+        tvDg.text = errLine()
+        val rdg = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; cdg.addView(rdg, lpMatch())
+        button("🧪 Rodar autoteste", rdg, primary = true, weight = true) {
+            tvDg.setTextColor(MUTED); tvDg.text = "Testando…"
+            Thread {
+                val rs = SelfTest.run(this)
+                ui.post {
+                    SelfTest.exportTest(this) { r ->
+                        ui.post {
+                            rs += r; lastRs = rs
+                            val bad = rs.count { !it.ok }
+                            tvDg.setTextColor(if (bad == 0) OK else ACCENT)
+                            tvDg.text = (if (bad == 0) "✓ Tudo funcionando (${rs.size} testes)\n" else "✗ $bad de ${rs.size} com problema\n") +
+                                rs.joinToString("\n") { (if (it.ok) "✓ " else "✗ ") + it.name + ": " + it.detail } + "\n\n" + errLine()
+                        }
+                    }
+                }
+            }.start()
+        }
+        button("📋 Copiar diagnóstico", rdg, weight = true) {
+            Thread {
+                val rs = lastRs.ifEmpty { SelfTest.run(this) }
+                val txt = SelfTest.report(this, rs)
+                ui.post {
+                    getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("diagnóstico", txt))
+                    toast("Diagnóstico copiado: cole aqui no chat")
+                }
+            }.start()
+        }
+        button("Limpar erros", cdg) { ErrLog.clear(this); tvDg.text = errLine() }
 
         val cbk = card("💾 Backup")
         val tvBk = text("", 12f, MUTED, parent = cbk)
@@ -654,10 +730,20 @@ class MainActivity : Activity() {
         if (asking || isFinishing) return
         val p = PostConfirm.first(this) ?: return
         asking = true
-        AlertDialog.Builder(this).setTitle("Publicou ${PostConfirm.label(p)}?")
-            .setMessage(p.optString("cap").take(140).ifBlank { "(sem legenda)" })
-            .setPositiveButton("✓ Publiquei") { _, _ -> PostConfirm.answer(this, p.optString("kind"), p.optString("id"), true); after() }
-            .setNegativeButton("Não publiquei") { _, _ -> PostConfirm.answer(this, p.optString("kind"), p.optString("id"), false); after() }
+        val kind = p.optString("kind"); val id = p.optString("id")
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0) }
+        SendLog.thumb(this, if (kind == "video") "video" else "foto", id)?.let { b ->
+            box.addView(ImageView(this).apply { setImageBitmap(b); scaleType = ImageView.ScaleType.CENTER_CROP }, LinearLayout.LayoutParams(-1, dp(220)))
+        }
+        text(p.optString("cap").take(140).ifBlank { "(sem legenda)" }, 13f, FG, parent = box)
+        var dlg: AlertDialog? = null
+        val opts = listOf("✓ Postei" to { PostConfirm.answer(this, kind, id, true) },
+            "💎 Postei e viralizou" to { PostConfirm.answerRated(this, kind, id, "top") },
+            "🔥 Postei e bombou" to { PostConfirm.answerRated(this, kind, id, "good") },
+            "👎 Postei e flopou" to { PostConfirm.answerRated(this, kind, id, "bad") },
+            "✕ Não postei" to { PostConfirm.answer(this, kind, id, false) })
+        opts.forEach { (t, f) -> button(t, box, primary = t.startsWith("✓")) { f(); dlg?.dismiss(); after() } }
+        dlg = AlertDialog.Builder(this).setTitle("Publicou ${PostConfirm.label(p)}?").setView(ScrollView(this).apply { addView(box) })
             .setNeutralButton("Depois", null)
             .setOnDismissListener { asking = false }
             .show()

@@ -223,9 +223,11 @@ class ThreadsListener : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        if (sbn.packageName == ThreadsNotif.INSTA) { handleIg(sbn); return }
-        if (sbn.packageName != ThreadsNotif.THREADS) return
-        handle(sbn)
+        try {
+            if (sbn.packageName == ThreadsNotif.INSTA) { handleIg(sbn); return }
+            if (sbn.packageName != ThreadsNotif.THREADS) return
+            handle(sbn)
+        } catch (e: Exception) { ErrLog.log(this, "leitor de notificações", e) }
     }
 
     private fun handleIg(sbn: StatusBarNotification) {

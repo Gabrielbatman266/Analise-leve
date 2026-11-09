@@ -58,7 +58,7 @@ object Daily {
             set(Calendar.HOUR_OF_DAY, 7); set(Calendar.MINUTE, 40); set(Calendar.SECOND, 0)
             if (timeInMillis <= System.currentTimeMillis()) add(Calendar.DAY_OF_YEAR, 1)
         }
-        try { am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, cal.timeInMillis, pi(c, "manha", 52)) } catch (e: Exception) { }
+        try { am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, cal.timeInMillis, pi(c, "manha", 52)) } catch (e: Exception) { ErrLog.log(c, "manhã", e) }
         scheduleReminder(c)
     }
 
@@ -80,7 +80,7 @@ object Daily {
             val g0 = (gap * (0.8 + Math.random() * 0.4)).toLong()
             now.timeInMillis + maxOf(minDelayMs, (g0 * Learn.hourFactor(c, now.timeInMillis + g0)).toLong().coerceAtLeast(15 * 60_000L))
         }
-        try { am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi(c, "lembrar", 53)) } catch (e: Exception) { }
+        try { am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi(c, "lembrar", 53)) } catch (e: Exception) { ErrLog.log(c, "manhã", e) }
         p(c).edit().putLong("day_next", at).apply()
     }
 
@@ -90,16 +90,16 @@ object Daily {
     fun morning(c: Context) {
         val did = ArrayList<String>()
         val lines0 = ArrayList<String>()
-        try { Recover.run(c).let { r -> if (r.sum() > 0) did += "recuperei ${r.sum()} item(ns)" } } catch (e: Exception) { }
-        try { FolderScan.scan(c).let { if (it > 0) did += "$it foto(s) nova(s) do Flow" } } catch (e: Exception) { }
-        try { FolderScan.scanVideos(c).let { if (it > 0) did += "$it vídeo(s) cru(s) novo(s)" } } catch (e: Exception) { }
-        try { ThreadsRefs.scan(c) } catch (e: Exception) { }
-        try { Captions.fillFromBank(c) } catch (e: Exception) { }
-        try { Health.autoFix(c).forEach { did += it.substringBefore(":") } } catch (e: Exception) { }
-        try { Auto.captionsTick(c)?.let { did += it } } catch (e: Exception) { }
-        try { Archive.tick(c)?.let { did += it } } catch (e: Exception) { }
-        try { Backup.weekly(c)?.let { did += "backup da semana feito" } } catch (e: Exception) { }
-        try { lines0 += "📦 Estoque: fotos ~${"%.1f".format(Stock.daysPhotos(c))} dia(s) · vídeos ~${"%.1f".format(Stock.daysVideos(c))} dia(s)"; Stock.check(c) } catch (e: Exception) { }
+        try { Recover.run(c).let { r -> if (r.sum() > 0) did += "recuperei ${r.sum()} item(ns)" } } catch (e: Exception) { ErrLog.log(c, "manhã", e) }
+        try { FolderScan.scan(c).let { if (it > 0) did += "$it foto(s) nova(s) do Flow" } } catch (e: Exception) { ErrLog.log(c, "manhã", e) }
+        try { FolderScan.scanVideos(c).let { if (it > 0) did += "$it vídeo(s) cru(s) novo(s)" } } catch (e: Exception) { ErrLog.log(c, "manhã", e) }
+        try { ThreadsRefs.scan(c) } catch (e: Exception) { ErrLog.log(c, "manhã", e) }
+        try { Captions.fillFromBank(c) } catch (e: Exception) { ErrLog.log(c, "manhã", e) }
+        try { Health.autoFix(c).forEach { did += it.substringBefore(":") } } catch (e: Exception) { ErrLog.log(c, "manhã", e) }
+        try { Auto.captionsTick(c)?.let { did += it } } catch (e: Exception) { ErrLog.log(c, "manhã", e) }
+        try { Archive.tick(c)?.let { did += it } } catch (e: Exception) { ErrLog.log(c, "manhã", e) }
+        try { Backup.weekly(c)?.let { did += "backup da semana feito" } } catch (e: Exception) { ErrLog.log(c, "manhã", e) }
+        try { lines0 += "📦 Estoque: fotos ~${"%.1f".format(Stock.daysPhotos(c))} dia(s) · vídeos ~${"%.1f".format(Stock.daysVideos(c))} dia(s)"; Stock.check(c) } catch (e: Exception) { ErrLog.log(c, "manhã", e) }
         val waiting = AutoProducer.waiting(c)
         val g = goal(c)
         if (g > waiting && Projects.list(c).isNotEmpty()) { AutoProducer.refillIfNeeded(c); did += "produzindo ${g - waiting} vídeo(s)" }

@@ -90,11 +90,11 @@ object RateWatch {
             val lk = Likes.of(c, kind, e.optString("id")) ?: return@forEach
             if (lk.optLong("first") < e.optLong("at") - 60_000L) return@forEach // curtidas de um post anterior
             val k = Likes.verdict(c, kind, lk.optInt("likes"), (now - e.optLong("at")) / 3600_000.0) ?: return@forEach
-            try { SendLog.rate(c, e, k); auto++ } catch (x: Exception) { }
+            try { SendLog.rate(c, e, k); auto++ } catch (x: Exception) { ErrLog.log(c, "vigia", x) }
         }
-        try { Auto.captionsTick(c) } catch (x: Exception) { }
-        try { Archive.tick(c)?.let { p(c).edit().putString("health_last", it).apply() } } catch (x: Exception) { }
-        try { Stock.check(c) } catch (x: Exception) { }
+        try { Auto.captionsTick(c) } catch (x: Exception) { ErrLog.log(c, "vigia", x) }
+        try { Archive.tick(c)?.let { p(c).edit().putString("health_last", it).apply() } } catch (x: Exception) { ErrLog.log(c, "vigia", x) }
+        try { Stock.check(c) } catch (x: Exception) { ErrLog.log(c, "vigia", x) }
         // 2) o que passou de 1 h sem nota: acha o gargalo
         val late = SendLog.all(c).filter { it.optString("nota").isEmpty() && now - it.optLong("at") in 3600_000L..(3 * 86400_000L) }
         val reasons = ArrayList<String>()
@@ -172,7 +172,7 @@ class ScreenReader : AccessibilityService() {
             for (k in 0 until n.childCount) walk(n.getChild(k), depth + 1)
         }
         try { walk(root, 0) } catch (x: Exception) { return }
-        Thread { try { scan(pkg, texts) } catch (x: Exception) { } }.start()
+        Thread { try { scan(pkg, texts) } catch (x: Exception) { ErrLog.log(this, "leitor de tela", x) } }.start()
     }
 
     private fun norm(s: String) = s.lowercase().replace(Regex("\\s+"), " ").trim()

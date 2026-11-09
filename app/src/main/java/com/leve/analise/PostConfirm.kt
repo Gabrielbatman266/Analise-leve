@@ -79,6 +79,21 @@ object PostConfirm {
             .putExtra("kind", p.optString("kind")).putExtra("id", p.optString("id")),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
+    private fun piRate(c: Context, p: JSONObject, k: String, req: Int) = PendingIntent.getBroadcast(c, req,
+        Intent(c, PostConfirmReceiver::class.java).setAction("nota_$k")
+            .setData(Uri.parse("post://${p.optString("kind")}/${p.optString("id")}/$k"))
+            .putExtra("kind", p.optString("kind")).putExtra("id", p.optString("id")),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+
+    /** Confirma que postou e já dá a nota (um toque só). */
+    fun answerRated(c: Context, kind: String, id: String, k: String) {
+        answer(c, kind, id, true)
+        try {
+            if (kind == "video") RateLater.apply(c, id, k) else RateLater.applyPhoto(c, id, k)
+            SendLog.noted(c, if (kind == "video") "video" else kind, id, k)
+        } catch (e: Exception) { ErrLog.log(c, "nota no Publicou?", e) }
+    }
+
     private fun notifyAsk(c: Context, p: JSONObject) {
         val nm = c.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("confirma", "Confirmar post", NotificationManager.IMPORTANCE_LOW))
@@ -97,8 +112,9 @@ object PostConfirm {
                 }
             }
             .setContentIntent(open).setOnlyAlertOnce(true)
-            .addAction(Notification.Action.Builder(null, "✓ Publiquei", pi(c, p, true, 34)).build())
-            .addAction(Notification.Action.Builder(null, "Não publiquei", pi(c, p, false, 35)).build())
+            .addAction(Notification.Action.Builder(null, "✓ Postei", pi(c, p, true, 34)).build())
+            .addAction(Notification.Action.Builder(null, "🔥 Postei e bombou", piRate(c, p, "good", 36)).build())
+            .addAction(Notification.Action.Builder(null, "✕ Não postei", pi(c, p, false, 35)).build())
             .build()
         try { nm.notify(NID, n) } catch (e: SecurityException) { }
     }
@@ -106,7 +122,10 @@ object PostConfirm {
 
 class PostConfirmReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
-        PostConfirm.answer(c, i.getStringExtra("kind") ?: return, i.getStringExtra("id") ?: return, i.action == "sim")
+        val kind = i.getStringExtra("kind") ?: return; val id = i.getStringExtra("id") ?: return
+        val a = i.action.orEmpty()
+        if (a.startsWith("nota_")) PostConfirm.answerRated(c, kind, id, a.removePrefix("nota_"))
+        else PostConfirm.answer(c, kind, id, a == "sim")
         QuickPost.updateWidgets(c)
     }
 }
