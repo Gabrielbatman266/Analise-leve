@@ -189,6 +189,8 @@ object Predictor {
     fun caption(c: Context, cap: String): Double { train(c); return if (w.isEmpty()) 0.5 else predict(textFeats(cap, "leg.").map { "f.$it" }) }
 
     fun ready(c: Context): Boolean { train(c); return w.isNotEmpty() }
+    /** Peso que o modelo dá a uma característica (0 = não sabe). */
+    fun weight(c: Context, key: String): Double { train(c); return w[key] ?: 0.0 }
     fun trainedOn() = nTrain
 
     /** Junta o histórico do próprio item com a previsão. O peso da previsão vem da prova: modelo que acerta pouco quase não influencia. */

@@ -211,6 +211,7 @@ object ThreadsNotif {
 
     /** Toda notificação de curtida vira número guardado (mesmo abaixo do limite): é o que alimenta a nota pela sua média. */
     fun track(c: Context, text: String, likes: Int) {
+        try { Audience.hit(c) } catch (e: Exception) { } // 🕒 chegou curtida agora: a audiência está ativa nesta hora
         val id = findPost(c, text) ?: return
         val single = likes <= 1 && !Regex("other|outr|pessoas|people", RegexOption.IGNORE_CASE).containsMatchIn(text)
         Likes.record(c, "fila", id, likes, "notif", add = single)

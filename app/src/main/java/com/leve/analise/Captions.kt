@@ -53,6 +53,7 @@ object Captions {
         return """Você escreve legendas para posts de foto no Threads, em português do Brasil, no estilo de perfis que viralizam.
 Vibe: ${vibe(c)}. Tamanho: ${size(c)}. Contexto: ${ctx(c).ifEmpty { "nenhum" }}.
 ${MetaKnow.THREADS}
+${Lab.aiText(c)}
 ${Study.aiText(c)}
 ${learnedText(c)}
 ${Predictor.insightsText(c, false)}
@@ -164,8 +165,8 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
 
     /** Bônus da legenda pra uma foto: combinação já testada + previsão pelas características da legenda. */
     fun capBonus(c: Context, id: String): (String) -> Double {
-        val pb = pairBonus(c, id); val ready = Predictor.ready(c)
-        return { cap -> pb(cap) * (if (ready) Math.exp(3.0 * (Predictor.caption(c, cap) - 0.5)) else 1.0) *
+        val pb = pairBonus(c, id); val ready = Predictor.ready(c); val law = Lab.bonus(c)
+        return { cap -> pb(cap) * law(cap) * (if (ready) Math.exp(3.0 * (Predictor.caption(c, cap) - 0.5)) else 1.0) *
             (ThreadsApi.captionScore(c, cap)?.let { Math.exp(3.0 * (it - 0.5)) } ?: 1.0) } // legenda que rendeu nos números sai mais
     }
 
@@ -257,7 +258,11 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         val pool1 = (own + mine(c) + wins + CaptionDB.texts(c, "var").take(30)).filter { it.isNotBlank() }.distinct()
         // 👯 e outro tipo de legenda (tamanho/pergunta/emoji) que as do bloco
         val pool = if (blockTypes.isEmpty()) pool1 else pool1.filter { Burst.capType(it) !in blockTypes }.ifEmpty { pool1 }
-        val cap = (if (pool.isNotEmpty()) CaptionDB.pick(c, pool, avoid, capBonus(c, o.optString("id"))) else null) ?: randomCaption(c, avoid)
+        // 🧪 laboratório: a foto já foi escolhida; agora sorteia de que lado do teste este post cai
+        val labPool = if (block.isEmpty()) Lab.arm(c, pool.filter { it.trim() !in avoid }) else null
+        val cap = (if (labPool != null) CaptionDB.pick(c, labPool, avoid, pairBonus(c, o.optString("id"))) else null)
+            ?: (if (pool.isNotEmpty()) CaptionDB.pick(c, pool, avoid, capBonus(c, o.optString("id"))) else null) ?: randomCaption(c, avoid)
+        if (labPool != null && cap in labPool) Lab.picked(c, cap)
         remember(c, o.optString("id"), cap)
         return o.optString("id") to cap
     }

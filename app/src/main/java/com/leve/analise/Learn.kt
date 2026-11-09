@@ -115,7 +115,9 @@ object Learn {
     fun hourFactor(c: Context, at: Long): Double {
         if (!bestHoursOn(c)) return 1.0
         val h = java.util.Calendar.getInstance().apply { timeInMillis = at }.get(java.util.Calendar.HOUR_OF_DAY)
-        val s = hourScore(c, h) ?: return 1.0
+        // junta as notas por horário com o 🕒 relógio da audiência (curtidas que chegam em cada hora)
+        val notes = hourScore(c, h); val aud = try { Audience.score(c, h) } catch (e: Exception) { null }
+        val s = when { notes != null && aud != null -> (notes + aud) / 2; notes != null -> notes; aud != null -> aud; else -> return 1.0 }
         return 1.4 - 0.8 * s
     }
 

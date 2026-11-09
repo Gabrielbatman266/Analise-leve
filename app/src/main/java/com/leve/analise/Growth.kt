@@ -149,6 +149,7 @@ object Growth {
         if (Captions.recentCaps(c).size < 10 && CaptionDB.texts(c, "ia").size < 30) recs += "💬 Banco de legendas normais pequeno: gere mais legendas."
         p(c).getString("promo_tune_last", null)?.let { lines += "🤖 $it" }
         try { lines += Predictor.accuracyText(c) } catch (e: Exception) { }
+        try { Audience.text(c).takeIf { it.isNotBlank() }?.let { lines += it; ai.append(it.substringBefore(" (")).append(".\n") } } catch (e: Exception) { }
         val early = try { ThreadsApi.needReread(c).size } catch (e: Exception) { 0 }
         if (early > 0) recs += "⏳ $early post(s) foram lidos cedo demais (menos de 3 h depois de postar): a nota deles espera outra leitura. Rode a 🤖 Coleta ou abra e toque no 📖."
 
@@ -226,6 +227,7 @@ object Study {
             appendLine("CRESCIMENTO:"); r.lines.forEach { appendLine(it) }
             if (r.recs.isNotEmpty()) { appendLine("ALERTAS:"); r.recs.forEach { appendLine(it) } }
             appendLine(Predictor.accuracyText(c))
+            Lab.aiText(c).takeIf { it.isNotBlank() }?.let { appendLine(it) }
             Predictor.insightsText(c, false).takeIf { it.isNotBlank() }?.let { appendLine("FOTOS/LEGENDAS — " + it) }
             Predictor.insightsText(c, true).takeIf { it.isNotBlank() }?.let { appendLine("VÍDEOS — " + it) }
             if (th.isNotEmpty()) { appendLine("MELHORES POSTS DO THREADS:"); th.take(6).forEach { appendLine(line(it.first, it.second)) } }

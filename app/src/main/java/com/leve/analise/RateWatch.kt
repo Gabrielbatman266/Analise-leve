@@ -98,6 +98,8 @@ object RateWatch {
         try { Auto.captionsTick(c) } catch (x: Exception) { ErrLog.log(c, "vigia", x) }
         try { Promo.tick(c) } catch (x: Exception) { ErrLog.log(c, "divulgação", x) }
         try { Growth.tick(c) } catch (x: Exception) { ErrLog.log(c, "vigia do crescimento", x) }
+        try { Lab.tick(c) } catch (x: Exception) { ErrLog.log(c, "laboratório", x) }
+        try { Audience.tick(c) } catch (x: Exception) { ErrLog.log(c, "relógio da audiência", x) }
         try { Archive.tick(c)?.let { p(c).edit().putString("health_last", it).apply() } } catch (x: Exception) { ErrLog.log(c, "vigia", x) }
         try { Stock.check(c) } catch (x: Exception) { ErrLog.log(c, "vigia", x) }
         try { Burst.autoTick(c) } catch (x: Exception) { ErrLog.log(c, "rajada", x) }

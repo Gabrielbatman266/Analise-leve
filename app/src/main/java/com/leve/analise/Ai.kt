@@ -128,6 +128,7 @@ ${if (flops.isNotEmpty()) "Estas FLOPARAM (evite esse tom/assunto):\n" + flops.j
 ${if (mine.isNotEmpty()) "Jeito dela de escrever:\n" + mine.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
 ${Captions.learnedText(c)}
 ${MetaKnow.THREADS}
+${Lab.aiText(c)}
 ${Study.aiText(c)}
 Crie $n legendas NOVAS que sejam variações das que bombaram: mesmo tema, mesma estrutura, mesmo tipo de gancho e tamanho, com outras palavras. Nada copiado igual.
 Regras: naturais, no máximo 1 emoji, sem hashtags, nada explícito, nada que finja ser outra pessoa real.

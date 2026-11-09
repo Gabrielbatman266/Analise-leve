@@ -30,6 +30,7 @@ object PostConfirm {
     /** kind: "fila" (foto da fila → Threads), "video" (vídeo pronto → Instagram), "fotoIg" (foto → Instagram) */
     fun start(c: Context, kind: String, id: String, caption: String, app: String) {
         SendLog.add(c, kind, id, caption, app)
+        if (kind == "fila") Lab.sent(c, caption) // 🧪 se esta legenda veio do sorteio do teste, entra na conta
         CapForce.arm(c, kind, caption) // ✍ se a legenda não entrar no app, o leitor de tela escreve
         val l = list(c).filter { !(it.optString("kind") == kind && it.optString("id") == id) }.toMutableList()
         l.add(JSONObject().put("kind", kind).put("id", id).put("cap", caption).put("app", app).put("at", System.currentTimeMillis()))

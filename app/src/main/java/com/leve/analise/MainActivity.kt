@@ -1009,6 +1009,13 @@ class MainActivity : Activity() {
         }
         promoRedraw()
 
+        val cl = card("🧪 Laboratório")
+        text("O app faz experimentos de verdade, um de cada vez: escolhe uma coisa (ex.: legenda com pergunta × sem), sorteia de que lado cada post cai e compara os resultados reais. Com 92% de certeza vira LEI: entra no sorteio e nos pedidos de IA. Depois ele mesmo escolhe o próximo teste.", 12f, MUTED, parent = cl)
+        val tvL = text("", 13f, FG, parent = cl)
+        fun lUi() { Thread { val t = try { Lab.status(this) } catch (e: Exception) { "" }; ui.post { tvL.text = t } }.start() }
+        chips(cl, listOf("🧪 Ligado", "Desligado"), { if (Lab.on(this)) "🧪 Ligado" else "Desligado" }) { Lab.setOn(this, it.startsWith("🧪")); lUi() }
+        lUi()
+
         val cg = card("📈 Vigia do crescimento")
         val tvG = text("", 13f, FG, parent = cg)
         val tvR = text("", 12f, ACCENT, parent = cg)
