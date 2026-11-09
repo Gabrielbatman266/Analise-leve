@@ -212,6 +212,7 @@ class MainActivity : Activity() {
         Thread {
             PostQueue.cleanGallery(this, false)
             GalleryClean.sweep(this)
+            try { Predictor.train(this); PostQueue.load(this).take(150).forEach { Predictor.photo(this, it) } } catch (e: Exception) { ErrLog.log(this, "modelo", e) }
             RateWatch.schedule(this)
             try { RateWatch.run(this, notify = false) } catch (e: Exception) { }
             ui.post { histRedraw?.invoke() }
@@ -268,7 +269,8 @@ class MainActivity : Activity() {
             if (name == "Analisar") { pages[name] = LinearLayout(this); continue } // desativada
             val pg = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             pages[name] = pg
-            button(name, tabRow, weight = true) { showTab(name) }.tag = name
+            val lab = mapOf("Postar" to "📸\nPostar", "Legendas" to "💬\nLegendas", "Instagram" to "🎬\nVídeos", "Refs" to "💡\nRefs", "Ajustes" to "⚙\nAjustes")[name] ?: name
+            button(lab, tabRow, weight = true) { showTab(name) }.apply { tag = name; textSize = 11.5f; maxLines = 2; setPadding(dp(2), dp(6), dp(2), dp(6)) }
         }
 
         page = root
@@ -856,7 +858,9 @@ class MainActivity : Activity() {
         fun rulesT() {
             val r = Captions.learned(this)
             val fotos = PostQueue.load(this).filter { it.optInt("usos") > 0 || it.optString("status") == "postada" }
-            tvRules.text = Learn.repostStats(fotos) + "\n" + Learn.hourStats(fotos) + "\n" + AB.report(this) + "\n\n" +
+            val (pp, pn) = Predictor.insights(this, false)
+            tvRules.text = (if (pp.isNotEmpty() || pn.isNotEmpty()) "🎯 O que os números mostram (${Predictor.trainedOn()} posts):\n" + (if (pp.isNotEmpty()) "✅ " + pp.joinToString(" · ") + "\n" else "") + (if (pn.isNotEmpty()) "❌ " + pn.joinToString(" · ") + "\n" else "") + "\n" else "") +
+                Learn.repostStats(fotos) + "\n" + Learn.hourStats(fotos) + "\n" + AB.report(this) + "\n\n" +
                 (if (r.isEmpty()) "🧠 A IA ainda não analisou as combinações." else "🧠 O que a IA aprendeu (foto + legenda):\n" + r.joinToString("\n") { "• $it" })
         }
         rulesT()
@@ -970,15 +974,30 @@ class MainActivity : Activity() {
 
     internal fun lpMatch() = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
+    /** Cartões avançados começam fechados (toque no título abre/fecha; o app lembra). */
+    private val FOLDED = setOf("🩺 Saúde das filas", "📌 Botão de postar sempre à mão", "🤖 Tudo automático", "💾 Backup", "🧪 Autoteste e diagnóstico",
+        "🔕 Notificações do Threads", "🤖 Piloto automático", "Celular limpo", "Atualizações", "🕘 Envios e notas")
+
     internal fun card(title: String? = null): LinearLayout {
         val c = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), dp(12), dp(14), dp(12))
             background = GradientDrawable().apply { setColor(CARD); cornerRadius = dp(14).toFloat(); setStroke(dp(1), LINE) }
         }
-        page.addView(c, lpMatch().apply { topMargin = dp(14) })
-        if (title != null) text(title, 17f, FG, parent = c, bold = true)
-        return c
+        page.addView(c, lpMatch().apply { topMargin = dp(12) })
+        if (title == null) return c
+        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val key = "fold_" + title.hashCode()
+        val h = text("", 17f, FG, parent = c, bold = true)
+        c.addView(body, lpMatch())
+        fun draw() { val open = body.visibility == View.VISIBLE; h.text = (if (open) "▾  " else "▸  ") + title }
+        body.visibility = if (Store.prefs(this).getBoolean(key, title in FOLDED)) View.GONE else View.VISIBLE
+        draw()
+        h.setOnClickListener {
+            body.visibility = if (body.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            Store.prefs(this).edit().putBoolean(key, body.visibility != View.VISIBLE).apply(); draw()
+        }
+        return body
     }
 
     internal fun text(t: String, size: Float, color: Int, parent: LinearLayout = root, bold: Boolean = false): TextView {

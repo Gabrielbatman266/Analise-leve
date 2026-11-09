@@ -53,6 +53,7 @@ object Captions {
         return """Você escreve legendas para posts de foto no Threads, em português do Brasil, no estilo de perfis que viralizam.
 Vibe: ${vibe(c)}. Tamanho: ${size(c)}. Contexto: ${ctx(c).ifEmpty { "nenhum" }}.
 ${learnedText(c)}
+${Predictor.insightsText(c, false)}
 ${if (wins.isNotEmpty()) "🔥 LEGENDAS QUE BOMBARAM NO MEU PERFIL (prioridade máxima): metade das suas legendas deve ser VARIAÇÃO delas — mesmo tema, mesma estrutura e o mesmo tipo de gancho, com outras palavras:\n" + wins.joinToString("\n") { "- ${it.optString("t").replace('\n', ' ')}  (🔥${it.optInt("good")})" } + "\n(as com mais 🔥 viralizaram de verdade: priorize o estilo delas)" else ""}
 ${if (flops.isNotEmpty()) "👎 FLOPARAM (evite esse tom e esse assunto):\n" + flops.joinToString("\n") { "- ${it.replace('\n', ' ')}" } else ""}
 ${if (words.isNotEmpty()) "Palavras que aparecem nas que bombam: " + words.joinToString(", ") else ""}
@@ -157,6 +158,12 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         }
     }
 
+    /** Bônus da legenda pra uma foto: combinação já testada + previsão pelas características da legenda. */
+    fun capBonus(c: Context, id: String): (String) -> Double {
+        val pb = pairBonus(c, id); val ready = Predictor.ready(c)
+        return { cap -> pb(cap) * (if (ready) Math.exp(3.0 * (Predictor.caption(c, cap) - 0.5)) else 1.0) }
+    }
+
     /** Regras que a IA aprendeu comparando fotos + legendas. */
     fun learned(c: Context): List<String> = try { val a = JSONArray(p(c).getString("combo_regras", "[]")); (0 until a.length()).map { a.optString(it) } } catch (e: Exception) { emptyList() }
     fun learnedText(c: Context) = learned(c).takeIf { it.isNotEmpty() }?.let { "🧠 O QUE JÁ SE APRENDEU NESTE PERFIL (foto + legenda) — siga:\n" + it.joinToString("\n") { r -> "- $r" } } ?: ""
@@ -176,7 +183,7 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
             val h = Learn.histText(o)
             Triple(PostQueue.imageFile(c, o.optString("id")), PostQueue.captionOf(o) + (if (h.isNotEmpty()) "  [$h]" else ""), k)
         }
-        val regras = Ai.learnCombos(c, list, Learn.repostStats(rated) + "\n" + Learn.hourStats(rated) + "\n💎 = VIRALIZOU (muito acima do normal): dê peso máximo ao que essas têm em comum.")
+        val regras = Ai.learnCombos(c, list, Learn.repostStats(rated) + "\n" + Learn.hourStats(rated) + "\n" + Predictor.insightsText(c, false) + "\n💎 = VIRALIZOU (muito acima do normal): dê peso máximo ao que essas têm em comum.")
         if (regras.isNotEmpty()) p(c).edit().putString("combo_regras", JSONArray(regras).toString()).putLong("combo_at", System.currentTimeMillis()).apply()
         return regras
     }
@@ -211,7 +218,7 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
             val o = byId.getValue(fid)
             val own = o.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
             val pool = (own + mine(c) + CaptionDB.winners(c, 20).map { it.optString("t") }).filter { it.isNotBlank() }.distinct()
-            val cap = (if (pool.isNotEmpty()) CaptionDB.pick(c, pool, capAvoid(c), pairBonus(c, fid)) else null) ?: randomCaption(c, capAvoid(c))
+            val cap = (if (pool.isNotEmpty()) CaptionDB.pick(c, pool, capAvoid(c), capBonus(c, fid)) else null) ?: randomCaption(c, capAvoid(c))
             remember(c, fid, cap); return fid to cap
         }
         val k = minOf(all.size - 1, maxOf(minOf(3, all.size - 1), (all.size * 0.6).toInt()), 20)
@@ -223,7 +230,8 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         val w = cand.map { o ->
             val posted = o.optString("status") == "postada"
             val idx = rec.indexOf(o.optString("id"))
-            val score = minOf(3.0, Math.exp(5.0 * (Learn.chanceMean(c, o) - 0.5)) * (1.0 + 0.6 * o.optInt("top")))
+            val m = Predictor.blend(Learn.chanceMean(c, o), Learn.rated(o), Predictor.photo(c, o))
+            val score = minOf(3.0, Math.exp(5.0 * (m - 0.5)) * (1.0 + 0.6 * o.optInt("top")))
             score * (if (!posted) 2.0 else 1.0) * (if (idx < 0) 1.5 else 1.0 + idx / 10.0)
         }
         var r = Math.random() * w.sum(); var o = cand.last()
@@ -232,7 +240,7 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         val avoid = capAvoid(c)
         val wins = CaptionDB.winners(c, 20).map { it.optString("t") }
         val pool = (own + mine(c) + wins + CaptionDB.texts(c, "var").take(30)).filter { it.isNotBlank() }.distinct()
-        val cap = (if (pool.isNotEmpty()) CaptionDB.pick(c, pool, avoid, pairBonus(c, o.optString("id"))) else null) ?: randomCaption(c, avoid)
+        val cap = (if (pool.isNotEmpty()) CaptionDB.pick(c, pool, avoid, capBonus(c, o.optString("id"))) else null) ?: randomCaption(c, avoid)
         remember(c, o.optString("id"), cap)
         return o.optString("id") to cap
     }

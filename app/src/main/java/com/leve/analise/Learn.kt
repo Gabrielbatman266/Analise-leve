@@ -154,7 +154,7 @@ object Learn {
             }
             Triple(File(VideoExport.videoDir(c), "${o.optString("id")}.jpg"), desc, verdict(o))
         }
-        val r = Ai.learnVideos(c, items, repostStats(lib) + "\n" + hourStats(lib) + "\n💎 = VIRALIZOU (muito acima do normal): dê peso máximo ao que esses têm em comum.")
+        val r = Ai.learnVideos(c, items, repostStats(lib) + "\n" + hourStats(lib) + "\n" + Predictor.insightsText(c, true) + "\n💎 = VIRALIZOU (muito acima do normal): dê peso máximo ao que esses têm em comum.")
         if (r.isNotEmpty()) p(c).edit().putString("combo_regras_v", JSONArray(r).toString()).putLong("combo_v_at", System.currentTimeMillis()).apply()
         return r
     }

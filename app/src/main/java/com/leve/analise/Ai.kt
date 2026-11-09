@@ -259,6 +259,7 @@ Reply only with JSON: {"prompt":"..."}"""
             else "TODOS os textos são pra vídeos do contexto \"$ctxName\"" + (if (ctxDesc.isNotBlank()) ": $ctxDesc" else "") + ". O texto tem que combinar com esse tipo de cena."
         val prompt = """Crie $n textos curtos pra aparecer ESCRITOS DENTRO de vídeos curtos (Reels/Threads) de uma criadora de conteúdo, em português do Brasil.
 ${Learn.videoRulesText(c)}
+${Predictor.insightsText(c, true)}
 $ctxLine
 Estilo viral: gancho, "pov:", frase de efeito, curiosidade, pergunta que faz comentar. De 3 a 12 palavras. Pode quebrar em 2 linhas com \n. No máximo 1 emoji. Sem hashtags.
 Nada explícito, nada que finja ser outra pessoa real, nada enganoso.

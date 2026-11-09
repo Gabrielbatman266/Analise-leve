@@ -387,7 +387,9 @@ object VideoExport {
         val ro = recent(c, "vid_last_orig"); val oi = ro.indexOf(origin(o))
         val oFresh = if (oi < 0) 1.6 else 1.0 + oi / 5.0
         // teto: o que bombou sai mais, mas no máximo ~3x (antes um 💎 chegava a 6x e dominava a fila)
-        val boost = minOf(3.0, Math.exp(5.0 * (Learn.chanceMean(c, o) - 0.5)) * (1.0 + 0.6 * o.optInt("top")))
+        // 🎯 histórico do próprio vídeo + previsão pelas características (vídeo novo já começa com uma chance)
+        val m = Predictor.blend(Learn.chanceMean(c, o), Learn.rated(o), Predictor.video(c, o))
+        val boost = minOf(3.0, Math.exp(5.0 * (m - 0.5)) * (1.0 + 0.6 * o.optInt("top")))
         return boost * oFresh * (if (o.optInt("posts") == 0) 2.0 else 1.0) * (if (idx < 0) 1.5 else 1.0 + idx / 10.0) * origin
     }
 

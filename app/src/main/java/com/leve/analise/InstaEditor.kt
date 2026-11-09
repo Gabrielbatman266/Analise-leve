@@ -2140,6 +2140,16 @@ class InstaEditor(private val a: MainActivity) {
         a.text(Learn.repostStats(posted), 12f, a.FG, parent = sc)
         a.text(Learn.hourStats(posted), 12f, a.FG, parent = sc)
 
+        // 🎯 modelo
+        val md = sub("🎯 O que os números mostram")
+        val (mp, mn) = Predictor.insights(a, true)
+        if (mp.isEmpty() && mn.isEmpty()) a.text("Ainda poucas notas pra comparar. A cada nota o modelo aprende quais categorias, cenas, músicas, textos e horários bombam, e já dá uma chance pros vídeos novos.", 12f, a.MUTED, parent = md)
+        else {
+            if (mp.isNotEmpty()) a.text("✅ Ajuda: " + mp.joinToString(" · "), 12f, a.OK, parent = md)
+            if (mn.isNotEmpty()) a.text("❌ Atrapalha: " + mn.joinToString(" · "), 12f, a.ACCENT, parent = md)
+            a.text("Treinado em ${Predictor.trainedOn()} posts. Isso já mexe no sorteio e entra no que a IA escreve.", 11f, a.MUTED, parent = md)
+        }
+
         // 🧠 IA
         val ia = sub("🧠 IA que aprende com os vídeos")
         val rules = Learn.videoRules(a)
@@ -2173,7 +2183,8 @@ class InstaEditor(private val a: MainActivity) {
                 strip.addView(cell, LinearLayout.LayoutParams(a.dp(60), ViewGroup.LayoutParams.WRAP_CONTENT).apply { rightMargin = a.dp(6) })
                 cell.addView(thumbV(o.optString("id"), 54, 96).apply { (layoutParams as LinearLayout.LayoutParams).rightMargin = 0 })
                 val v = Learn.verdict(o).let { if (it == "meh") "" else Learn.emoji(it) }
-                cell.addView(TextView(a).apply { text = "${k + 1}º ${tag[VideoExport.origin(o)] ?: ""} $v"; textSize = 10f; setTextColor(a.MUTED); gravity = Gravity.CENTER })
+                val ch = if (Predictor.ready(a)) "\n🎯${(Predictor.blend(Learn.chanceMean(a, o), Learn.rated(o), Predictor.video(a, o)) * 100).toInt()}%" else ""
+                cell.addView(TextView(a).apply { text = "${k + 1}º ${tag[VideoExport.origin(o)] ?: ""} $v$ch"; textSize = 10f; setTextColor(a.MUTED); gravity = Gravity.CENTER })
             }
         }
 
@@ -2237,7 +2248,8 @@ class InstaEditor(private val a: MainActivity) {
             box.addView(side, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             val posts = o.optInt("posts")
             val sc = if (Learn.rated(o) > 0) "  ·  " + Learn.hist(o).joinToString(" → ") { Learn.emoji(it.second) } else ""
-            a.text((tag[VideoExport.origin(o)]?.let { "$it  " } ?: "") + (if (posts > 0) "Postado ${posts}x" else "Ainda não postado") + sc, 12f, if (posts > 0) a.OK else a.ACCENT, parent = side, bold = true)
+            val chance = if (Predictor.ready(a)) "  ·  🎯 ${(Predictor.blend(Learn.chanceMean(a, o), Learn.rated(o), Predictor.video(a, o)) * 100).toInt()}%" else ""
+            a.text((tag[VideoExport.origin(o)]?.let { "$it  " } ?: "") + (if (posts > 0) "Postado ${posts}x" else "Ainda não postado") + sc + chance, 12f, if (posts > 0) a.OK else a.ACCENT, parent = side, bold = true)
             o.optString("texto").takeIf { it.isNotBlank() }?.let { a.text("T  " + it.replace('\n', ' ').take(60), 12f, a.FG, parent = side) }
                 ?: if (o.optBoolean("auto")) a.text("🎬 sem texto", 12f, a.MUTED, parent = side) else null
             o.optString("modelo").takeIf { it.isNotBlank() }?.let { a.text("★ $it", 12f, a.MUTED, parent = side) }

@@ -73,7 +73,7 @@ object Stock {
         val bestVids = VideoExport.library(c).filter { Learn.isWin(it) && File(VideoExport.videoDir(c), "${it.optString("id")}.jpg").exists() }.sortedByDescending { Learn.mean(it) }.take(3)
         val files = bestPhotos.map { PostQueue.imageFile(c, it.optString("id")) } + bestVids.map { File(VideoExport.videoDir(c), "${it.optString("id")}.jpg") }
         if (files.isEmpty()) throw AiException(-3, "Ainda não tem post com 🔥/💎 pra eu copiar o estilo. Avalie alguns posts.")
-        val r = Ai.flowIdeas(c, files, bestPhotos.size, Captions.learned(c) + Learn.videoRules(c))
+        val r = Ai.flowIdeas(c, files, bestPhotos.size, Captions.learned(c) + Learn.videoRules(c) + Predictor.insights(c, null).first.map { "ajuda: $it" })
         if (r.isNotEmpty()) p(c).edit().putString("flow_ideas", JSONArray(r).toString()).putLong("flow_ideas_at", System.currentTimeMillis()).apply()
         return r
     }
