@@ -39,6 +39,7 @@ class MainActivity : Activity() {
     private val REQ_DEL = 14
     private val REQ_RESTORE = 47
     private val REQ_IGPHOTO = 16
+    private val REQ_PROMO = 48
 
     // paleta AMOLED
     private lateinit var meta: MetaPanel
@@ -638,6 +639,7 @@ class MainActivity : Activity() {
             else startActivity(Intent(this, PostActivity::class.java).putExtra("id", pk.first).putExtra("caption", pk.second))
         }
         text("Lembrete pra postar: a notificação já vem com foto e legenda sorteadas. Toque em Postar e depois em Publicar no Threads.", 12f, MUTED, parent = cp)
+        promoUi()
         everyRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         cp.addView(everyRow, lpMatch())
         listOf(Triple(0, 0, "Off"), Triple(15, 15, "15 em 15"), Triple(15, 30, "15–30m"),
@@ -913,7 +915,7 @@ class MainActivity : Activity() {
         text("Foto direto no feed, sem metadados. A legenda vai copiada.", 13f, MUTED, parent = cf)
         button("Escolher foto", cf) { pickIgPhoto() }
         button("🎲 Foto aleatória da fila", cf) {
-            val pk = Captions.randomPick(this)
+            val pk = Captions.randomPick(this, promo = false)
             if (pk == null) toast("A fila está vazia") else postPhotoIg(pk.first, pk.second)
         }
     }
@@ -934,6 +936,95 @@ class MainActivity : Activity() {
     }
 
     // ------------------------------------------------------------------ aba Legendas
+
+    // ------------------------------------------------------------------ 📣 divulgação do Instagram
+    private var promoRedraw: () -> Unit = {}
+    private fun promoUi() {
+        val cpr = card("📣 Divulgação do Instagram")
+        text("Entre os posts do Threads, de vez em quando sai uma foto com o seu @ do Instagram pedindo pra seguir. A legenda vem de um banco só de divulgação que aprende com a nota e com os SEGUIDORES que cada uma trouxe: a melhor vira a \"legenda perfeita\".", 12f, MUTED, parent = cpr)
+        val tvSt = text("", 13f, OK, parent = cpr, bold = true)
+        val rh = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; cpr.addView(rh, lpMatch())
+        val et = EditText(this).apply { hint = "seu @ no Instagram"; setText(Macro.igHandle(this@MainActivity)); setSingleLine(true); setTextColor(FG); setHintTextColor(MUTED); textSize = 13f }
+        rh.addView(et, LinearLayout.LayoutParams(0, -2, 1f))
+        button("Salvar", rh) { Macro.setIgHandle(this, et.text.toString()); toast("@ salvo"); promoRedraw() }
+        chips(cpr, listOf("📣 Ligada", "Desligada"), { if (Promo.on(this)) "📣 Ligada" else "Desligada" }) { Promo.setOn(this, it.startsWith("📣")); promoRedraw() }
+        text("Frequência:", 12f, FG, parent = cpr)
+        chips(cpr, listOf("1 a cada 4", "1 a cada 6", "1 a cada 8", "1 a cada 10"), { "1 a cada " + Promo.every(this) }) { Promo.setEvery(this, it.substringAfterLast(' ').toInt()); promoRedraw() }
+        chips(cpr, listOf("Até 1 por dia", "Até 2 por dia", "Até 3 por dia", "Até 4 por dia"), { "Até ${Promo.perDay(this)} por dia" }) { Promo.setPerDay(this, it.split(' ')[1].toInt()); promoRedraw() }
+        text("Imagem:", 12f, FG, parent = cpr)
+        val imgOpts = listOf("melhores" to "🏆 Melhores fotos + selo", "minhas" to "🖼 Minhas imagens", "misturar" to "🔀 Misturar (aprende)")
+        chips(cpr, imgOpts.map { it.second }, { imgOpts.first { it.first == Promo.imgMode(this) }.second }) { v -> Promo.setImgMode(this, imgOpts.first { it.second == v }.first) }
+        text("Na legenda:", 12f, FG, parent = cpr)
+        val lkOpts = listOf("link" to "🔗 instagram.com/…", "arroba" to "@ no texto", "imagem" to "Só na imagem")
+        chips(cpr, lkOpts.map { it.second }, { lkOpts.first { it.first == Promo.linkMode(this) }.second }) { v -> Promo.setLinkMode(this, lkOpts.first { it.second == v }.first); promoRedraw() }
+        val rb = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; cpr.addView(rb, lpMatch())
+        button("👁 Prévia", rb, weight = true) { promoPreview() }
+        button("📣 Postar agora", rb, primary = true, weight = true) {
+            Macro.setIgHandle(this, et.text.toString())
+            Thread { val pk = Promo.now(this); ui.post {
+                if (pk == null) toast("Coloque seu @ do Instagram e tenha fotos na fila (ou imagens suas)")
+                else startActivity(Intent(this, PostActivity::class.java).putExtra("id", pk.first).putExtra("caption", pk.second))
+            } }.start()
+        }
+        val rb2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; cpr.addView(rb2, lpMatch())
+        val bImgs = button("", rb2, weight = true) { pickImages(REQ_PROMO, true) }
+        button("✨ Legendas (IA)", rb2, weight = true) {
+            toast("Criando legendas de divulgação…")
+            Thread { val m = try { "✓ ${Promo.generate(this, 8)} legendas novas" } catch (e: Exception) { "Erro: ${e.message}" }; ui.post { toast(m); promoRedraw() } }.start()
+        }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }; cpr.addView(box, lpMatch())
+        promoRedraw = {
+            tvSt.text = Promo.status(this); tvSt.setTextColor(if (Promo.handle(this).isEmpty()) ACCENT else OK)
+            bImgs.text = "🖼 Minhas imagens (${Promo.bases(this).size})"
+            box.removeAllViews()
+            val pf = Promo.perfect(this)
+            if (pf != null) text("🏆 Legenda perfeita até agora:\n\"" + Promo.fill(this, pf.optString("t")) + "\"\n" + promoStats(pf), 13f, FG, parent = box, bold = true)
+            else text("🏆 A legenda perfeita aparece depois das primeiras divulgações com nota/seguidores.", 12f, MUTED, parent = box)
+            val l = Promo.caps(this).sortedByDescending { Promo.score(it) }
+            if (l.isNotEmpty()) text("Banco de divulgação (${l.size}), da melhor pra pior:", 12f, MUTED, parent = box)
+            l.take(6).forEach { o -> text("• " + Promo.fill(this, o.optString("t")).replace('\n', ' ') + "  —  " + promoStats(o), 12f, MUTED, parent = box) }
+        }
+        promoRedraw()
+    }
+
+    private fun promoStats(o: org.json.JSONObject): String {
+        val n = Promo.tested(o)
+        if (n == 0 && o.optInt("uses") == 0) return "nova"
+        return "${(Promo.score(o) * 100).toInt()} pts · usada ${o.optInt("uses")}x" +
+            (if (o.optInt("top") + o.optInt("good") > 0) " · 🔥${o.optInt("good") + o.optInt("top")}" else "") + (if (o.optInt("bad") > 0) " · 👎${o.optInt("bad")}" else "") +
+            (if (o.optInt("folN") > 0) " · 👥 " + "%+.1f".format(o.optDouble("folRaw") / o.optInt("folN")) + " vs normal" else "")
+    }
+
+    private fun promoPreview() {
+        Thread {
+            val r = try { Promo.make(this, save = false) } catch (e: Exception) { null }
+            ui.post {
+                if (r == null) { toast("Coloque seu @ do Instagram e tenha fotos na fila"); return@post }
+                val (bmp, m) = r
+                val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(10), dp(16), dp(6)) }
+                box.addView(android.widget.ImageView(this).apply { setImageBitmap(bmp); adjustViewBounds = true }, LinearLayout.LayoutParams(-1, dp(380)))
+                text("Legenda: " + m.caption, 13f, FG, parent = box)
+                text("Estilo: " + m.style.substringBefore(':') + " · cada vez sai uma combinação diferente", 11f, MUTED, parent = box)
+                AlertDialog.Builder(this).setTitle("👁 Prévia da divulgação").setView(ScrollView(this).apply { addView(box) })
+                    .setPositiveButton("Outra") { _, _ -> promoPreview() }.setNegativeButton("Fechar", null).show()
+            }
+        }.start()
+    }
+
+    private fun importPromo(uris: List<Uri>) {
+        Thread {
+            var n = 0
+            uris.forEach { u -> try {
+                val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it, null, o) }
+                var smp = 1; while (maxOf(o.outWidth, o.outHeight) / (smp * 2) >= 2160) smp *= 2
+                val b = contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = smp }) } ?: return@forEach
+                java.io.File(Promo.baseDir(this), "b" + System.currentTimeMillis().toString(36) + n + ".jpg").outputStream().use { rotateByExif(u, b).compress(Bitmap.CompressFormat.JPEG, 94, it) }
+                n++
+            } catch (e: Exception) { } }
+            ui.post { toast("$n imagem(ns) de divulgação salvas (sem metadados)"); promoRedraw() }
+        }.start()
+    }
 
     internal fun chips(parent: LinearLayout, options: List<String>, current: () -> String, pick: (String) -> Unit): () -> Unit {
         val wrap = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -1499,6 +1590,11 @@ class MainActivity : Activity() {
             updateFolderUi(); return
         }
         if (resultCode != RESULT_OK || data == null) return
+        if (requestCode == REQ_PROMO) {
+            val uris = ArrayList<Uri>(); data.clipData?.let { cd -> for (k in 0 until cd.itemCount) uris.add(cd.getItemAt(k).uri) }
+            if (uris.isEmpty()) data.data?.let { uris.add(it) }
+            if (uris.isNotEmpty()) importPromo(uris); return
+        }
         if (requestCode == REQ_IGPHOTO) {
             val u = data.data ?: return
             toast("Limpando a foto…")

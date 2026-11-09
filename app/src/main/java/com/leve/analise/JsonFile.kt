@@ -46,7 +46,7 @@ object Recover {
         // fotos da fila do Threads
         try {
             val known = PostQueue.load(c).map { it.optString("id") }.toSet()
-            val lost = PostQueue.dir(c).listFiles { f -> f.name.endsWith(".jpg") }?.filter { it.nameWithoutExtension !in known }.orEmpty()
+            val lost = PostQueue.dir(c).listFiles { f -> f.name.endsWith(".jpg") && !f.name.startsWith("promo_") }?.filter { it.nameWithoutExtension !in known }.orEmpty()
             if (lost.isNotEmpty()) PostQueue.restore(c, lost.sortedBy { it.lastModified() }.map { it.nameWithoutExtension to it.lastModified() }).also { fotos = it }
         } catch (e: Exception) { }
         // vídeos prontos

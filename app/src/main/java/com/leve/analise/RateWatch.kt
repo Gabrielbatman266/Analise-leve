@@ -96,6 +96,7 @@ object RateWatch {
             try { SendLog.rate(c, e, k); auto++ } catch (x: Exception) { ErrLog.log(c, "vigia", x) }
         }
         try { Auto.captionsTick(c) } catch (x: Exception) { ErrLog.log(c, "vigia", x) }
+        try { Promo.tick(c) } catch (x: Exception) { ErrLog.log(c, "divulgação", x) }
         try { Archive.tick(c)?.let { p(c).edit().putString("health_last", it).apply() } } catch (x: Exception) { ErrLog.log(c, "vigia", x) }
         try { Stock.check(c) } catch (x: Exception) { ErrLog.log(c, "vigia", x) }
         try { Burst.autoTick(c) } catch (x: Exception) { ErrLog.log(c, "rajada", x) }

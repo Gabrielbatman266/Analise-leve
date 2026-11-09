@@ -132,17 +132,18 @@ class PostActivity : Activity() {
         }
         val id = pick?.first ?: intent.getStringExtra("id")
         val item = id?.let { PostQueue.get(this, it) }
-        if (id == null || item == null || !PostQueue.imageFile(this, id).exists()) {
+        if (id == null || (item == null && !Promo.isPromo(id)) || !PostQueue.imageFile(this, id).exists()) {
             Toast.makeText(this, "Essa foto não está mais na fila", Toast.LENGTH_SHORT).show()
             finish(); return
         }
-        val cap = pick?.second ?: intent.getStringExtra("caption") ?: PostQueue.captionOf(item)
+        val cap = pick?.second ?: intent.getStringExtra("caption") ?: item?.let { PostQueue.captionOf(it) } ?: ""
         ClipSync.copy(this, cap)
         PostQueue.putInGallery(this, id) // fica em primeiro na galeria; a cópia anterior é apagada
         try {
             startActivity(PostQueue.shareIntent(this, id, cap))
             PostQueue.update(this, id) { it.put("escolhida", cap) }
             PostConfirm.start(this, "fila", id, cap, "Threads") // só vira "postada" quando você confirmar
+            if (Promo.isPromo(id)) Promo.onSent(this, id)
             getSystemService(android.app.NotificationManager::class.java).cancel(9)
             if (Reminder.every(this) > 0) Reminder.schedule(this)
             Toast.makeText(this, "Legenda também copiada, se precisar colar", Toast.LENGTH_SHORT).show()

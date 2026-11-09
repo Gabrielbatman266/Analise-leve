@@ -210,7 +210,8 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
      * - peso da foto: bombou ≈ 3x a 8x; nova = 2x; 👎 bem menos;
      * - legenda: vencedoras entram no sorteio de qualquer foto e têm peso alto.
      */
-    fun randomPick(c: Context): Pair<String, String>? {
+    fun randomPick(c: Context, promo: Boolean = true): Pair<String, String>? {
+        if (promo) Promo.maybe(c)?.let { return it } // 📣 é a vez da divulgação do Instagram
         val all = PostQueue.load(c).filter { PostQueue.imageFile(c, it.optString("id")).exists() && it.optString("status") != "arquivada" && Saturation.photoOk(it) }
             .ifEmpty { PostQueue.load(c).filter { PostQueue.imageFile(c, it.optString("id")).exists() && it.optString("status") != "arquivada" } }
             .ifEmpty { PostQueue.load(c).filter { PostQueue.imageFile(c, it.optString("id")).exists() } }

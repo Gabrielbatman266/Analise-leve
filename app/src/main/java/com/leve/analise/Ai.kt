@@ -134,6 +134,23 @@ Responda só com JSON: {"legendas":["..."]}"""
         return (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotBlank() }.take(n)
     }
 
+    /** 📣 Legendas de divulgação do Instagram (autopromoção) a partir do que já trouxe seguidores. */
+    fun promoCaptions(c: Context, n: Int, tested: String, mine: List<String>, wins: List<String>): List<String> {
+        val prompt = """Você escreve legendas de DIVULGAÇÃO (autopromoção) para o Threads de uma criadora de conteúdo, em português do Brasil.
+Objetivo: quem vê o post no Threads ir SEGUIR o Instagram dela. O post é uma foto dela com o @ do Instagram na imagem.
+${if (mine.isNotEmpty()) "Jeito dela de escrever (imite o tom):\n" + mine.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
+${if (wins.isNotEmpty()) "Legendas normais que BOMBARAM no perfil:\n" + wins.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
+${ThreadsApi.aiText(c)}
+${Captions.learnedText(c)}
+${if (tested.isNotBlank()) "Legendas de divulgação JÁ TESTADAS e o resultado (siga as de nota/seguidores altos, fuja das baixas):\n$tested" else ""}
+Crie $n legendas NOVAS de divulgação. Use o marcador {ig} exatamente uma vez, no lugar onde entra o Instagram dela (o app troca por link ou @).
+Varie o gatilho entre elas: curiosidade, "lá tem o que não posto aqui", bastidores, rotina ("todo dia lá"), pergunta, convite curto e direto.
+Regras: curtas (até 2 linhas), naturais como ela escreve, no máximo 1 emoji, sem hashtags, sem implorar nem pedir "por favor", nada explícito, não prometa conteúdo adulto ou pago, não descreva a aparência dela, nada que finja ser outra pessoa.
+Responda só com JSON: {"legendas":["..."]}"""
+        val arr = parseObj(ask(c, prompt, emptyList())).optJSONArray("legendas") ?: throw AiException(-2, "Resposta que não entendi")
+        return (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotBlank() }.take(n)
+    }
+
     /**
      * 🧠 Analisa COMBINAÇÕES: posts avaliados (foto + legenda + nota) → regras do que combina com o quê.
      * pairs: (foto, legenda, "good"/"meh"/"bad")
