@@ -123,6 +123,7 @@ object PostQueue {
         Captions.remember(c, id, caption) // o que sai agora não volta logo em seguida
         update(c, id) { it.put("sentAt", System.currentTimeMillis()); if (caption.isNotBlank()) it.put("escolhida", caption) }
         RateLater.schedulePhoto(c, id) // todo post pergunta como foi
+        if (Reminder.every(c) > 0 && Burst.size(c) > 1) android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ Reminder.schedule(c) }, 1500)
         return VideoExport.shareTo(c, uri(id), "image/jpeg", THREADS, listOf("share", "compose", "post"), caption)
     }
 

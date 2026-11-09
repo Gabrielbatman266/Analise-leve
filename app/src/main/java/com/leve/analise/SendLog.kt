@@ -18,8 +18,10 @@ object SendLog {
     /** kind: "fila" (foto → Threads), "video" (→ Instagram), "fotoIg" (foto → Instagram) */
     fun add(c: Context, kind: String, id: String, cap: String, app: String, manual: Boolean = false) {
         JsonFile.edit(file(c)) { l ->
-            l.add(0, JSONObject().put("at", System.currentTimeMillis()).put("kind", kind).put("id", id).put("cap", cap).put("app", app)
-                .put("ok", manual).put("manual", manual))
+            val e = JSONObject().put("at", System.currentTimeMillis()).put("kind", kind).put("id", id).put("cap", cap).put("app", app)
+                .put("ok", manual).put("manual", manual)
+            try { Burst.stamp(c, e, l.firstOrNull { it.optString("kind") == "fila" && !it.optBoolean("manual") }) } catch (x: Exception) { }
+            l.add(0, e)
             while (l.size > 300) l.removeAt(l.size - 1)
         }
     }

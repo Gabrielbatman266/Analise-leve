@@ -212,7 +212,10 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
             .ifEmpty { PostQueue.load(c).filter { PostQueue.imageFile(c, it.optString("id")).exists() } }
         if (all.isEmpty()) return null
         val rec = recentPhotos(c)
-        AB.pick(c, all, rec)?.let { (aid, acap) -> remember(c, aid, acap); return aid to acap } // 🧪 teste: mesma foto, legenda nova
+        val block = Burst.currentBlock(c).takeIf { Burst.inBlock(c) }.orEmpty()
+        val blockLooks = block.mapNotNull { e -> all.firstOrNull { it.optString("id") == e.optString("id") }?.let { Predictor.photoLook(c, it) } }.toSet()
+        val blockTypes = block.map { Burst.capType(it.optString("cap")) }.toSet()
+        if (block.isEmpty()) AB.pick(c, all, rec)?.let { (aid, acap) -> remember(c, aid, acap); return aid to acap } // 🧪 teste: mesma foto, legenda nova
         val byId = all.associateBy { it.optString("id") }
         Health.takeForced(c, "force_fotos") { id -> id in byId && id !in rec.take(2) }?.let { fid ->
             val o = byId.getValue(fid)
@@ -223,10 +226,12 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         }
         val k = minOf(all.size - 1, maxOf(minOf(3, all.size - 1), (all.size * 0.6).toInt()), 20)
         val winGap = minOf(maxOf(4, (all.size * 0.4).toInt()), k)
-        val cand = all.filter { o ->
+        val cand0 = all.filter { o ->
             val idx = rec.indexOf(o.optString("id"))
             idx < 0 || idx >= (if (photoMean(o) > 0.6) winGap else k)
-        }.ifEmpty { all.filter { it.optString("id") != rec.firstOrNull() }.ifEmpty { all } }
+        }
+        // 👯 no meio da dupla/trio: foto com outra "cara" (cenário/pose) que as do bloco
+        val cand = if (blockLooks.isEmpty()) cand0 else cand0.filter { Predictor.photoLook(c, it) !in blockLooks }.ifEmpty { cand0 }.ifEmpty { all.filter { it.optString("id") != rec.firstOrNull() }.ifEmpty { all } }
         val w = cand.map { o ->
             val posted = o.optString("status") == "postada"
             val idx = rec.indexOf(o.optString("id"))
@@ -239,7 +244,9 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         val own = o.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
         val avoid = capAvoid(c)
         val wins = CaptionDB.winners(c, 20).map { it.optString("t") }
-        val pool = (own + mine(c) + wins + CaptionDB.texts(c, "var").take(30)).filter { it.isNotBlank() }.distinct()
+        val pool1 = (own + mine(c) + wins + CaptionDB.texts(c, "var").take(30)).filter { it.isNotBlank() }.distinct()
+        // 👯 e outro tipo de legenda (tamanho/pergunta/emoji) que as do bloco
+        val pool = if (blockTypes.isEmpty()) pool1 else pool1.filter { Burst.capType(it) !in blockTypes }.ifEmpty { pool1 }
         val cap = (if (pool.isNotEmpty()) CaptionDB.pick(c, pool, avoid, capBonus(c, o.optString("id"))) else null) ?: randomCaption(c, avoid)
         remember(c, o.optString("id"), cap)
         return o.optString("id") to cap

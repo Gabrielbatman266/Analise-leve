@@ -46,7 +46,7 @@ object Predictor {
     private fun dow(at: Long) = java.util.Calendar.getInstance().apply { timeInMillis = at }.get(java.util.Calendar.DAY_OF_WEEK).let { if (it == 1 || it == 7) "fds" else "semana" }
 
     /** "Cara" da foto: agrupa fotos parecidas (mesmo cenário/pose) pelo mesmo jeito das cenas dos vídeos. */
-    private fun photoLook(c: Context, o: JSONObject): String? {
+    fun photoLook(c: Context, o: JSONObject): String? {
         val id = o.optString("id")
         val h = o.optString("sh").split(",").mapNotNull { it.toLongOrNull() }.takeIf { it.size == 3 }?.toLongArray() ?: run {
             val b = try { BitmapFactory.decodeFile(PostQueue.imageFile(c, id).path, BitmapFactory.Options().apply { inSampleSize = 8 }) } catch (e: Exception) { null } ?: return null

@@ -540,6 +540,30 @@ class MainActivity : Activity() {
                     toast(when { mn == 0 -> "Lembrete desligado"; mn == mx -> "Vou avisar a cada $mn minutos"; else -> "Vou avisar num horário diferente a cada vez, entre $t" }) }.tag = "$mn-$mx"
             }
         }
+        // 👯 modo rajada
+        text("👯 Postar em blocos (o intervalo acima vira a pausa entre os blocos)", 13f, FG, parent = cp, bold = true)
+        val tvBurst = text("", 12f, MUTED, parent = cp)
+        fun burstT() {
+            val n = Burst.size(this)
+            tvBurst.text = (if (Burst.auto(this)) "🤖 Automático, agora em: ${Burst.label(n)}. " else "") +
+                (if (n > 1) "Posta ${Burst.label(n)}: ${n} posts com ${Burst.gap(this).first}–${Burst.gap(this).second} min entre eles (foto e legenda de tipos diferentes), depois espera o intervalo." else "Um post por vez.") +
+                Burst.note(this).takeIf { it.isNotBlank() }?.let { "\n$it" }.orEmpty() + "\n" + Burst.report(this)
+        }
+        chips(cp, listOf("1 por vez", "👯 Dupla", "3️⃣ Trio", "🤖 Auto"), { if (Burst.auto(this)) "🤖 Auto" else when (Burst.size(this)) { 2 -> "👯 Dupla"; 3 -> "3️⃣ Trio"; else -> "1 por vez" } }) { o ->
+            when (o) {
+                "🤖 Auto" -> Burst.setSize(this, maxOf(2, Burst.size(this)), true, "🤖 Começando em ${Burst.label(maxOf(2, Burst.size(this)))}: a cada 3 dias comparo 1º × último do bloco e ajusto")
+                "👯 Dupla" -> Burst.setSize(this, 2, false, "")
+                "3️⃣ Trio" -> Burst.setSize(this, 3, false, "")
+                else -> Burst.setSize(this, 1, false, "")
+            }
+            burstT(); refresh()
+        }
+        text("Tempo entre os posts do bloco:", 12f, MUTED, parent = cp)
+        chips(cp, listOf("5–10 min", "10–15 min", "15–25 min"), { Burst.gap(this).let { "${it.first}–${it.second} min" } }) { o ->
+            val (a, b) = o.removeSuffix(" min").split("–").map { it.toInt() }; Burst.setGap(this, a, b); burstT()
+        }
+        burstT()
+
         val day = button("", cp) { }
         fun dayText() { day.text = if (Reminder.dayOnly(this)) "Só entre 8h e 23h: ligado" else "Só entre 8h e 23h: desligado" }
         dayText()

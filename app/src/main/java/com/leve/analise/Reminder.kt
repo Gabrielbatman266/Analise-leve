@@ -57,7 +57,7 @@ object Reminder {
         val am = c.getSystemService(AlarmManager::class.java)
         am.cancel(alarmPi(c))
         if (every(c) <= 0) { Store.prefs(c).edit().putLong("next_post_at", 0L).apply(); return }
-        val at = pickNext(c, System.currentTimeMillis())
+        val at = Burst.nextReminder(c, System.currentTimeMillis()) ?: pickNext(c, System.currentTimeMillis())
         Store.prefs(c).edit().putLong("next_post_at", at).apply()
         am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, alarmPi(c))
     }
@@ -86,7 +86,7 @@ object Reminder {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val b = Notification.Builder(c, CH)
             .setSmallIcon(android.R.drawable.ic_menu_send)
-            .setContentTitle("Hora de postar")
+            .setContentTitle(if (Burst.size(c) > 1) "Hora de postar · ${Burst.nextPos(c)}º da ${Burst.label(Burst.size(c))}" else "Hora de postar")
             .setAutoCancel(true)
             .setContentIntent(open)
         if (pick == null) {
