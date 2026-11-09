@@ -137,6 +137,8 @@ object SelfTest {
             appendLine("📋 Diagnóstico Post Leve $ver · Android ${Build.VERSION.RELEASE} · ${Build.MANUFACTURER} ${Build.MODEL}")
             appendLine("IA: ${Ai.provider(c)} (chave ${if (Ai.key(c).isNotEmpty()) "ok" else "FALTA"}) · usados hoje ${Auto.aiUsedToday(c)}/${Auto.aiMax(c)} · automático ${if (Auto.on(c)) "on" else "off"}")
             appendLine("Notas: notif ${ThreadsNotif.hasAccess(c)}/${ThreadsNotif.live(c)} · tela ${RateWatch.readerOn(c)} · limite ${ThreadsNotif.min(c)}/${ThreadsNotif.igMin(c)}")
+            val lk = Likes.all(c)
+            appendLine("Curtidas guardadas: ${lk.size} (notif ${lk.count { it.optString("src") == "notif" }}, tela ${lk.count { it.optString("src") == "tela" }}) · mediana fotos ${Likes.median(c, "fila") ?: "-"} · vídeos ${Likes.median(c, "video") ?: "-"} · modelo treinado em ${Predictor.trainedOn()}")
             appendLine("Vigia: " + RateWatch.diag(c).replace('\n', ' ').take(300))
             appendLine("Envios: ${SendLog.all(c).size} · sem nota: ${SendLog.pending(c).size}")
             appendLine("Threads (últimas): " + ThreadsNotif.logText(c).replace("\n", " | ").take(400))

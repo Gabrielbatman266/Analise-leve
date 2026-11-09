@@ -68,6 +68,8 @@ object ThreadsNotif {
     fun on(c: Context) = p(c).getBoolean("tn_on", false)
     fun setOn(c: Context, v: Boolean) = p(c).edit().putBoolean("tn_on", v).apply()
     fun min(c: Context) = p(c).getInt("tn_min", 50)
+    /** Sugestão de limite pelo seu histórico (dobro da sua mediana, entre 10 e 200). */
+    fun suggestedMin(c: Context, kind: String): Int? = Likes.median(c, kind)?.let { (it * 2).coerceIn(10, 200) }
     fun setMin(c: Context, v: Int) = p(c).edit().putInt("tn_min", v).apply()
     /** "likes" = só filtra curtidas; "all" = some tudo do Threads, menos as curtidas acima do limite. */
     fun mode(c: Context) = p(c).getString("tn_mode", "likes") ?: "likes"
@@ -84,7 +86,9 @@ object ThreadsNotif {
         c.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, THREADS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     } catch (e: Exception) { }
 
-    private val LIKE = Regex("curt|like|❤|gost", RegexOption.IGNORE_CASE)
+    // só frases de curtida ("liked your", "curtiu sua", "curtiram"); respostas/menções/reposts nunca contam
+    private val LIKE = Regex("\\b(liked|likes your|curtiu|curtiram|curtidas?|me gusta|le gust[oó])\\b|❤️? (?:your|sua|seu)", RegexOption.IGNORE_CASE)
+    private val NOT_LIKE = Regex("replied|respondeu|responderam|mentioned|mencionou|used your media|usou sua|reposted|repostou|quoted|citou|followed|seguiu|comentou|commented|your reply|sua resposta|seu comentário|your comment", RegexOption.IGNORE_CASE)
     private val OTHERS = Regex("(\\d[\\d.,]*)\\s*(mil|k)?\\s*(outras|outros|others|pessoas|people)", RegexOption.IGNORE_CASE)
     private val NUM = Regex("(\\d[\\d.,]*)\\s*(mil|k)?\\s*(curtidas|likes|curtiram)", RegexOption.IGNORE_CASE)
 
@@ -96,7 +100,7 @@ object ThreadsNotif {
 
     /** Quantas curtidas a notificação diz (null = não é de curtida). */
     fun likes(text: String): Int? {
-        if (!LIKE.containsMatchIn(text)) return null
+        if (NOT_LIKE.containsMatchIn(text) || !LIKE.containsMatchIn(text)) return null
         OTHERS.find(text)?.let { return num(it.groupValues[1], it.groupValues[2]) + 1 }
         NUM.find(text)?.let { return num(it.groupValues[1], it.groupValues[2]) }
         return 1 // "fulano curtiu sua thread"
@@ -195,6 +199,23 @@ object ThreadsNotif {
         try { nm.notify(("hit" + text).hashCode(), nb.build()) } catch (x: SecurityException) { }
     }
 
+    /** Acha a foto da notificação: pela legenda; senão, se só uma foi enviada nas últimas 48 h, é ela. */
+    fun findPost(c: Context, text: String): String? {
+        val t = text.lowercase()
+        val sent = { o: org.json.JSONObject -> maxOf(o.optLong("sentAt"), o.optLong("postedAt")) }
+        val now = System.currentTimeMillis()
+        val recent = PostQueue.load(c).filter { sent(it) > 0 && now - sent(it) < 72 * 3600_000L }.sortedByDescending { sent(it) }
+        recent.firstOrNull { o -> val cap = PostQueue.captionOf(o).lowercase().replace('\n', ' ').trim(); cap.length >= 6 && (t.contains(cap.take(40)) || t.contains(cap.take(18))) }?.let { return it.optString("id") }
+        return recent.filter { now - sent(it) < 48 * 3600_000L }.singleOrNull()?.optString("id")
+    }
+
+    /** Toda notificação de curtida vira número guardado (mesmo abaixo do limite): é o que alimenta a nota pela sua média. */
+    fun track(c: Context, text: String, likes: Int) {
+        val id = findPost(c, text) ?: return
+        val single = likes <= 1 && !Regex("other|outr|pessoas|people", RegexOption.IGNORE_CASE).containsMatchIn(text)
+        Likes.record(c, "fila", id, likes, "notif", add = single)
+    }
+
     /** Acha o post da fila cuja legenda aparece no texto da notificação e dá 🔥 (uma vez por post). */
     private fun rateMatching(c: Context, text: String, k: String): String? {
         val t = text.lowercase()
@@ -235,6 +256,11 @@ class ThreadsListener : NotificationListenerService() {
         if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
         val text = textOf(n); if (text.isEmpty()) return
         val likes = ThreadsNotif.likes(text) ?: return
+        val now = System.currentTimeMillis()
+        VideoExport.library(this).filter { it.optInt("posts") > 0 && now - it.optLong("lastPost") < 48 * 3600_000L }.singleOrNull()?.let {
+            val single = likes <= 1 && !Regex("other|outr|pessoas|people", RegexOption.IGNORE_CASE).containsMatchIn(text)
+            Likes.record(this, "video", it.optString("id"), likes, "notif", add = single)
+        }
         if (likes >= ThreadsNotif.igMin(this)) { if (ThreadsNotif.igRate(this)) ThreadsNotif.igHit(this, likes, text) }
         else if (ThreadsNotif.igSilence(this)) { try { cancelNotification(sbn.key) } catch (e: Exception) { }; ThreadsNotif.countSilenced(this) }
     }
@@ -256,6 +282,7 @@ class ThreadsListener : NotificationListenerService() {
         if (summary) { if (ThreadsNotif.on(this)) cleanSummary(sbn); return }
         if (text.isEmpty()) return
         val likes = ThreadsNotif.likes(text)
+        if (likes != null) try { ThreadsNotif.track(this, text, likes) } catch (e: Exception) { ErrLog.log(this, "curtidas", e) }
         if (!ThreadsNotif.on(this)) { // só lê as curtidas (nota automática), sem silenciar nada
             if (likes != null && likes >= ThreadsNotif.min(this)) ThreadsNotif.hit(this, likes, text, n.contentIntent)
             ThreadsNotif.log(this, text, likes, true); return

@@ -28,11 +28,12 @@ object Likes {
     fun all(c: Context) = JsonFile.read(file(c))
 
     /** Guarda o maior número de curtidas visto pra um post. src: "notif", "tela". */
-    fun record(c: Context, kind: String, id: String, likes: Int, src: String) {
+    fun record(c: Context, kind: String, id: String, likes: Int, src: String, add: Boolean = false) {
         if (likes <= 0) return
         JsonFile.edit(file(c)) { l ->
             val o = l.firstOrNull { it.optString("kind") == kind && it.optString("id") == id && System.currentTimeMillis() - it.optLong("first") < 3 * 86400_000L }
-            if (o == null) l.add(0, JSONObject().put("kind", kind).put("id", id).put("likes", likes).put("first", System.currentTimeMillis()).put("at", System.currentTimeMillis()).put("src", src))
+            if (o == null) l.add(0, JSONObject().put("kind", kind).put("id", id).put("likes", likes).put("singles", if (add) 1 else 0).put("first", System.currentTimeMillis()).put("at", System.currentTimeMillis()).put("src", src))
+            else if (add) { val s = o.optInt("singles") + 1; o.put("singles", s); if (s > o.optInt("likes")) o.put("likes", s); o.put("at", System.currentTimeMillis()) } // curtidas avulsas: soma
             else if (likes > o.optInt("likes")) { o.put("likes", likes); o.put("at", System.currentTimeMillis()); o.put("src", src) }
             while (l.size > 400) l.removeAt(l.size - 1)
         }
@@ -107,6 +108,7 @@ object RateWatch {
             val log = try { org.json.JSONArray(p(c).getString("tn_log", "[]")) } catch (x: Exception) { org.json.JSONArray() }
             val logs = (0 until log.length()).map { log.getJSONObject(it) }
             if (logs.size >= 4 && logs.none { it.optInt("l") >= 0 }) reasons += "❓ chegam notificações do Threads mas não reconheço curtidas nelas (manda um print do cartão 🔕 que eu ajusto)"
+            ThreadsNotif.suggestedMin(c, "fila")?.let { s -> if (ThreadsNotif.min(c) > s * 3) reasons += "🎚 o limite do Threads (${ThreadsNotif.min(c)}) está bem acima do que seus posts costumam ter: sugiro $s (Ajustes › 🔕)" }
             if (logs.any { it.optInt("l") in 1 until ThreadsNotif.min(c) } && logs.none { it.optInt("l") >= ThreadsNotif.min(c) })
                 reasons += "📉 as curtidas não chegaram no limite (${ThreadsNotif.min(c)}): a nota relativa à sua média resolve isso sozinha depois de alguns posts"
             if (!readerOn(c)) reasons += "👀 alternativa desligada: ligue o Leitor de tela do Post Leve (ele lê as curtidas quando você abre seus posts)"

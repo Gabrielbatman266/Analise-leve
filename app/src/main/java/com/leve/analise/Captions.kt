@@ -244,11 +244,22 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         remember(c, o.optString("id"), cap)
         return o.optString("id") to cap
     }
+    private val DAYS = listOf("domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado")
+    /** Legenda que fala de um dia da semana ("sextou", "segunda-feira"…) só sai nesse dia. */
+    fun fitsToday(t: String): Boolean {
+        val s = t.lowercase()
+        val today = java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_WEEK) - 1
+        val words = mapOf(0 to listOf("domingo", "domingou"), 1 to listOf("segunda", "segundou"), 2 to listOf("terça", "terca", "terçou"), 3 to listOf("quarta", "quartou"),
+            4 to listOf("quinta", "quintou"), 5 to listOf("sexta", "sextou", "sextô"), 6 to listOf("sábado", "sabado", "sabadou"))
+        val mentioned = words.filter { (_, ws) -> ws.any { Regex("\\b" + it + "\\b").containsMatchIn(s) } }.keys
+        return mentioned.isEmpty() || today in mentioned
+    }
+
     /** Legenda sem IA: sorteia das suas (como estão) ou das prontas (com o final de interação), fugindo das últimas. */
     fun randomCaption(c: Context, avoid0: Collection<String> = emptyList()): String {
         val avoid = avoid0 + capAvoid(c)
         if (mine(c).isNotEmpty() && Math.random() < 0.7) CaptionDB.pick(c, null, avoid)?.let { return it }
-        val base = Ai.OFFLINE.filter { o -> avoid.none { it.startsWith(o) } }.ifEmpty { Ai.OFFLINE }
+        val base = Ai.OFFLINE.filter { o -> avoid.none { it.startsWith(o) } && fitsToday(o) }.ifEmpty { Ai.OFFLINE.filter { fitsToday(it) } }.ifEmpty { Ai.OFFLINE }
         return withCta(c, listOf(base.random())).first()
     }
 

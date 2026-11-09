@@ -107,8 +107,9 @@ object CaptionDB {
     /** Escolhe a melhor legenda do momento entre as candidatas (ou do banco todo). */
     fun pick(c: Context, candidates: List<String>? = null, avoid: Collection<String> = emptyList(), bonus: ((String) -> Double)? = null): String? {
         val av = avoid.map { norm(it) }.toSet()
-        val pool = if (candidates != null) candidates.filter { norm(it) !in av }.map { find(c, it) ?: entry(it, "ia") }
+        val pool0 = if (candidates != null) candidates.filter { norm(it) !in av }.map { find(c, it) ?: entry(it, "ia") }
                    else load(c).filter { it.optString("src") != "viral" && norm(it.optString("t")) !in av }
+        val pool = pool0.filter { Captions.fitsToday(it.optString("t")) }.ifEmpty { pool0 }
         if (pool.isEmpty()) return null
         // sorteio ponderado: legenda que bombou tem mais chance, mas todas podem sair
         // o que bombou vale muito mais: 1 🔥 ≈ 3x, 3 🔥 ≈ 6x; 👎 cai pra ~1/3

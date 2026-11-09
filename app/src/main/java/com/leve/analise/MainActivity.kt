@@ -665,7 +665,8 @@ class MainActivity : Activity() {
         }
         tnT(); tnRedraw = { tnT() }
         text("Aparecer só com", 12f, MUTED, parent = ctn)
-        chips(ctn, listOf("20", "50", "100", "500"), { ThreadsNotif.min(this).toString() }) { ThreadsNotif.setMin(this, it.toInt()) }
+        chips(ctn, listOf("10", "20", "50", "100", "500"), { ThreadsNotif.min(this).toString() }) { ThreadsNotif.setMin(this, it.toInt()) }
+        ThreadsNotif.suggestedMin(this, "fila")?.let { s -> button("Usar o sugerido pelo seu histórico: $s", ctn) { ThreadsNotif.setMin(this, s); toast("Limite do Threads: $s") } }
         text("curtidas ou mais", 12f, MUTED, parent = ctn)
         text("O que silenciar", 12f, MUTED, parent = ctn)
         chips(ctn, listOf("Só curtidas", "Tudo do Threads"), { if (ThreadsNotif.mode(this) == "all") "Tudo do Threads" else "Só curtidas" }) { ThreadsNotif.setMode(this, if (it == "Tudo do Threads") "all" else "likes") }
