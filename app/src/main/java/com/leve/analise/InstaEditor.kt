@@ -1448,10 +1448,11 @@ class InstaEditor(private val a: MainActivity) {
             val secN = Contexts.seconds(a, n)
             val cp = stepCard("④", "Tempo e postagem", (if (secN > 0) "$secN s · " else "") + if (Contexts.noCaption(a, n)) "sem legenda" else "legenda sorteada", true)
             a.text("⏱ Tempo de cada vídeo", 12f, a.MUTED, parent = cp)
-            val opts = listOf("Original", "5 s", "7 s", "10 s", "15 s", "Outro…")
-            a.chips(cp, opts, { val v = Contexts.seconds(a, n); when { v == 0 -> "Original"; "$v s" in opts -> "$v s"; else -> "Outro…" } }) { o ->
+            val opts = listOf("Original", "🤖 Auto", "5 s", "7 s", "10 s", "15 s", "Outro…")
+            a.chips(cp, opts, { val v = Contexts.seconds(a, n); when { v == 0 -> "Original"; v < 0 -> "🤖 Auto"; "$v s" in opts -> "$v s"; else -> "Outro…" } }) { o ->
                 when (o) {
                     "Original" -> { Contexts.update(a, n) { it.put("duracao", 0) }; renderProjects() }
+                    "🤖 Auto" -> { Contexts.update(a, n) { it.put("duracao", -1) }; a.toast("Testa 6, 8, 10 e 12 s e fica mais com o que rende"); renderProjects() }
                     "Outro…" -> {
                         val et = EditText(a).apply { inputType = InputType.TYPE_CLASS_NUMBER; hint = "segundos (ex.: 6)"; Contexts.seconds(a, n).takeIf { it > 0 }?.let { setText(it.toString()) } }
                         AlertDialog.Builder(a).setTitle("Quantos segundos?").setView(et)
@@ -2130,6 +2131,24 @@ class InstaEditor(private val a: MainActivity) {
             }
             if (good.isNotEmpty()) a.text("🏆 O que deu certo$good", 12f, a.OK, parent = rs)
             if (bad.isNotEmpty()) a.text("👎 O que não deu$bad", 12f, a.ACCENT, parent = rs)
+        }
+
+        // 😴 saturação
+        val rv = Saturation.restingVideos(a)
+        if (rv.isNotEmpty() || Saturation.last(a).isNotBlank()) {
+            val sa = sub("😴 Descansando (saturados)")
+            a.text("Vídeo que já saiu 2x em 30 dias, cena que saiu 3x em 14 dias ou que está rendendo cada vez menos descansa sozinho, e o app produz vídeos de cenas diferentes no lugar. O Instagram corta o alcance de quem reposta conteúdo igual.", 11f, a.MUTED, parent = sa)
+            Saturation.last(a).takeIf { it.isNotBlank() }?.let { a.text("Último: $it", 12f, a.FG, parent = sa) }
+            val fmt = java.text.SimpleDateFormat("dd/MM", java.util.Locale.US)
+            rv.take(8).forEach { o ->
+                val r = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                sa.addView(r, a.lpMatch().apply { topMargin = a.dp(4) })
+                r.addView(thumbV(o.optString("id"), 30, 52))
+                r.addView(TextView(a).apply { textSize = 11f; setTextColor(a.MUTED)
+                    text = (o.optString("restWhy").ifBlank { "cena descansando" }) + (o.optLong("restUntil").takeIf { it > 0 }?.let { " · volta " + fmt.format(java.util.Date(it)) } ?: "") }, LinearLayout.LayoutParams(0, -2, 1f))
+                a.button("Acordar", r) { Saturation.wake(a, "video", o.optString("id")); renderLibrary() }
+            }
+            if (rv.size > 8) a.text("+${rv.size - 8} outros", 11f, a.MUTED, parent = sa)
         }
 
         // 🔁 2ª chance + horários

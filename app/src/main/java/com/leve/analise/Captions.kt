@@ -211,7 +211,8 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
      * - legenda: vencedoras entram no sorteio de qualquer foto e têm peso alto.
      */
     fun randomPick(c: Context): Pair<String, String>? {
-        val all = PostQueue.load(c).filter { PostQueue.imageFile(c, it.optString("id")).exists() && it.optString("status") != "arquivada" }
+        val all = PostQueue.load(c).filter { PostQueue.imageFile(c, it.optString("id")).exists() && it.optString("status") != "arquivada" && Saturation.photoOk(it) }
+            .ifEmpty { PostQueue.load(c).filter { PostQueue.imageFile(c, it.optString("id")).exists() && it.optString("status") != "arquivada" } }
             .ifEmpty { PostQueue.load(c).filter { PostQueue.imageFile(c, it.optString("id")).exists() } }
         if (all.isEmpty()) return null
         val rec = recentPhotos(c)

@@ -439,6 +439,8 @@ class MainActivity : Activity() {
         chips(cau, listOf("Ligado", "Desligado"), { if (AutoCat.on(this)) "Ligado" else "Desligado" }) { AutoCat.setOn(this, it == "Ligado") }
         text("🗄 Arquivar sozinho o que flopou 2+ vezes (com 1 reteste depois de 14 dias):", 12f, MUTED, parent = cau)
         chips(cau, listOf("Ligado", "Desligado"), { if (Archive.on(this)) "Ligado" else "Desligado" }) { Archive.setOn(this, it == "Ligado") }
+        text("😴 Saturação: o que saiu demais ou está caindo descansa sozinho e o app produz/pede conteúdo diferente:", 12f, MUTED, parent = cau)
+        chips(cau, listOf("Ligado", "Desligado"), { if (Saturation.on(this)) "Ligado" else "Desligado" }) { Saturation.setOn(this, it == "Ligado") }
         text("🧪 Teste A/B: 1 em cada 4 posts repete uma foto avaliada com legenda nova, pra descobrir se é a foto ou a legenda que bomba:", 12f, MUTED, parent = cau)
         chips(cau, listOf("Ligado", "Desligado"), { if (AB.on(this)) "Ligado" else "Desligado" }) { AB.setOn(this, it == "Ligado") }
 

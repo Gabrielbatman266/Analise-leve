@@ -98,6 +98,7 @@ object Daily {
         try { Health.autoFix(c).forEach { did += it.substringBefore(":") } } catch (e: Exception) { ErrLog.log(c, "manhã", e) }
         try { Auto.captionsTick(c)?.let { did += it } } catch (e: Exception) { ErrLog.log(c, "manhã", e) }
         try { Archive.tick(c)?.let { did += it } } catch (e: Exception) { ErrLog.log(c, "manhã", e) }
+        try { Saturation.tick(c)?.let { did += it } } catch (e: Exception) { ErrLog.log(c, "manhã", e) }
         try { Backup.weekly(c)?.let { did += "backup da semana feito" } } catch (e: Exception) { ErrLog.log(c, "manhã", e) }
         try { lines0 += "📦 Estoque: fotos ~${"%.1f".format(Stock.daysPhotos(c))} dia(s) · vídeos ~${"%.1f".format(Stock.daysVideos(c))} dia(s)"; Stock.check(c) } catch (e: Exception) { ErrLog.log(c, "manhã", e) }
         val waiting = AutoProducer.waiting(c)

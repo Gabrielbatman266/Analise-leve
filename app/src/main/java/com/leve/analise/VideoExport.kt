@@ -126,7 +126,7 @@ object VideoExport {
         @Suppress("DEPRECATION")
         val sl = StaticLayout(text.trimEnd(), tp, maxW, align, 1.12f, 0f, false)
         val left = (w - maxW) / 2f
-        val top = when (st.pos) { "Cima" -> h * 0.12f; "Meio" -> (h - sl.height) / 2f; else -> h * 0.80f - sl.height }
+        val top = when (st.pos) { "Cima" -> h * 0.15f; "Meio" -> (h - sl.height) / 2f; else -> h * 0.80f - sl.height }
         if (st.bg == "Faixa escura" || st.bg == "Faixa clara") {
             var minL = maxW.toFloat(); var maxR = 0f
             for (i in 0 until sl.lineCount) { minL = minOf(minL, sl.getLineLeft(i)); maxR = maxOf(maxR, sl.getLineRight(i)) }
@@ -419,7 +419,8 @@ object VideoExport {
      */
     fun cycleNext(c: Context): String? {
         Scenes.refresh(c)
-        val lib = library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() && !it.optBoolean("arquivado") }
+        val lib = library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() && !it.optBoolean("arquivado") && Saturation.videoOk(c, it) }
+            .ifEmpty { library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() && !it.optBoolean("arquivado") } }
             .ifEmpty { library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() } }
         if (lib.isEmpty()) return null
         val rec = recent(c, "vid_rec")
@@ -458,7 +459,7 @@ object VideoExport {
     /** Ordem prevista dos próximos [n] (simulação das mesmas regras, sem sorteio). */
     fun upcoming(c: Context, n: Int): List<JSONObject> {
         Scenes.refresh(c)
-        val lib = library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() && !it.optBoolean("arquivado") }
+        val lib = library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() && !it.optBoolean("arquivado") && Saturation.videoOk(c, it) }
         val rec = recent(c, "vid_rec").toMutableList()
         val recentO = recent(c, "vid_last_orig").toMutableList()
         val projs = Projects.list(c).associateBy { it.optString("id") }

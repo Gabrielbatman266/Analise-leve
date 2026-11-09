@@ -71,6 +71,7 @@ object Predictor {
         o.optString("musica").takeIf { it.isNotBlank() }?.let { f += "mus:" + java.io.File(it).nameWithoutExtension.take(40) } ?: run { f += "mus:original" }
         o.optString("modelo").takeIf { it.isNotBlank() }?.let { f += "mod:$it" }
         f += textFeats(o.optString("texto"), "vt.")
+        o.optInt("dur").takeIf { it > 0 }?.let { f += "dur:" + when { it <= 7 -> "curto"; it <= 11 -> "medio"; else -> "longo" } }
         f += textFeats(cap, "leg.")
         f += "h:" + hourB(at); f += "d:" + dow(at)
         return f.map { "v." + it }
@@ -146,6 +147,7 @@ object Predictor {
             k.startsWith("cat:") -> "categoria " + k.removePrefix("cat:")
             k.startsWith("mus:") -> if (k == "mus:original") "som original" else "música \"" + k.removePrefix("mus:") + "\""
             k.startsWith("mod:") -> "edição ★ " + k.removePrefix("mod:")
+            k.startsWith("dur:") -> "vídeo " + mapOf("curto" to "curto (até 7 s)", "medio" to "médio (8–11 s)", "longo" to "longo (12 s+)")[k.removePrefix("dur:")]
             k.startsWith("h:") -> "postar " + mapOf("madrugada" to "de madrugada", "manha" to "de manhã", "almoco" to "no almoço", "tarde" to "à tarde", "inicio_noite" to "no começo da noite", "noite" to "à noite")[k.removePrefix("h:")]
             k == "d:fds" -> "fim de semana"; k == "d:semana" -> "dia de semana"
             k.startsWith("look:") -> null

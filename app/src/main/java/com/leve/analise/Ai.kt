@@ -270,6 +270,7 @@ Reply only with JSON: {"prompt":"..."}"""
 ${Learn.videoRulesText(c)}
 ${Predictor.insightsText(c, true)}
 ${ThreadsApi.videoAiText(c)}
+O QUE FUNCIONA EM REELS AGORA: o texto é o GANCHO do 1º segundo (curiosidade, pergunta, POV, "1 min depois", situação que a pessoa se identifica); curto (até 10 palavras), fácil de ler em 1 segundo; dá vontade de assistir até o fim e de MANDAR pra alguém (envios e compartilhamentos pesam mais que curtidas). Nada explícito.
 $ctxLine
 Estilo viral: gancho, "pov:", frase de efeito, curiosidade, pergunta que faz comentar. De 3 a 12 palavras. Pode quebrar em 2 linhas com \n. No máximo 1 emoji. Sem hashtags.
 Nada explícito, nada que finja ser outra pessoa real, nada enganoso.

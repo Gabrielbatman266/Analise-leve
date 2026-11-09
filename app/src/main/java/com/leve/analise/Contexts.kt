@@ -69,7 +69,8 @@ object Contexts {
     fun versions(c: Context, name: String) = list(c).firstOrNull { it.optString("name") == name }?.optInt("versoes", 1)?.coerceIn(1, 5) ?: 1
 
     /** Duração dos vídeos da categoria em segundos (0 = tamanho original). */
-    fun seconds(c: Context, name: String) = get(c, name)?.optInt("duracao", 0)?.coerceIn(0, 90) ?: 0
+    /** 0 = original · -1 = automático (testa e aprende) · N = N segundos */
+    fun seconds(c: Context, name: String) = get(c, name)?.optInt("duracao", 0)?.coerceIn(-1, 90) ?: 0
 
     fun desc(c: Context, name: String) = list(c).firstOrNull { it.optString("name") == name }?.optString("desc").orEmpty()
     fun emoji(c: Context, name: String) = if (name.isEmpty()) "🌐" else list(c).firstOrNull { it.optString("name") == name }?.optString("emoji")?.ifEmpty { null } ?: "🏷"

@@ -29,6 +29,15 @@ object AutoProducer {
     @Volatile var running = false
     private val main = Handler(Looper.getMainLooper())
 
+    /** 2ª versão em diante do mesmo cru: enquadramento um pouco diferente (zoom 4–12%), pra não ser um vídeo "igual" repostado. */
+    private fun variedCrop(c: Context, p: JSONObject, pl: Plan): VideoExport.CropSpec {
+        val base = VideoExport.cropOf(p)
+        val versions = VideoExport.library(c).count { it.optString("proj") == p.optString("id") }
+        if (versions == 0) return base
+        val z = base.zoom * (1.04f + (Math.random() * 0.08).toFloat())
+        return base.copy(zoom = z, px = (base.px + ((Math.random() - 0.5) * 0.6).toFloat()).coerceIn(-1f, 1f), py = (base.py + ((Math.random() - 0.5) * 0.4).toFloat()).coerceIn(-1f, 1f))
+    }
+
     data class Plan(val proj: String, val text: String, val tctx: String, val model: JSONObject?, val caption: String, val ctx: String, val version: Int = 0, val music: String? = null)
 
     /** Respostas do "Me perguntar" da música nesta produção (categoria → caminho / "" / "*"). */
@@ -91,7 +100,10 @@ object AutoProducer {
         val projs = Projects.list(c).filter { Projects.srcFile(c, it.optString("id"), it.optBoolean("photo")).exists() && (only == null || it.optString("ctx") == only) }
         if (projs.isEmpty()) return emptyList()
         val usedCombo = VideoExport.library(c).map { it.optString("proj") + "|" + it.optString("texto").trim().lowercase() }.toMutableSet()
-        val order = projs.sortedBy { it.optInt("versoes") + Math.random() } // os menos usados primeiro
+        // os menos usados primeiro; cenas descansando (saturadas) vão pro fim
+        val lib0 = VideoExport.library(c)
+        val tired = projs.filter { pj -> lib0.any { v -> v.optString("proj") == pj.optString("id") && !Saturation.videoOk(c, v) } }.map { it.optString("id") }.toSet()
+        val order = projs.sortedBy { it.optInt("versoes") + Math.random() + (if (it.optString("id") in tired) 100 else 0) }
         val useModel = Store.prefs(c).getBoolean("auto_model", true)
         val ms = models(c)
         val out = ArrayList<Plan>()
@@ -155,7 +167,8 @@ object AutoProducer {
         val q = m?.optString("quality")?.ifEmpty { null } ?: quality(c)
         var cs = p.optLong("cutStart"); var ce = p.optLong("cutEnd")
         val dur = if (photo) 0L else VideoExport.durationMs(f)
-        val target = Contexts.seconds(c, pl.ctx) * 1000L
+        val secCfg = Contexts.seconds(c, pl.ctx)
+        val target = (if (secCfg < 0) AutoDur.pick(c, pl.ctx) else secCfg) * 1000L
         if (!photo && dur > 0) {
             val base0 = cs.coerceIn(0, dur); val base1 = if (ce <= 0 || ce > dur) dur else ce
             val len = base1 - base0
@@ -173,7 +186,7 @@ object AutoProducer {
         val secs = if (photo && target > 0) (target / 1000).toInt() else secs0
         val job = VideoExport.Job(Uri.fromFile(f), photo, secs, pl.text, st, mus, mt, q,
             if (photo) 0 else cs, if (photo || ce <= 0 || ce >= dur) 0 else ce, msStart,
-            if (photo) 0 else p.optLong("textStart"), if (photo) 0 else p.optLong("textEnd"), 0, VideoExport.cropOf(p))
+            if (photo) 0 else p.optLong("textStart"), if (photo) 0 else p.optLong("textEnd"), 0, variedCrop(c, p, pl))
         val label = "Produzindo ${i + 1} de ${plans.size}"
         val info = (if (pl.text.isEmpty()) "\n🎬 sem texto" + (if (pl.version > 0) " · trecho ${pl.version + 1}" else "") else "\nT: ${pl.text.replace('\n', ' ').take(40)}") + (m?.let { "  ★ ${it.optString("name")}" } ?: "") + (mus?.let { "\n♪ " + VideoExport.nice(it) } ?: "")
         progress("$label…$info")
@@ -184,6 +197,7 @@ object AutoProducer {
                 VideoExport.updateLib(c, vid) {
                     it.put("proj", pl.proj); it.put("texto", pl.text); it.put("tctx", pl.tctx); it.put("ctx", pl.ctx)
                     it.put("modelo", m?.optString("name") ?: ""); it.put("auto", true)
+                    it.put("dur", ((if (ce > cs) ce - cs else dur) / 1000).toInt())
                     if (pl.caption.isEmpty() && Contexts.noCaption(c, pl.ctx)) it.put("semleg", true)
                     it.put("musica", mus?.path ?: "")
                 }
