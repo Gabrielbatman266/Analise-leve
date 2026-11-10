@@ -126,9 +126,25 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
     fun recentCaps(c: Context) = recent(c, "rec_caps")
     fun recentPhotos(c: Context) = recent(c, "rec_fotos")
     /** Guarda o que acabou de sair (foto + legenda) pra não repetir em seguida. */
+    /** Marca o que SAIU de verdade (chamado quando o post é mandado pro app). */
     fun remember(c: Context, photoId: String?, cap: String?) {
         photoId?.let { pushRecent(c, "rec_fotos", it, 40) }
         cap?.let { pushRecent(c, "rec_caps", it.trim(), 40) }
+        if (photoId != null) Store.prefs(c).edit().remove("pick_now").apply()
+    }
+
+    /**
+     * O sorteio fica guardado até ser postado (até 3 h): o lembrete mostra uma foto e o "Postar" abre ESSA mesma.
+     * Antes o sorteio já marcava a foto como "saiu", então lembrete ignorado fazia a fila andar sem postar.
+     */
+    private fun hold(c: Context, id: String, cap: String): Pair<String, String> {
+        Store.prefs(c).edit().putString("pick_now", org.json.JSONObject().put("id", id).put("cap", cap).put("at", System.currentTimeMillis()).toString()).apply()
+        return id to cap
+    }
+    private fun held(c: Context, ok: (String) -> Boolean): Pair<String, String>? {
+        val o = try { Store.prefs(c).getString("pick_now", null)?.let { org.json.JSONObject(it) } } catch (e: Exception) { null } ?: return null
+        if (System.currentTimeMillis() - o.optLong("at") > 3 * 3600_000L || !ok(o.optString("id"))) { Store.prefs(c).edit().remove("pick_now").apply(); return null }
+        return o.optString("id") to o.optString("cap")
     }
 
     /**
@@ -237,17 +253,18 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
             .ifEmpty { PostQueue.load(c).filter { PostQueue.imageFile(c, it.optString("id")).exists() } }
         if (all.isEmpty()) return null
         val rec = recentPhotos(c)
+        held(c) { id -> all.any { it.optString("id") == id } && id !in rec.take(1) }?.let { return it }
         val block = Burst.currentBlock(c).takeIf { Burst.inBlock(c) }.orEmpty()
         val blockLooks = block.mapNotNull { e -> all.firstOrNull { it.optString("id") == e.optString("id") }?.let { Predictor.photoLook(c, it) } }.toSet()
         val blockTypes = block.map { Burst.capType(it.optString("cap")) }.toSet()
-        if (block.isEmpty()) AB.pick(c, all, rec)?.let { (aid, acap) -> remember(c, aid, acap); return aid to acap } // 🧪 teste: mesma foto, legenda nova
+        if (block.isEmpty()) AB.pick(c, all, rec)?.let { (aid, acap) -> return hold(c, aid, acap) } // 🧪 teste: mesma foto, legenda nova
         val byId = all.associateBy { it.optString("id") }
         Health.takeForced(c, "force_fotos") { id -> id in byId && id !in rec.take(2) }?.let { fid ->
             val o = byId.getValue(fid)
             val own = o.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
             val pool = (own + mine(c) + CaptionDB.winners(c, 20).map { it.optString("t") }).filter { it.isNotBlank() }.distinct()
             val cap = (if (pool.isNotEmpty()) CaptionDB.pick(c, pool, capAvoid(c), capBonus(c, fid)) else null) ?: randomCaption(c, capAvoid(c))
-            remember(c, fid, cap); return fid to cap
+            return hold(c, fid, cap)
         }
         val k = minOf(all.size - 1, maxOf(minOf(3, all.size - 1), (all.size * 0.6).toInt()), 20)
         val winGap = minOf(maxOf(4, (all.size * 0.4).toInt()), k)
@@ -284,8 +301,7 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         val cap = (if (labPool != null) CaptionDB.pick(c, labPool, avoid, pairBonus(c, o.optString("id"))) else null)
             ?: (if (pool.isNotEmpty()) CaptionDB.pick(c, pool, avoid, capBonus(c, o.optString("id"))) else null) ?: randomCaption(c, avoid)
         if (labPool != null && cap in labPool) Lab.picked(c, cap)
-        remember(c, o.optString("id"), cap)
-        return o.optString("id") to cap
+        return hold(c, o.optString("id"), cap)
     }
     private val DAYS = listOf("domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado")
     /** Legenda que fala de um dia da semana ("sextou", "segunda-feira"…) só sai nesse dia. */
