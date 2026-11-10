@@ -127,6 +127,45 @@ object ThreadsApi {
         return m
     }
 
+    private val QK = listOf("views", "likes", "replies", "reposts", "quotes", "shares", "saves", "visits", "viewers", "fol")
+
+    /**
+     * 🧹 Quarentena (roda sempre que os números são processados): tira número que não pode ser verdade.
+     *  - o MESMO valor (ou views quase iguais) em 3+ posts diferentes = leitura de uma tela gravada em vários posts;
+     *  - curtidas > 35% das views, respostas > 25%, seguidores > 20%;
+     *  - muito acima do perfil: curtidas > 20x seus seguidores, ou 40x a sua mediana (views: 60x).
+     */
+    fun quarantine(c: Context): Int {
+        var n = 0
+        val fol = followersNow(c) ?: 0
+        JsonFile.edit(file(c)) { l ->
+            l.groupBy { it.optString("kind", "fila") == "video" }.forEach { (_, g) ->
+                QK.forEach { k ->
+                    val withK = g.filter { it.has(k) }
+                    val vals = withK.map { it.optDouble(k) }.sorted(); val med = vals.getOrNull(vals.size / 2) ?: 0.0
+                    // valores repetidos (ou views a menos de 0,1% um do outro) em 3+ posts
+                    val big = withK.filter { it.optDouble(k) >= (if (k == "fol") 10.0 else 200.0) }.sortedBy { it.optDouble(k) }
+                    val bad = HashSet<JSONObject>()
+                    var i = 0
+                    while (i < big.size) {
+                        var j = i; while (j + 1 < big.size && big[j + 1].optDouble(k) - big[i].optDouble(k) <= maxOf(0.0, big[i].optDouble(k) * (if (k == "views") 0.001 else 0.0))) j++
+                        if (j - i + 1 >= 3) for (x in i..j) bad += big[x]
+                        i = j + 1
+                    }
+                    withK.forEach { o ->
+                        val v = o.optDouble(k); val views = o.optDouble("views", -1.0)
+                        val ratioBad = views >= 200 && k != "views" && v > views * (when (k) { "likes" -> 0.35; "replies" -> 0.25; "fol" -> 0.2; "visits" -> 0.6; else -> 0.5 })
+                        val tooBig = (k == "likes" && fol > 0 && v > fol * 20) || (k == "replies" && fol > 0 && v > fol * 8) ||
+                            (vals.size >= 6 && med >= 3 && v > med * (if (k == "views") 60 else 40))
+                        if (o in bad || ratioBad || tooBig) { o.remove(k); o.put("limpo", (o.optString("limpo") + " " + k).trim()); n++ }
+                    }
+                }
+            }
+        }
+        if (n > 0) { invalidate(); p(c).edit().putInt("quar_tot", p(c).getInt("quar_tot", 0) + n).apply() }
+        return n
+    }
+
     /** Uma vez: limpa números impossíveis que já tinham entrado (a leitura antiga lia "57m" como 57 milhões). */
     fun repair(c: Context): Int {
         if (p(c).getBoolean("repair_mi", false)) return 0
@@ -171,7 +210,10 @@ object ThreadsApi {
             val o = l.firstOrNull { it.optLong("send") == sendAt } ?: JSONObject().put("id", "$src:$sendAt").put("send", sendAt)
                 .put(if (kind == "video") "video" else "photo", photoId).put("kind", kind)
                 .put("at", sendAt).put("text", text).also { l.add(0, it) }
-            m.forEach { (k, v) -> if (k in force || k.startsWith("vs_") || v > o.optInt(k, -1)) o.put(k, v) }
+            m.forEach { (k, v) ->
+                val dupe = k in QK && v >= 200 && l.count { it !== o && it.optInt(k, -1) == v } >= 2 // mesmo número em outros posts: tela errada
+                if (!dupe && (k in force || k.startsWith("vs_") || v > o.optInt(k, -1))) o.put(k, v)
+            }
             o.put("upd", System.currentTimeMillis()).put("src", if (o.optString("src").isEmpty()) src else o.optString("src"))
             snap(o, System.currentTimeMillis())
             while (l.size > 400) l.removeAt(l.size - 1)
@@ -209,13 +251,15 @@ object ThreadsApi {
     fun process(c: Context) {
         try { repair(c) } catch (e: Exception) { }
         try { repairFollowers(c) } catch (e: Exception) { }
+        try { quarantine(c); Likes.clean(c) } catch (e: Exception) { ErrLog.log(c, "quarentena", e) }
         val ps = JsonFile.read(file(c)); if (ps.isEmpty()) return
         attributeFollowers(c, ps)
         JsonFile.write(file(c), ps)
         // uma vez: a fórmula da nota mudou e números errados foram limpos → as notas automáticas são conferidas de novo
-        if (!p(c).getBoolean("rerate_v2", false)) {
+        if (!p(c).getBoolean("rerate_v3", false)) {
             JsonFile.edit(File(c.filesDir, "envios.json")) { l -> l.forEach { if (!it.optBoolean("mn")) it.remove("apiFinal") } }
-            p(c).edit().putBoolean("rerate_v2", true).apply()
+            p(c).edit().putBoolean("rerate_v3", true).apply()
+            try { downgradeTops(c) } catch (e: Exception) { ErrLog.log(c, "rever 💎", e) }
         }
         rateFromApi(c)
         invalidate()
@@ -384,14 +428,35 @@ object ThreadsApi {
             val final = ra >= 12.0
             val k = when {
                 ra < 1.0 -> null
-                ra < 3.0 -> if (s >= 0.93) "top" else if (s >= 0.80) "good" else null // lido cedo: só o que já é claramente forte
-                s >= 0.85 -> "top"; s >= 0.62 -> "good"
+                ra < 3.0 -> if (s >= 0.80) "good" else null // lido cedo: no máximo 🔥 (💎 só com números maduros)
+                s >= 0.88 && outlier(c, m, all) -> "top"; s >= 0.62 -> "good"
                 age >= 24 && s <= 0.30 -> "bad"; age >= 24 -> "meh"; else -> null
             } ?: return@forEach
             val cur = e.optString("nota")
             if (cur == k) { if (final && !e.optBoolean("apiFinal")) SendLog.mark(c, e.optLong("at"), "apiFinal"); return@forEach }
             if (cur.isNotEmpty() && (!final || e.optBoolean("apiFinal"))) return@forEach
             try { SendLog.rate(c, e, k); if (final) SendLog.mark(c, e.optLong("at"), "apiFinal") } catch (x: Exception) { ErrLog.log(c, "números: nota", x) }
+        }
+    }
+
+    /** 💎 só se o post foi MUITO além do seu normal num número que importa (3x a mediana de views, seguidores ou respostas). */
+    fun outlier(c: Context, m: JSONObject, all: List<JSONObject> = posts(c)): Boolean {
+        val g = all.filter { isVideo(it) == isVideo(m) && (readAge(it) ?: 99.0) >= 3.0 && it !== m }
+        if (g.size < 6) return false
+        val cv = curve(all, isVideo(m))
+        return listOf("views", "fol", "replies", "visits", "shares").any { k ->
+            val v = metric(m, k, cv) ?: return@any false
+            val col = g.mapNotNull { metric(it, k, cv) }.sorted(); if (col.size < 5) return@any false
+            val med = col[col.size / 2]; med > 0 && v >= med * 3 && v >= (if (k == "fol") 3.0 else 20.0)
+        }
+    }
+
+    /** Uma vez: 💎 automático que não tem número limpo que justifique volta pra 🔥 (o 💎 que VOCÊ deu fica). */
+    private fun downgradeTops(c: Context) {
+        val all = posts(c); val bySend = all.filter { it.optLong("send") > 0 }.associateBy { it.optLong("send") }
+        SendLog.all(c).filter { it.optString("nota") == "top" && !it.optBoolean("mn") }.forEach { e ->
+            val m = bySend[e.optLong("at")]
+            if (m == null || !outlier(c, m, all) || composite(c, m, all) < 0.88) SendLog.rate(c, e, "good")
         }
     }
 

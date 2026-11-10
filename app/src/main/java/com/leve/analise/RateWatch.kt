@@ -42,6 +42,21 @@ object Likes {
 
     fun of(c: Context, kind: String, id: String) = all(c).firstOrNull { it.optString("kind") == kind && it.optString("id") == id }
 
+    /** Tira curtidas impossíveis: mesmo número em 3+ posts, muito acima dos seus seguidores ou 40x a sua mediana. */
+    fun clean(c: Context): Int {
+        var n = 0
+        val fol = ThreadsApi.followersNow(c) ?: 0
+        JsonFile.edit(file(c)) { l ->
+            l.groupBy { it.optString("kind") }.forEach { (_, g) ->
+                val vals = g.map { it.optInt("likes") }.sorted(); val med = vals.getOrNull(vals.size / 2) ?: 0
+                val dup = g.filter { it.optInt("likes") >= 100 }.groupBy { it.optInt("likes") }.filterValues { it.map { o -> o.optString("id") }.distinct().size >= 3 }.keys
+                g.forEach { o -> val v = o.optInt("likes")
+                    if (v in dup || (fol > 0 && v > fol * 20) || (med >= 3 && vals.size >= 6 && v > med * 40)) { l.remove(o); n++ } }
+            }
+        }
+        return n
+    }
+
     /** Sua média recente (mediana) por tipo; null = poucos dados. */
     fun median(c: Context, kind: String): Int? {
         val v = all(c).filter { it.optString("kind") == kind }.map { it.optInt("likes") }.sorted()
@@ -53,7 +68,7 @@ object Likes {
         val min = if (kind == "video") ThreadsNotif.igMin(c) else ThreadsNotif.min(c)
         val med = median(c, kind)
         val good = if (med != null) minOf(min, maxOf(5, (med * 1.5).toInt())) else min
-        val top = if (med != null) maxOf(good * 2, med * 4) else min * 5
+        val top = if (med != null) maxOf(good * 3, med * 5) else min * 6 // 💎 = fora da curva de verdade
         return when {
             likes >= top -> "top"
             likes >= good -> "good"
@@ -1045,17 +1060,22 @@ class ScreenReader : AccessibilityService() {
         if (sends.isEmpty()) return got
         val insights = nt.any { LABELS["views"]!!.matches(it) } && nt.count { t -> LABELS.values.any { it.matches(t) } } >= 3
         var found = 0
-        sends.distinctBy { it.optString("cap").take(40) }.forEach { s ->
-            if (core(s.optString("cap")).length < 8) return@forEach
-            val idx = nt.indexOfFirst { sameCap(it, s.optString("cap")) }
-            if (idx < 0) return@forEach
+        // Cada legenda da tela vai pra UM envio só. Suas legendas começam parecido ("Oiii Flavia MENCIONOU…"), então
+        // escolho pelo trecho em comum mais longo e, se empatar, pela idade do post que aparece na tela (1h, 2d…).
+        // Na tela de insights só existe 1 post: no máximo 1 envio recebe os números.
+        val hits = HashMap<Int, ArrayList<JSONObject>>()
+        sends.filter { core(it.optString("cap")).length >= 8 }.forEach { s -> val i = nt.indexOfFirst { sameCap(it, s.optString("cap")) }; if (i >= 0) hits.getOrPut(i) { ArrayList() } += s }
+        val chosen = hits.mapNotNull { (i, cands) -> chooseSend(cands, nt[i], ageNear(nt, i))?.let { i to it } }.sortedBy { it.first }
+            .let { l -> if (insights) l.take(1) else l }.distinctBy { it.second.optLong("at") }
+        chosen.forEach { (idx, s) ->
             found++
             // 2) tela de insights do post: pega todos os rótulos da tela; 3) feed/perfil: só os botões logo depois da legenda
-            val m = if (insights) pairs(nt, 0, nt.size) else pairs(nt, idx + 1, minOf(nt.size, idx + 16))
+            val nextCap = chosen.map { it.first }.firstOrNull { it > idx } ?: nt.size
+            val m = if (insights) pairs(nt, 0, nt.size) else pairs(nt, idx + 1, minOf(nt.size, idx + 12, nextCap))
             val mm = m.toMutableMap()
             if (insights) extras(nt, mm)
             if (!insights && mm["likes"] == null) { // sem rótulo: 1º número depois da legenda = curtidas
-                for (j in idx + 1..minOf(nt.size - 1, idx + 10)) { numOf(nt[j])?.let { mm["likes"] = it }; if (mm["likes"] != null) break }
+                for (j in idx + 1..minOf(nt.size - 1, idx + 8, nextCap - 1)) { numOf(nt[j])?.let { mm["likes"] = it }; if (mm["likes"] != null) break }
             }
             mm["follows"]?.let { mm["fol"] = it; mm.remove("follows") }
             val force = if (insights && curItems.size == texts.size) learnedRead(curItems, pkg).also { mm.putAll(it) }.keys else emptySet()
@@ -1071,6 +1091,34 @@ class ScreenReader : AccessibilityService() {
         }
         if (found > 0) Store.prefs(this).edit().putLong("tela_last", System.currentTimeMillis()).putInt("tela_found", found).apply()
         return got
+    }
+
+    private fun common(a: String, b: String): Int { var i = 0; while (i < a.length && i < b.length && a[i] == b[i]) i++; return i }
+
+    /** Idade do post (horas) escrita perto da legenda: "1h", "35 min", "2d", "3 sem", "ontem". */
+    private fun ageNear(nt: List<String>, i: Int): Double? {
+        for (j in (i - 1 downTo maxOf(0, i - 6)) + (i + 1..minOf(nt.size - 1, i + 2))) {
+            val t = nt[j]; val m = Regex("^(\\d+)\\s*(s|min|m|h|d|sem|w)$").find(t)
+            if (m != null) { val n = m.groupValues[1].toDouble(); return when (m.groupValues[2]) { "s" -> n / 3600; "min", "m" -> n / 60; "h" -> n; "d" -> n * 24; else -> n * 168 } }
+            if (t == "ontem" || t == "yesterday") return 30.0
+        }
+        return null
+    }
+
+    /** Qual envio é esta legenda da tela. null = não dá pra ter certeza (melhor não gravar do que gravar no post errado). */
+    private fun chooseSend(cands: List<JSONObject>, screen: String, ageH: Double?): JSONObject? {
+        val sc = core(screen)
+        val scored = cands.map { it to common(sc, core(it.optString("cap"))) }
+        val best = scored.maxOf { it.second }
+        val top = scored.filter { it.second >= best - 2 }.map { it.first }
+        val now = System.currentTimeMillis()
+        if (ageH != null) {
+            val tol = if (ageH < 24) maxOf(1.5, ageH * 0.6) else maxOf(30.0, ageH * 0.35)
+            return top.minByOrNull { kotlin.math.abs((now - it.optLong("at")) / 3600_000.0 - ageH) }?.takeIf { kotlin.math.abs((now - it.optLong("at")) / 3600_000.0 - ageH) <= tol }
+        }
+        if (top.size == 1) return top[0]
+        // mesma legenda postada mais de uma vez e sem idade na tela: só se for o mesmo texto e o mais recente for bem mais novo
+        return null
     }
 
     override fun onInterrupt() {}

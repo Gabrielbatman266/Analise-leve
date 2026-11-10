@@ -195,6 +195,22 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         return regras
     }
 
+    /** Camada da foto e a qualidade (0..1) que vale dentro dela. */
+    fun tierOf(c: Context, o: org.json.JSONObject): Pair<String, Double> {
+        val rated = Learn.rated(o); val mean = Learn.chanceMean(c, o)
+        val real = ThreadsApi.photoScore(c, o.optString("id"))
+        val m0 = Predictor.blend(mean, rated, Predictor.photo(c, o))
+        val m = real?.let { (m0 + 2 * it) / 3 } ?: m0
+        val posted = o.optString("status") == "postada" || rated > 0
+        val t = when {
+            (rated >= 2 && mean >= 0.66) || (real != null && real >= 0.72 && (rated == 0 || mean >= 0.5)) -> "provada"
+            (rated >= 1 && mean >= 0.58) || (real != null && real >= 0.55) -> "promessa"
+            !posted -> "nova"
+            else -> "resto"
+        }
+        return t to m
+    }
+
     fun photoMean(o: org.json.JSONObject): Double {
         val g = o.optInt("good"); val m = o.optInt("meh"); val b = o.optInt("bad")
         val legacy = o.optString("nota").takeIf { g + m + b == 0 } // notas antigas (antes de acumular)
@@ -209,7 +225,7 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
     }
 
     /**
-     * Sorteio do post, valorizando MUITO o que bombou, mas nunca repetindo em seguida:
+     * Sorteio do post (seleção em camadas: 🏆 provadas, 🌱 promessas, ✨ novas, resto), nunca repetindo em seguida:
      * - foto que bombou pode voltar depois de 2 outras; as normais esperam ~60% da fila;
      * - peso da foto: bombou ≈ 3x a 8x; nova = 2x; 👎 bem menos;
      * - legenda: vencedoras entram no sorteio de qualquer foto e têm peso alto.
@@ -241,14 +257,19 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         }
         // 👯 no meio da dupla/trio: foto com outra "cara" (cenário/pose) que as do bloco
         val cand = if (blockLooks.isEmpty()) cand0 else cand0.filter { Predictor.photoLook(c, it) !in blockLooks }.ifEmpty { cand0 }.ifEmpty { all.filter { it.optString("id") != rec.firstOrNull() }.ifEmpty { all } }
-        val w = cand.map { o ->
-            val posted = o.optString("status") == "postada"
-            val idx = rec.indexOf(o.optString("id"))
-            val m0 = Predictor.blend(Learn.chanceMean(c, o), Learn.rated(o), Predictor.photo(c, o))
-            // 📚 números captados (tela/insights/print/API): a foto que rende de verdade sai mais
-            val m = ThreadsApi.photoScore(c, o.optString("id"))?.let { real -> (m0 + 2 * real) / 3 } ?: m0
-            val score = minOf(3.0, Math.exp(5.0 * (m - 0.5)) * (1.0 + 0.6 * o.optInt("top")))
-            score * (if (!posted) 2.0 else 1.0) * (if (idx < 0) 1.5 else 1.0 + idx / 10.0)
+        // 🏆 seleção em camadas: primeiro sorteia a CAMADA pela cota (as que deram certo têm a maior fatia garantida),
+        // depois a foto dentro dela pela qualidade. Assim as vencedoras voltam sempre, mas sem sufocar as novas.
+        val tiers = cand.map { o -> tierOf(c, o) }
+        val quota = Selection.quota(c)
+        val present = tiers.map { it.first }.toSet()
+        val qSum = quota.filterKeys { it in present }.values.sum().takeIf { it > 0 } ?: 1.0
+        val inTier = cand.indices.groupBy { tiers[it].first }
+        val w = cand.indices.map { i ->
+            val (t, m) = tiers[i]
+            val idx = rec.indexOf(cand[i].optString("id"))
+            val q = minOf(4.0, Math.exp(5.0 * (m - 0.5))) * (if (idx < 0) 1.3 else 1.0 + idx / 10.0)
+            val tierTotal = inTier.getValue(t).sumOf { j -> val (_, mj) = tiers[j]; val ij = rec.indexOf(cand[j].optString("id")); minOf(4.0, Math.exp(5.0 * (mj - 0.5))) * (if (ij < 0) 1.3 else 1.0 + ij / 10.0) }
+            (quota[t] ?: 0.0) / qSum * q / tierTotal
         }
         var r = Math.random() * w.sum(); var o = cand.last()
         for (i in cand.indices) { r -= w[i]; if (r <= 0) { o = cand[i]; break } }
@@ -289,5 +310,25 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         val out = ArrayList<String>()
         repeat(n * 3) { if (out.size < n) { val r = randomCaption(c, out); if (r !in out) out.add(r) } }
         return out
+    }
+}
+
+/** 🏆 Quanto valorizar as que deram certo (fatia de cada camada no sorteio). */
+object Selection {
+    val MODES = linkedMapOf(
+        "equilibrado" to ("⚖ Equilibrado" to mapOf("provada" to 0.45, "promessa" to 0.22, "nova" to 0.23, "resto" to 0.10)),
+        "forte" to ("🏆 Forte" to mapOf("provada" to 0.62, "promessa" to 0.18, "nova" to 0.15, "resto" to 0.05)),
+        "maximo" to ("💎 Máximo" to mapOf("provada" to 0.78, "promessa" to 0.12, "nova" to 0.08, "resto" to 0.02)))
+    fun mode(c: Context) = Store.prefs(c).getString("sel_mode", "forte").takeIf { it in MODES } ?: "forte"
+    fun setMode(c: Context, v: String) = Store.prefs(c).edit().putString("sel_mode", v).apply()
+    fun quota(c: Context) = MODES.getValue(mode(c)).second
+
+    fun summary(c: Context): String {
+        val l = PostQueue.load(c).filter { it.optString("status") != "arquivada" }
+        val t = l.groupingBy { Captions.tierOf(c, it).first }.eachCount()
+        val q = quota(c)
+        fun pc(k: String) = "${((q[k] ?: 0.0) * 100).toInt()}%"
+        return "🏆 Provadas: ${t["provada"] ?: 0} (saem em ~${pc("provada")} dos posts) · 🌱 Promessas: ${t["promessa"] ?: 0} (${pc("promessa")}) · ✨ Novas: ${t["nova"] ?: 0} (${pc("nova")}) · resto: ${t["resto"] ?: 0} (${pc("resto")})\n" +
+            "Provada = 2+ notas boas ou números reais altos. Mesmo provada, ela espera outras fotos antes de voltar."
     }
 }

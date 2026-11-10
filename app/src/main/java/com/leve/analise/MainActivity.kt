@@ -663,6 +663,11 @@ class MainActivity : Activity() {
             else startActivity(Intent(this, PostActivity::class.java).putExtra("id", pk.first).putExtra("caption", pk.second))
         }
         text("Lembrete pra postar: a notificação já vem com foto e legenda sorteadas. Toque em Postar e depois em Publicar no Threads.", 12f, MUTED, parent = cp)
+        text("Quanto valorizar as fotos que deram certo:", 13f, FG, parent = cp, bold = true)
+        val tvSel = text("", 12f, MUTED, parent = cp)
+        fun selT() { Thread { val t = try { Selection.summary(this) } catch (e: Exception) { "" }; ui.post { tvSel.text = t } }.start() }
+        chips(cp, Selection.MODES.values.map { it.first }, { Selection.MODES.getValue(Selection.mode(this)).first }) { v -> Selection.setMode(this, Selection.MODES.entries.first { it.value.first == v }.key); selT() }
+        selT()
         promoUi()
         everyRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         cp.addView(everyRow, lpMatch())
