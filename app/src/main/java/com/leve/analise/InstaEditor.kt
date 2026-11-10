@@ -2193,7 +2193,8 @@ class InstaEditor(private val a: MainActivity) {
         // próximos a sair
         val next = VideoExport.upcoming(a, 6)
         if (next.isNotEmpty()) {
-            a.text("Próximos a sair (a mesma cena nunca sai perto, mesmo com texto diferente)", 12f, a.MUTED, parent = libBox, bold = true)
+            a.text("🎬 Fila planejada: sai exatamente nesta ordem. Só anda quando você confirma que postou. Toque num vídeo pra furar a fila ou pular.", 12f, a.MUTED, parent = libBox, bold = true)
+            a.text(listOf("provada" to "🏆", "promessa" to "🌱", "nova" to "✨").joinToString("  ") { (k, e) -> "$e ${next.count { VideoExport.tierOf(a, it).first == k }}" } + "  ·  modo: " + Selection.MODES.getValue(Selection.mode(a)).first + " (muda na aba Postar › Fila de posts)", 11f, a.MUTED, parent = libBox)
             val hs = android.widget.HorizontalScrollView(a)
             val strip = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
             hs.addView(strip); libBox.addView(hs, a.lpMatch().apply { topMargin = a.dp(4) })
@@ -2203,7 +2204,16 @@ class InstaEditor(private val a: MainActivity) {
                 cell.addView(thumbV(o.optString("id"), 54, 96).apply { (layoutParams as LinearLayout.LayoutParams).rightMargin = 0 })
                 val v = Learn.verdict(o).let { if (it == "meh") "" else Learn.emoji(it) }
                 val ch = if (Predictor.ready(a)) "\n🎯${(Predictor.blend(Learn.chanceMean(a, o), Learn.rated(o), Predictor.video(a, o)) * 100).toInt()}%" else ""
-                cell.addView(TextView(a).apply { text = "${k + 1}º ${tag[VideoExport.origin(o)] ?: ""} $v$ch"; textSize = 10f; setTextColor(a.MUTED); gravity = Gravity.CENTER })
+                val te = mapOf("provada" to "🏆", "promessa" to "🌱", "nova" to "✨")[VideoExport.tierOf(a, o).first] ?: ""
+                cell.addView(TextView(a).apply { text = "${k + 1}º $te ${tag[VideoExport.origin(o)] ?: ""} $v$ch"; textSize = 10f; setTextColor(a.MUTED); gravity = Gravity.CENTER })
+                cell.setOnClickListener {
+                    val id = o.optString("id")
+                    android.app.AlertDialog.Builder(a).setTitle("${k + 1}º da fila")
+                        .setItems(arrayOf("⏫ Esse sai agora", "⏭ Pular (espera uma rodada)", "🔀 Sortear a fila de novo")) { _, w ->
+                            when (w) { 0 -> { VideoExport.pinNext(a, id); a.toast("Vai ser o próximo") }; 1 -> { VideoExport.skip(a, id); a.toast("Pulado") }; else -> { VideoExport.reshuffle(a); a.toast("Fila sorteada de novo") } }
+                            renderLibrary()
+                        }.show()
+                }
             }
         }
 

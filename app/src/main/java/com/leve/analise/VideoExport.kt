@@ -378,68 +378,147 @@ object VideoExport {
         Store.prefs(c).edit().putString(key, l.joinToString("\u0001")).apply()
     }
 
-    /** Peso de um vídeo: bombou ≈ 3x a 8x; nunca postado 2x; vídeo cru que costuma bombar ganha bônus. */
-    private fun weight(c: Context, o: JSONObject, rec: List<String>, projs: Map<String, JSONObject>): Double {
+    // ================= 🎬 fila de vídeos PLANEJADA =================
+    // A ordem é decidida antes e guardada: o que aparece em "Próximos a sair" é exatamente o que vai sair.
+    // O vídeo só sai da fila quando você CONFIRMA que postou (cancelar não faz a fila andar).
+
+    /** Camada do vídeo (igual às fotos): provado / promessa / novo / resto, e a qualidade dentro dela. */
+    fun tierOf(c: Context, o: JSONObject): Pair<String, Double> {
+        val rated = Learn.rated(o); val mean = Learn.chanceMean(c, o)
+        val real = ThreadsApi.videoScore(c, o.optString("id"))
+        val m0 = Predictor.blend(mean, rated, Predictor.video(c, o))
+        val m = real?.let { (m0 + 2 * it) / 3 } ?: m0
+        val t = when {
+            (rated >= 2 && mean >= 0.66) || (real != null && real >= 0.72 && (rated == 0 || mean >= 0.5)) -> "provada"
+            (rated >= 1 && mean >= 0.58) || (real != null && real >= 0.55) -> "promessa"
+            o.optInt("posts") == 0 -> "nova"
+            else -> "resto"
+        }
+        return t to m
+    }
+
+    /** Qualidade × giro (vídeo cru que está há mais tempo sem sair e vídeo que está há mais tempo parado ganham). */
+    private fun q(o: JSONObject, m: Double, rec: List<String>, recO: List<String>, projs: Map<String, JSONObject>): Double {
         val idx = rec.indexOf(o.optString("id"))
         val pj = projs[o.optString("proj")]
-        val origin = if (pj == null) 1.0 else Math.exp(2.0 * (Learn.mean(pj) - 0.5))
-        // vídeo cru que está há mais tempo sem sair ganha mais chance (gira entre os crus)
-        val ro = recent(c, "vid_last_orig"); val oi = ro.indexOf(origin(o))
+        val origin = if (pj == null) 1.0 else Math.exp(1.5 * (Learn.mean(pj) - 0.5))
+        val oi = recO.indexOf(origin(o))
         val oFresh = if (oi < 0) 1.6 else 1.0 + oi / 5.0
-        // teto: o que bombou sai mais, mas no máximo ~3x (antes um 💎 chegava a 6x e dominava a fila)
-        // 🎯 histórico do próprio vídeo + previsão pelas características (vídeo novo já começa com uma chance)
-        val m0 = Predictor.blend(Learn.chanceMean(c, o), Learn.rated(o), Predictor.video(c, o))
-        val m = ThreadsApi.videoScore(c, o.optString("id"))?.let { real -> (m0 + 2 * real) / 3 } ?: m0 // 📚 números reais do Reel pesam o dobro
-        val boost = minOf(3.0, Math.exp(5.0 * (m - 0.5)) * (1.0 + 0.6 * o.optInt("top")))
-        return boost * oFresh * (if (o.optInt("posts") == 0) 2.0 else 1.0) * (if (idx < 0) 1.5 else 1.0 + idx / 10.0) * origin
+        return minOf(4.0, Math.exp(5.0 * (m - 0.5))) * oFresh * (if (idx < 0) 1.3 else 1.0 + idx / 10.0) * origin
     }
 
-    /** Candidatos agora: o que saiu há pouco espera (o que bombou espera só 2 posts) e o mesmo vídeo cru não sai em seguida. */
-    private fun candidates(c: Context, lib: List<JSONObject>, rec: List<String>, recentO: List<String>): List<JSONObject> {
+    /** Candidatos agora: o que saiu há pouco espera, a mesma cena/cru não sai perto, nem o mesmo texto, nem a mesma música em seguida. */
+    private fun candidates(c: Context, lib: List<JSONObject>, rec: List<String>, recentO: List<String>, recTxt: List<String>, recMus: List<String>, lastAt: Map<String, Long>): List<JSONObject> {
         val k = minOf(lib.size - 1, maxOf(minOf(3, lib.size - 1), (lib.size * 0.6).toInt()), 20)
-        // o que bombou espera ~40% da fila (antes: só 2 posts)
         val winGap = minOf(maxOf(4, (lib.size * 0.4).toInt()), k)
         val now = System.currentTimeMillis()
+        fun lp(o: JSONObject) = maxOf(o.optLong("lastPost"), lastAt[o.optString("id")] ?: 0L)
         var pool = lib.filter { o ->
             val idx = rec.indexOf(o.optString("id"))
-            (idx < 0 || idx >= (if (Learn.isWin(o)) winGap else k)) && now - o.optLong("lastPost") > 20 * 3600_000L // o mesmo vídeo no máx. 1x por dia
-        }.ifEmpty { lib.filter { o -> val idx = rec.indexOf(o.optString("id")); idx < 0 || idx >= minOf(2, k) } }
-            .ifEmpty { lib.filter { it.optString("id") != rec.firstOrNull() }.ifEmpty { lib } }
+            (idx < 0 || idx >= (if (Learn.isWin(o)) winGap else k)) && now - lp(o) > 20 * 3600_000L // o mesmo vídeo no máx. 1x por dia
+        }.ifEmpty { lib.filter { o -> val idx = rec.indexOf(o.optString("id")); (idx < 0 || idx >= minOf(2, k)) && o.optString("id") !in lastAt } }
+            .ifEmpty { lib.filter { it.optString("id") != rec.firstOrNull() && it.optString("id") !in lastAt }.ifEmpty { lib.filter { it.optString("id") !in lastAt } } }
+        if (pool.isEmpty()) return pool
         val origins = lib.map { origin(it) }.distinct().size
-        // vídeos crus: evita os últimos ~60% (antes: só os 3 últimos)
         val avoid = recentO.take(minOf(maxOf(3, (origins * 0.7).toInt()), maxOf(0, origins - 1)))
         for (n in avoid.size downTo 1) { val f = pool.filter { origin(it) !in avoid.take(n) }; if (f.isNotEmpty()) { pool = f; break } }
-        val lastTxt = recent(c, "vid_last_txt").take(3)
-        return pool.filter { it.optString("texto").trim().lowercase() !in lastTxt || it.optString("texto").isBlank() }.ifEmpty { pool }
+        // mesma cena postada nas últimas 24 h espera (mesmo com texto diferente), se tiver outra opção
+        val hotScenes = lib.filter { it.optLong("lastPost") > 0 && now - it.optLong("lastPost") < 24 * 3600_000L }.map { origin(it) }.toSet()
+        pool.filter { origin(it) !in hotScenes }.takeIf { it.isNotEmpty() }?.let { pool = it }
+        // texto: não repete os 3 últimos; música: não repete a última
+        pool.filter { it.optString("texto").trim().lowercase().let { t -> t.isBlank() || t !in recTxt.take(3) } }.takeIf { it.isNotEmpty() }?.let { pool = it }
+        pool.filter { it.optString("musica").isBlank() || it.optString("musica") != recMus.firstOrNull() }.takeIf { it.isNotEmpty() }?.let { pool = it }
+        return pool
     }
+
+    private fun usable(c: Context): List<JSONObject> {
+        Scenes.refresh(c)
+        val ex = library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() }
+        return ex.filter { !it.optBoolean("arquivado") && Saturation.videoOk(c, it) }.ifEmpty { ex.filter { !it.optBoolean("arquivado") } }.ifEmpty { ex }
+    }
+
+    /** Sorteia o próximo (camada pela cota, depois a qualidade dentro da camada). */
+    private fun draw(c: Context, cand: List<JSONObject>, rec: List<String>, recO: List<String>, projs: Map<String, JSONObject>): JSONObject {
+        val tiers = cand.map { tierOf(c, it) }
+        val quota = Selection.quota(c)
+        val present = tiers.map { it.first }.toSet()
+        val qSum = quota.filterKeys { it in present }.values.sum().takeIf { it > 0 } ?: 1.0
+        val qs = cand.indices.map { q(cand[it], tiers[it].second, rec, recO, projs) }
+        val tot = cand.indices.groupBy { tiers[it].first }.mapValues { (_, l) -> l.sumOf { qs[it] } }
+        val w = cand.indices.map { (quota[tiers[it].first] ?: 0.0) / qSum * qs[it] / tot.getValue(tiers[it].first) }
+        var r = Math.random() * w.sum()
+        for (i in cand.indices) { r -= w[i]; if (r <= 0) return cand[i] }
+        return cand.last()
+    }
+
+    private const val PLAN = 6
+    private fun savePlan(c: Context, l: List<String>) = Store.prefs(c).edit().putString("vid_plan", l.joinToString("\u0001")).apply()
 
     /**
-     * Próximo vídeo: valoriza MUITO o que bombou, mas nunca repete em seguida
-     * (nem o mesmo vídeo, nem o mesmo vídeo cru, nem o mesmo texto).
+     * A fila planejada (até 6). Confere se o que está planejado ainda vale (existe, não está descansando, não quebra
+     * as regras de repetição) e completa sorteando. Vídeos novos entram no planejamento a partir da 3ª posição.
      */
-    fun cycleNext(c: Context): String? {
-        Scenes.refresh(c)
-        val lib = library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() && !it.optBoolean("arquivado") && Saturation.videoOk(c, it) }
-            .ifEmpty { library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() && !it.optBoolean("arquivado") } }
-            .ifEmpty { library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() } }
-        if (lib.isEmpty()) return null
-        val rec = recent(c, "vid_rec")
-        val recentO = recent(c, "vid_last_orig")
-        val projs = Projects.list(c).associateBy { it.optString("id") }
+    @Synchronized fun plan(c: Context): List<JSONObject> {
+        val lib = usable(c); if (lib.isEmpty()) return emptyList()
         val byId = lib.associateBy { it.optString("id") }
-        Health.takeForced(c, "force_vids") { id -> byId[id]?.let { o -> id !in rec.take(2) && origin(o) !in recentO.take(minOf(3, maxOf(0, lib.map { origin(it) }.distinct().size - 1))) } == true }?.let { fid ->
-            pushRec(c, "vid_rec", fid, 40); pushRec(c, "vid_last_orig", origin(byId.getValue(fid)), 20); return fid
+        val projs = Projects.list(c).associateBy { it.optString("id") }
+        val sig = lib.map { it.optString("id") }.sorted().joinToString(",").hashCode().toString() + Selection.mode(c)
+        var ids = recent(c, "vid_plan").filter { it in byId }
+        if (Store.prefs(c).getString("vid_plan_sig", "") != sig) { ids = ids.take(2); Store.prefs(c).edit().putString("vid_plan_sig", sig).apply() }
+        // simula a sequência a partir do que realmente saiu e tira o que quebrar as regras
+        val rec = recent(c, "vid_rec").toMutableList(); val recO = recent(c, "vid_last_orig").toMutableList()
+        val recT = recent(c, "vid_last_txt").toMutableList(); val recM = recent(c, "vid_last_mus").toMutableList()
+        val lastAt = HashMap<String, Long>()
+        val out = ArrayList<JSONObject>()
+        fun push(o: JSONObject) {
+            out += o; val id = o.optString("id")
+            rec.remove(id); rec.add(0, id); recO.remove(origin(o)); recO.add(0, origin(o))
+            o.optString("texto").trim().lowercase().takeIf { it.isNotEmpty() }?.let { recT.add(0, it) }
+            o.optString("musica").takeIf { it.isNotEmpty() }?.let { recM.add(0, it) }
+            lastAt[id] = System.currentTimeMillis() // planejado: não entra 2x no plano
         }
-        val cand = candidates(c, lib, rec, recentO)
-        val w = cand.map { weight(c, it, rec, projs) }
-        var r = Math.random() * w.sum(); var pick = cand.last()
-        for (i in cand.indices) { r -= w[i]; if (r <= 0) { pick = cand[i]; break } }
-        pushRec(c, "vid_rec", pick.optString("id"), 40)
-        pushRec(c, "vid_last_orig", origin(pick), 20)
-        return pick.optString("id")
+        // 🩺 a saúde da fila mandou girar: entra na frente
+        Health.takeForced(c, "force_vids") { id -> id in byId && id !in rec.take(2) }?.let { fid -> if (fid !in ids) ids = listOf(fid) + ids }
+        val pin = Store.prefs(c).getString("vid_pin", "")
+        for (id in ids) {
+            val o = byId[id] ?: continue
+            if ((out.isEmpty() && id == pin) || o in candidates(c, lib, rec, recO, recT, recM, lastAt)) push(o)
+        }
+        while (out.size < minOf(PLAN, lib.size)) {
+            val cand = candidates(c, lib, rec, recO, recT, recM, lastAt).filter { it !in out }
+            if (cand.isEmpty()) break
+            push(draw(c, cand, rec, recO, projs))
+        }
+        savePlan(c, out.map { it.optString("id") })
+        return out
     }
 
+    /** Próximo da fila (o 1º do plano). NÃO marca como saído: isso só acontece quando você confirma que postou. */
+    fun cycleNext(c: Context): String? = plan(c).firstOrNull()?.optString("id")
+
+    /** Os próximos [n], exatamente na ordem em que vão sair. */
+    fun upcoming(c: Context, n: Int): List<JSONObject> = plan(c).take(n)
+
+    /** ⏫ Esse sai agora (fura a fila, mesmo quebrando a regra de repetição: escolha sua). */
+    fun pinNext(c: Context, id: String) {
+        savePlan(c, listOf(id) + recent(c, "vid_plan").filter { it != id })
+        Store.prefs(c).edit().putString("vid_pin", id).apply()
+    }
+
+    /** ⏭ Pula: sai do plano e espera uma rodada. */
+    fun skip(c: Context, id: String) {
+        savePlan(c, recent(c, "vid_plan").filter { it != id })
+        pushRec(c, "vid_rec", id, 40)
+        if (Store.prefs(c).getString("vid_pin", "") == id) Store.prefs(c).edit().remove("vid_pin").apply()
+    }
+
+    /** 🔀 Sorteia o plano de novo (mantém só o 1º). */
+    fun reshuffle(c: Context) { savePlan(c, recent(c, "vid_plan").take(1)); Store.prefs(c).edit().remove("vid_plan_sig").apply() }
+
     fun markPosted(c: Context, id: String) {
+        savePlan(c, recent(c, "vid_plan").filter { it != id })
+        if (Store.prefs(c).getString("vid_pin", "") == id) Store.prefs(c).edit().remove("vid_pin").apply()
+        library(c).firstOrNull { it.optString("id") == id }?.optString("musica")?.takeIf { it.isNotEmpty() }?.let { pushRec(c, "vid_last_mus", it, 5) }
         val lib = library(c)
         val ids = lib.map { it.optString("id") }.toSet()
         val s = cycleSet(c); s.add(id); s.retainAll(ids)
@@ -456,23 +535,6 @@ object VideoExport {
         e.apply()
     }
 
-    /** Ordem prevista dos próximos [n] (simulação das mesmas regras, sem sorteio). */
-    fun upcoming(c: Context, n: Int): List<JSONObject> {
-        Scenes.refresh(c)
-        val lib = library(c).filter { File(videoDir(c), "${it.optString("id")}.mp4").exists() && !it.optBoolean("arquivado") && Saturation.videoOk(c, it) }
-        val rec = recent(c, "vid_rec").toMutableList()
-        val recentO = recent(c, "vid_last_orig").toMutableList()
-        val projs = Projects.list(c).associateBy { it.optString("id") }
-        val out = ArrayList<JSONObject>()
-        repeat(minOf(n, lib.size)) {
-            val cand = candidates(c, lib, rec, recentO).filter { it !in out }.ifEmpty { return out }
-            val pick = cand.maxBy { weight(c, it, rec, projs) }
-            out.add(pick)
-            rec.remove(pick.optString("id")); rec.add(0, pick.optString("id"))
-            recentO.remove(origin(pick)); recentO.add(0, origin(pick))
-        }
-        return out
-    }
 
     /** (postados nesta rodada, total, rodadas completas) */
     fun cycleStatus(c: Context): Triple<Int, Int, Int> {
