@@ -66,7 +66,7 @@ object Promo {
     fun score(o: JSONObject): Double {
         val n = o.optInt("top") + o.optInt("good") + o.optInt("meh") + o.optInt("bad")
         var q = (1.5 * o.optInt("top") + o.optInt("good") + 0.5 * o.optInt("meh") + 1.0) / (n + 0.5 * o.optInt("top") + 2.0)
-        if (o.optInt("folN") > 0) q += (o.optDouble("fol") / o.optInt("folN")).coerceIn(-1.0, 3.0) * 0.12
+        if (o.optInt("folN") > 0) (o.optDouble("fol", 0.0) / o.optInt("folN")).takeIf { it.isFinite() }?.let { q += it.coerceIn(-1.0, 3.0) * 0.12 }
         return q.coerceIn(0.0, 1.2)
     }
     fun tested(o: JSONObject) = o.optInt("top") + o.optInt("good") + o.optInt("meh") + o.optInt("bad") + o.optInt("folN")
@@ -237,7 +237,7 @@ object Promo {
         val f = ThreadsApi.followers(c).filter { System.currentTimeMillis() - it.optLong("t") < 21 * 86400_000L }
         if (f.size < 2) return 0.0
         val days = (f.last().optLong("t") - f.first().optLong("t")) / 86400_000.0
-        return if (days < 1) 0.0 else (f.last().optInt("n") - f.first().optInt("n")) / days
+        return if (days < 1) 0.0 else ((f.last().optInt("n") - f.first().optInt("n")) / days).takeIf { it.isFinite() } ?: 0.0
     }
     private fun folAt(c: Context, t: Long): Int? = ThreadsApi.followers(c).filter { it.optLong("t") <= t }.lastOrNull()?.optInt("n")
 
@@ -261,9 +261,9 @@ object Promo {
                 val f0 = e.optInt("fol0", -1).takeIf { it > 0 } ?: folAt(c, e.optLong("at"))
                 val f1 = folAt(c, e.optLong("at") + 26 * 3600_000L)
                 val gain = fromPost ?: if (f0 != null && f1 != null && f1 >= f0) (f1 - f0) - base else null
-                if (gain != null) {
+                if (gain != null && gain.isFinite()) {
                     JsonFile.edit(File(c.filesDir, "envios.json")) { l -> l.firstOrNull { it.optLong("at") == e.optLong("at") }?.put("gain", gain) }
-                    val rel = if (fromPost != null) gain / maxOf(1.0, base / 3) else gain / maxOf(1.0, base)
+                    val rel = (if (fromPost != null) gain / maxOf(1.0, base / 3) else gain / maxOf(1.0, base)).takeIf { it.isFinite() } ?: 0.0
                     JsonFile.edit(bank(c)) { b -> b.firstOrNull { norm(it.optString("t")) == norm(e.optString("tpl")) }?.let { it.put("fol", it.optDouble("fol") + rel); it.put("folN", it.optInt("folN") + 1); it.put("folRaw", it.optDouble("folRaw") + gain) } }
                 }
                 if (gain != null || now - e.optLong("at") > 4 * 86400_000L) SendLog.mark(c, e.optLong("at"), "pf")

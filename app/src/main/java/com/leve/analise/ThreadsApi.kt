@@ -183,11 +183,20 @@ object ThreadsApi {
 
     /** Uma vez: tira da série os "seguidores" que eram de OUTROS perfis (bem longe dos vizinhos). */
     fun repairFollowers(c: Context) {
+        if (!p(c).getBoolean("repair_fol2", false)) { p(c).edit().putBoolean("repair_fol2", true).remove("repair_fol").apply() } // limpa de novo (havia leituras erradas)
         if (p(c).getBoolean("repair_fol", false)) return
         JsonFile.edit(folFile(c)) { l ->
-            val api = l.filter { it.optString("src") == "api" }.map { it.optInt("n") }
-            val ref = (api.ifEmpty { l.map { it.optInt("n") } }).sorted().let { if (it.isEmpty()) 0 else it[it.size / 2] }
-            if (ref > 0) l.removeAll { o -> o.optString("src") != "api" && (o.optInt("n") > ref * 1.4 || o.optInt("n") < ref * 0.6) }
+            // seguidores não despencam nem dobram de uma leitura pra outra: fica a sequência coerente MAIS LONGA
+            // (cada registro entre -20% e +30% do anterior); o resto era número de outra tela/perfil
+            val s = l.sortedBy { it.optLong("t") }
+            if (s.size < 3) return@edit
+            var best: List<JSONObject> = emptyList()
+            s.map { it.optInt("n") }.distinct().forEach { start ->
+                val keep = ArrayList<JSONObject>(); var last = start.toDouble()
+                s.forEach { o -> val n = o.optInt("n"); if (o.optString("src") == "api" || (n >= last * 0.8 && n <= last * 1.3)) { keep += o; last = n.toDouble() } }
+                if (keep.size > best.size) best = keep
+            }
+            if (best.size >= 2) { l.clear(); l.addAll(best) }
         }
         p(c).edit().putBoolean("repair_fol", true).apply()
     }
@@ -241,6 +250,11 @@ object ThreadsApi {
     fun addFollowers(c: Context, n: Int, src: String) {
         if (n <= 0) return
         JsonFile.edit(folFile(c)) { l ->
+            // número muito longe dos últimos registros = leitura de outra tela/perfil (a API sempre vale)
+            if (src != "api") {
+                val ref = l.filter { System.currentTimeMillis() - it.optLong("t") < 14 * 86400_000L }.map { it.optInt("n") }.sorted()
+                if (ref.size >= 3) { val med = ref[ref.size / 2]; if (n > med * 1.3 || n < med * 0.75) return@edit }
+            }
             val last = l.lastOrNull()
             if (last != null && last.optInt("n") == n && System.currentTimeMillis() - last.optLong("t") < 20 * 60_000L) return@edit
             l.add(JSONObject().put("t", System.currentTimeMillis()).put("n", n).put("src", src)); while (l.size > 2000) l.removeAt(0)

@@ -83,7 +83,7 @@ object PostBar {
         val nm = c.getSystemService(NotificationManager::class.java)
         if (bubbleOn(c) && canBubble(c)) {
             val s = FloatService.instance
-            if (s != null) s.refresh()
+            if (s != null) android.os.Handler(android.os.Looper.getMainLooper()).post { try { s.refresh() } catch (e: Exception) { } } // a bolha só pode ser mexida na thread da tela
             else try {
                 val i = Intent(c, FloatService::class.java)
                 if (Build.VERSION.SDK_INT >= 26) c.startForegroundService(i) else c.startService(i)
