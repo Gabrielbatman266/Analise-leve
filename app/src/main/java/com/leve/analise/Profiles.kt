@@ -213,7 +213,7 @@ object Names {
     /** Troca o nome inteiro (não pedaço de palavra), mantendo maiúsculas: FLAVIA→VALENTINA, Flavia→Valentina, flavia→valentina. */
     fun swap(t: String, from: String, to: String): String {
         if (from.isBlank()) return t
-        val re = Regex("(?<![\\p{L}\\p{N}])" + Regex.escape(from.trim()) + "(?![\\p{L}\\p{N}])", setOf(RegexOption.IGNORE_CASE))
+        val re = Regex("(?iu)(?<![\\p{L}\\p{N}])" + Regex.escape(from.trim()) + "(?![\\p{L}\\p{N}])") // (?iu): ignora maiúscula também com acento (Flávia/FLÁVIA)
         return re.replace(t) { m ->
             val s = m.value
             when { s == s.uppercase() && s != s.lowercase() -> to.uppercase(); s.first().isUpperCase() -> to.replaceFirstChar { it.uppercase() }; else -> to.lowercase() }
