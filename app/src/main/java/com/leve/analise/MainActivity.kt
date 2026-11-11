@@ -275,7 +275,13 @@ class MainActivity : Activity() {
         val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         root.addView(head, lpMatch())
         head.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(ACCENT, 0xFFFF8A65.toInt())).apply { cornerRadius = dp(5).toFloat() } }, LinearLayout.LayoutParams(dp(10), dp(26)).apply { rightMargin = dp(10) })
-        head.addView(TextView(this).apply { text = "Post Leve"; textSize = 24f; setTextColor(FG); typeface = Typeface.create("sans-serif-medium", Typeface.BOLD); letterSpacing = -0.01f })
+        head.addView(TextView(this).apply { text = "Post Leve"; textSize = 24f; setTextColor(FG); typeface = Typeface.create("sans-serif-medium", Typeface.BOLD); letterSpacing = -0.01f }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        // 👩 modelo atual (toque pra trocar)
+        head.addView(TextView(this).apply {
+            text = "👩 " + Profiles.current(this@MainActivity).optString("name") + "  ▾"; textSize = 13f; setTextColor(0xFFFF9DB4.toInt())
+            setPadding(dp(12), dp(7), dp(12), dp(7)); background = GradientDrawable().apply { setColor(0x2EFF5C82); cornerRadius = dp(16).toFloat() }
+            setOnClickListener { pickModel() }
+        })
 
         val tabs = listOf("Postar" to ("📸" to "Postar"), "Legendas" to ("💬" to "Legendas"), "Instagram" to ("🎬" to "Vídeos"), "Números" to ("📊" to "Números"),
             "Refs" to ("💡" to "Refs"), "Limpar" to ("🧽" to "Limpar"), "Ajustes" to ("⚙" to "Ajustes"))
@@ -747,7 +753,10 @@ class MainActivity : Activity() {
         styleEvery()
 
         // ===== Legendas
+        page = pages["Ajustes"]!!
+        modelsUi()
         page = pages["Legendas"]!!
+        namesUi()
         buildCaptionsTab()
 
         // ===== Instagram
@@ -892,6 +901,125 @@ class MainActivity : Activity() {
         showTab((Store.prefs(this).getString("tab", "Postar") ?: "Postar").let { if (it == "Analisar" || pages[it] == null) "Postar" else it })
     }
 
+    // ------------------------------------------------------------------ 👩 modelos
+    private fun goModel(id: String) {
+        val nm = Profiles.byId(this, id)?.optString("name") ?: return
+        toast("Trocando pra $nm…")
+        Thread { val err = Profiles.switchTo(this, id); ui.post { if (err != null) toast(err) else Profiles.restart(this) } }.start()
+    }
+
+    private fun pickModel() {
+        val l = Profiles.list(this); val cur = Profiles.currentId(this)
+        val names = l.map { (if (it.optString("id") == cur) "✓ " else "    ") + it.optString("name") + (it.optString("model").takeIf { m -> m.isNotBlank() }?.let { m -> "  ($m)" } ?: "") } + "➕ Nova modelo"
+        AlertDialog.Builder(this).setTitle("👩 Modelo").setItems(names.toTypedArray()) { _, w ->
+            if (w == l.size) newModel() else if (l[w].optString("id") != cur) goModel(l[w].optString("id"))
+        }.show()
+    }
+
+    private fun newModel() {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0) }
+        fun et(h: String) = EditText(this).apply { hint = h; setSingleLine(true) }.also { box.addView(it) }
+        val n = et("Nome do perfil (ex.: Valentina)"); val m = et("Nome dela nas legendas (ex.: Valentina)")
+        val cp = android.widget.CheckBox(this).apply { text = "Começar com os mesmos ajustes (lembretes, automação, categorias)"; isChecked = true }; box.addView(cp)
+        val lf = android.widget.CheckBox(this).apply { text = "Aprender com " + Profiles.current(this@MainActivity).optString("name") + " (começa com o que ela já aprendeu)"; isChecked = true }; box.addView(lf)
+        box.addView(TextView(this).apply { text = "Ela começa com fila, fotos, vídeos e números vazios. As legendas da outra dá pra puxar depois em Ajustes › 👩 Modelos, já com o nome trocado."; textSize = 12f; setTextColor(MUTED); setPadding(0, dp(8), 0, 0) })
+        AlertDialog.Builder(this).setTitle("➕ Nova modelo").setView(box).setPositiveButton("Criar") { _, _ ->
+            val from = Profiles.currentId(this)
+            toast("Criando…")
+            Thread { val err = Profiles.create(this, n.text.toString(), m.text.toString().ifBlank { n.text.toString() }, cp.isChecked, if (lf.isChecked) from else null)
+                ui.post { if (err != null) toast(err) else Profiles.restart(this) } }.start()
+        }.setNegativeButton("Cancelar", null).show()
+    }
+
+    private fun modelsUi() {
+        val cm = card("👩 Modelos")
+        text("Cada modelo tem o seu próprio banco: fotos, vídeos, legendas, notas, números, aprendizado e conta. A chave da IA e o que você ensinou ao leitor valem pra todas. Trocar de modelo reabre o app.", 12f, MUTED, parent = cm)
+        val cur = Profiles.current(this)
+        text("Agora: " + cur.optString("name"), 15f, FG, parent = cm, bold = true)
+        text("Nome dela nas legendas (pra trocar sozinho quando puxar legendas de outra):", 12f, MUTED, parent = cm)
+        val et = EditText(this).apply { setText(cur.optString("model")); hint = "ex.: Flavia"; setSingleLine(true); setTextColor(FG); setHintTextColor(MUTED)
+            background = GradientDrawable().apply { setColor(SURF); cornerRadius = dp(12).toFloat() }; setPadding(dp(14), dp(11), dp(14), dp(11)) }
+        cm.addView(et, lpMatch())
+        button("Salvar nome", cm) { Profiles.update(this) { it.put("model", et.text.toString().trim()) }; toast("Salvo") }
+        val oth = Profiles.others(this)
+        if (oth.isNotEmpty()) {
+            text("🧠 Aprender junto com outra modelo: o modelo de previsão começa do que a outra aprendeu e vai se ajustando aos números desta (quanto mais posts aqui, menos pesa a outra).", 12f, MUTED, parent = cm)
+            val opts = listOf("Só com os números dela") + oth.map { "Com " + it.optString("name") }
+            chips(cm, opts, { Profiles.current(this).optString("prior").let { p -> oth.firstOrNull { it.optString("id") == p }?.let { "Com " + it.optString("name") } ?: opts[0] } }) { v ->
+                Profiles.update(this) { o -> o.put("prior", oth.firstOrNull { "Com " + it.optString("name") == v }?.optString("id") ?: "") }
+                Predictor.train(this, true)
+            }
+            text("📥 Puxar legendas de outra modelo (legendas, textos de vídeo e divulgação; as que bombaram lá começam com vantagem):", 12f, MUTED, parent = cm)
+            oth.forEach { o ->
+                button("📥 Puxar de " + o.optString("name") + (if (o.optString("model").isNotBlank() && Profiles.modelName(this).isNotBlank()) "  (\"" + o.optString("model") + "\" → \"" + Profiles.modelName(this) + "\")" else ""), cm) {
+                    if (Profiles.modelName(this).isBlank()) toast("Dica: salve o nome dela acima pra trocar o nome nas legendas")
+                    Thread { val m = try { Profiles.importCaptions(this, o.optString("id"), true) } catch (e: Exception) { "Erro: ${e.message}" }; ui.post { toast(m); renderMine() } }.start()
+                }
+            }
+        }
+        val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; cm.addView(r, lpMatch())
+        button("👩 Trocar de modelo", r, weight = true) { pickModel() }
+        button("➕ Nova modelo", r, primary = true, weight = true) { newModel() }
+        if (oth.isNotEmpty()) button("🗑 Apagar uma modelo…", cm) {
+            AlertDialog.Builder(this).setTitle("Apagar qual?").setItems(oth.map { it.optString("name") }.toTypedArray()) { _, w ->
+                val o = oth[w]
+                AlertDialog.Builder(this).setMessage("Apagar ${o.optString("name")} e TODO o banco dela (fotos, vídeos, legendas, números)? Não dá pra desfazer.")
+                    .setPositiveButton("Apagar") { _, _ -> Profiles.delete(this, o.optString("id")); toast("Apagada"); recreate() }.setNegativeButton("Cancelar", null).show()
+            }.show()
+        }
+    }
+
+    private fun namesUi() {
+        val cn = card("🔁 Trocar nome nas legendas")
+        text("Troca o nome em TODO o banco desta modelo (legendas, fila, textos de vídeo, divulgação). Mantém maiúsculas: FLAVIA → VALENTINA, Flavia → Valentina. Só troca a palavra inteira.", 12f, MUTED, parent = cn)
+        val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }; cn.addView(r, lpMatch())
+        fun et(h: String) = EditText(this).apply { hint = h; setSingleLine(true); setTextColor(FG); setHintTextColor(MUTED); textSize = 14f
+            background = GradientDrawable().apply { setColor(SURF); cornerRadius = dp(12).toFloat() }; setPadding(dp(12), dp(10), dp(12), dp(10)) }
+        val ef = et("de: Flavia"); val eto = et("para: Valentina")
+        r.addView(ef, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(6) })
+        r.addView(TextView(this).apply { text = "→"; setTextColor(MUTED); textSize = 16f })
+        r.addView(eto, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = dp(6) })
+        val tvN = text("", 12f, OK, parent = cn)
+        val rb = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; cn.addView(rb, lpMatch())
+        button("🔎 Contar", rb, weight = true) { Thread { val n = Names.countWith(this, ef.text.toString()); ui.post { tvN.text = "$n texto(s) têm \"${ef.text}\"" } }.start() }
+        button("🔁 Trocar em tudo", rb, primary = true, weight = true) {
+            val f = ef.text.toString().trim(); val t = eto.text.toString().trim()
+            if (f.isEmpty() || t.isEmpty()) { toast("Preencha os dois nomes"); return@button }
+            AlertDialog.Builder(this).setMessage("Trocar \"$f\" por \"$t\" em todo o banco desta modelo?").setPositiveButton("Trocar") { _, _ ->
+                Thread { val n = try { Names.renameAll(this, f, t) } catch (e: Exception) { -1 }; ui.post { tvN.text = if (n < 0) "Erro ao trocar" else "✓ $n texto(s) trocados"; renderMine() } }.start()
+            }.setNegativeButton("Cancelar", null).show()
+        }
+
+        text("🤖 Editar com o ChatGPT (ou outra IA)", 14f, FG, parent = cn, bold = true)
+        text("1) Escreva o pedido. 2) Copie cada parte e cole no ChatGPT. 3) Copie a resposta dele, volte aqui e toque em Colar resposta (uma parte por vez). O app troca linha por linha pelo número.", 12f, MUTED, parent = cn)
+        val ask = EditText(this).apply { setText("Troque o nome \"Flavia\" por \"Valentina\" em todas as legendas."); setTextColor(FG); textSize = 13f
+            background = GradientDrawable().apply { setColor(SURF); cornerRadius = dp(12).toFloat() }; setPadding(dp(12), dp(10), dp(12), dp(10)) }
+        cn.addView(ask, lpMatch())
+        val parts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }; cn.addView(parts, lpMatch())
+        val tvG = text("", 12f, OK, parent = cn)
+        fun drawParts() {
+            parts.removeAllViews()
+            val n = Names.parts(this); if (n == 0) return
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; parts.addView(row, lpMatch())
+            (0 until n).forEach { k ->
+                if (k > 0 && k % 3 == 0) { val nr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; parts.addView(nr, lpMatch()) }
+                val holder = parts.getChildAt(parts.childCount - 1) as LinearLayout
+                button("📋 Parte ${k + 1}", holder, weight = true) {
+                    (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("legendas", Names.partText(this, k, ask.text.toString())))
+                    toast("Parte ${k + 1} de $n copiada: cole no ChatGPT")
+                }
+            }
+        }
+        button("📦 Preparar o banco pra copiar", cn) { Thread { val n = Names.prepare(this); ui.post { tvG.text = "${Names.bank(this).size} texto(s) em $n parte(s) de até ${Names.PART}"; drawParts() } }.start() }
+        button("📥 Colar resposta do ChatGPT", cn, primary = true) {
+            val clip = (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).primaryClip?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
+            if (clip.isBlank()) { toast("Copie a resposta do ChatGPT primeiro"); return@button }
+            Thread { val (ch, read, bad) = try { Names.importAnswer(this, clip) } catch (e: Exception) { Triple(-1, 0, 0) }
+                ui.post { tvG.text = if (ch < 0) "Erro ao ler a resposta" else if (read == 0) "Não achei linhas no formato \"N) texto\". Copiou a resposta certa?" else "✓ Li $read linha(s), troquei $ch texto(s)" + (if (bad > 0) " · $bad linha(s) que não reconheci" else ""); renderMine() } }.start()
+        }
+        drawParts()
+    }
+
     /** Título de seção (agrupa os cartões por assunto). */
     private fun sectionView(t: String) = TextView(this).apply {
         text = t.uppercase(); textSize = 11.5f; setTextColor(MUTED); letterSpacing = 0.12f; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
@@ -909,7 +1037,7 @@ class MainActivity : Activity() {
         }
         place("Postar", listOf("✅ Configuração", "🏠 Painel", "#Postar no Threads", "Fila de posts", "📣 Divulgação do Instagram", "🕘 Envios e notas"))
         place("Números", listOf("#Crescimento", "📈 Vigia do crescimento", "🧪 Laboratório", "#Posts e coleta", "🏆 Ranking e postagem perfeita", "🩺 Saúde das filas"))
-        place("Ajustes", listOf("#Automação", "🤖 Tudo automático", "🤖 Piloto automático", "📌 Botão de postar sempre à mão",
+        place("Ajustes", listOf("#Modelos", "👩 Modelos", "#Automação", "🤖 Tudo automático", "🤖 Piloto automático", "📌 Botão de postar sempre à mão",
             "#Conexões", "Configurações da IA", "🔗 API do Threads (números exatos)", "🔕 Notificações do Threads",
             "#Manutenção", "🧪 Autoteste e diagnóstico", "💾 Backup", "Celular limpo", "Atualizações", "Se parar sozinho (Xiaomi)"))
     }

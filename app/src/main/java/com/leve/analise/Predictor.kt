@@ -118,8 +118,12 @@ object Predictor {
         return out
     }
 
-    private fun fit(data: List<Sample>, epochs: Int = 60): Pair<Map<String, Double>, Double> {
-        val ww = HashMap<String, Double>()
+    /**
+     * Modelo linear (cada característica soma ou tira pontos). Com [prior], começa do que foi aprendido com
+     * OUTRA modelo e só se afasta disso quando os números desta mostram diferente (aprendizado transferido).
+     */
+    private fun fit(data: List<Sample>, epochs: Int = 60, prior: Map<String, Double> = emptyMap()): Pair<Map<String, Double>, Double> {
+        val ww = HashMap<String, Double>(prior)
         val tw = data.sumOf { it.w }
         var b = if (tw > 0) data.sumOf { it.y * it.w } / tw else 0.5
         val lr = 0.05; val l2 = 0.02
@@ -129,57 +133,121 @@ object Predictor {
                 val pred = b + s.f.sumOf { ww[it] ?: 0.0 }
                 val err = (s.y - pred).coerceIn(-1.0, 1.0) * s.w
                 b += lr * 0.2 * err
-                s.f.forEach { k -> val cur = ww[k] ?: 0.0; ww[k] = cur + lr * (err - l2 * cur) }
+                s.f.forEach { k -> val cur = ww[k] ?: 0.0; ww[k] = cur + lr * (err - l2 * (cur - (prior[k] ?: 0.0))) }
             }
         }
         return ww to b
+    }
+
+    /**
+     * 🧠 Rede neural pequena (1 camada escondida, 8 neurônios): pega COMBINAÇÕES que o linear não vê
+     * (ex.: "pergunta funciona à noite mas não de manhã"). Com poucos posts ela costuma decorar em vez de aprender —
+     * por isso ela só é usada se ganhar do linear no teste com posts que nenhum dos dois viu.
+     */
+    private class Mlp(val idx: Map<String, Int>, val w1: Array<DoubleArray>, val b1: DoubleArray, val w2: DoubleArray, var b2: Double) {
+        fun hidden(f: List<String>): DoubleArray {
+            val h = b1.copyOf()
+            f.forEach { k -> idx[k]?.let { i -> for (j in h.indices) h[j] += w1[i][j] } }
+            for (j in h.indices) h[j] = Math.tanh(h[j])
+            return h
+        }
+        fun predict(f: List<String>): Double { val h = hidden(f); var o = b2; for (j in h.indices) o += w2[j] * h[j]; return o.coerceIn(0.02, 0.98) }
+    }
+
+    private fun fitMlp(data: List<Sample>, epochs: Int = 80, hiddenN: Int = 8): Mlp {
+        val keys = data.flatMap { it.f }.distinct()
+        val idx = keys.withIndex().associate { it.value to it.index }
+        val rnd = java.util.Random(5)
+        val w1 = Array(keys.size) { DoubleArray(hiddenN) { (rnd.nextDouble() - 0.5) * 0.2 } }
+        val b1 = DoubleArray(hiddenN); val w2 = DoubleArray(hiddenN) { (rnd.nextDouble() - 0.5) * 0.2 }
+        val tw = data.sumOf { it.w }
+        val net = Mlp(idx, w1, b1, w2, if (tw > 0) data.sumOf { it.y * it.w } / tw else 0.5)
+        val lr = 0.03; val l2 = 0.01
+        repeat(epochs) {
+            data.shuffled(rnd).forEach { s ->
+                val h = net.hidden(s.f)
+                var o = net.b2; for (j in h.indices) o += w2[j] * h[j]
+                val err = (s.y - o).coerceIn(-1.0, 1.0) * s.w
+                net.b2 += lr * 0.2 * err
+                for (j in h.indices) {
+                    val g = err * w2[j] * (1 - h[j] * h[j])
+                    w2[j] += lr * (err * h[j] - l2 * w2[j])
+                    b1[j] += lr * g
+                    s.f.forEach { k -> idx[k]?.let { i -> w1[i][j] += lr * (g - l2 * w1[i][j]) } }
+                }
+            }
+        }
+        return net
     }
 
     @Volatile private var lastCheck = 0L
     @Volatile private var pairAcc = -1.0   // % de comparações que o modelo acerta em posts que ele NÃO viu no treino
     @Volatile private var skill = 0.0      // 0 = não ajuda; 1 = perfeito
     @Volatile private var trust = 1.5      // quanto a previsão pesa contra o histórico do próprio item
+    @Volatile private var mode = "linear"  // vencedor do torneio: linear, rede ou os dois juntos
+    @Volatile private var net: Mlp? = null
+    @Volatile private var scores: Map<String, Double> = emptyMap()
+    @Volatile private var priorFrom = ""
 
-    /** Re-treina quando surgem notas novas (rápido). Confere no máximo a cada 30 s (antes relia 3 arquivos a cada consulta). */
+    private fun pairAccOf(data: List<Sample>, preds: DoubleArray): Double {
+        var ok = 0; var tot = 0
+        val smp = data.indices.shuffled(java.util.Random(3)).take(120)
+        for (a in smp) for (b2 in smp) if (a < b2 && Math.abs(data[a].y - data[b2].y) > 0.15) { tot++; if ((preds[a] - preds[b2]) * (data[a].y - data[b2].y) > 0) ok++ }
+        return if (tot >= 10) ok.toDouble() / tot else -1.0
+    }
+
+    /** Re-treina quando surgem notas novas. Faz um TORNEIO: linear × rede neural × os dois juntos, no teste com posts que nenhum viu. */
     @Synchronized fun train(c: Context, force: Boolean = false) {
         val now = System.currentTimeMillis()
         if (!force && sig.isNotEmpty() && now - lastCheck < 30_000L) return
         lastCheck = now
-        val s = SendLog.all(c).count { it.optString("nota").isNotEmpty() }.toString() + ":" + VideoExport.library(c).sumOf { Learn.rated(it) } + ":" + PostQueue.load(c).sumOf { Learn.rated(it) } + ":" + ThreadsApi.posts(c).size
+        val s = SendLog.all(c).count { it.optString("nota").isNotEmpty() }.toString() + ":" + VideoExport.library(c).sumOf { Learn.rated(it) } + ":" + PostQueue.load(c).sumOf { Learn.rated(it) } + ":" + ThreadsApi.posts(c).size + ":" + Profiles.priorSig(c)
         if (!force && s == sig) return
         val raw = samples(c)
         sig = s; nTrain = raw.size
-        if (raw.size < 4) { w = emptyMap(); bias = 0.5; pairAcc = -1.0; skill = 0.0; trust = 1.0; return }
+        // 🔁 aprendizado de outra modelo: começa daí (pesa menos conforme esta junta dados próprios)
+        val pr = Profiles.prior(c); priorFrom = Profiles.priorName(c)
+        val shrink = 1.0 / (1.0 + raw.size / 40.0)
+        val prior = pr.mapValues { it.value * shrink }
+        if (raw.size < 4) { w = prior; bias = 0.5; pairAcc = -1.0; skill = 0.0; trust = if (prior.isEmpty()) 1.0 else 0.8; mode = "linear"; net = null; return }
         featCount.clear(); raw.forEach { it.f.forEach { k -> featCount[k] = (featCount[k] ?: 0) + 1 } }
-        // palavra vista 1 vez só decora o post (não ensina nada): fica de fora
         val data = raw.map { s0 -> Sample(s0.f.filter { !(it.contains("w:") && (featCount[it] ?: 0) < 2) }, s0.y, s0.w) }
-        // 🧪 prova: treina sem uma parte, prevê essa parte e mede o acerto (5 rodadas)
         if (data.size >= 12) {
             val k = 5; val idx = data.indices.shuffled(java.util.Random(11))
-            val preds = DoubleArray(data.size); val base = DoubleArray(data.size)
+            val pL = DoubleArray(data.size); val pN = DoubleArray(data.size); val base = DoubleArray(data.size)
+            val tryNet = data.size >= 25
             for (fold in 0 until k) {
                 val test = idx.filterIndexed { i, _ -> i % k == fold }.toSet()
                 val tr = data.filterIndexed { i, _ -> i !in test }
-                val (fw, fb) = fit(tr, 40)
+                val (fw, fb) = fit(tr, 40, prior)
+                val nn = if (tryNet) fitMlp(tr, 50) else null
                 val mean = tr.map { it.y }.average()
-                test.forEach { i -> preds[i] = (fb + data[i].f.sumOf { fw[it] ?: 0.0 }).coerceIn(0.02, 0.98); base[i] = mean }
+                test.forEach { i -> pL[i] = (fb + data[i].f.sumOf { fw[it] ?: 0.0 }).coerceIn(0.02, 0.98); pN[i] = nn?.predict(data[i].f) ?: pL[i]; base[i] = mean }
             }
-            val mae = data.indices.sumOf { Math.abs(preds[it] - data[it].y) } / data.size
+            val pE = DoubleArray(data.size) { (pL[it] + pN[it]) / 2 }
+            val accL = pairAccOf(data, pL); val accN = if (tryNet) pairAccOf(data, pN) else -1.0; val accE = if (tryNet) pairAccOf(data, pE) else -1.0
+            scores = mapOf("linear" to accL, "rede" to accN, "juntos" to accE)
+            // a rede só ganha se for MELHOR de verdade (≥2 pontos); empate fica com o mais simples
+            mode = when { accN > accL + 0.02 && accN >= accE -> "rede"; accE > accL + 0.02 -> "juntos"; else -> "linear" }
+            val chosen = when (mode) { "rede" -> pN; "juntos" -> pE; else -> pL }
+            pairAcc = maxOf(accL, if (mode == "rede") accN else -1.0, if (mode == "juntos") accE else -1.0)
+            val mae = data.indices.sumOf { Math.abs(chosen[it] - data[it].y) } / data.size
             val mae0 = data.indices.sumOf { Math.abs(base[it] - data[it].y) } / data.size
-            var ok = 0; var tot = 0
-            val smp = data.indices.shuffled(java.util.Random(3)).take(120)
-            for (a in smp) for (b2 in smp) if (a < b2 && Math.abs(data[a].y - data[b2].y) > 0.15) { tot++; if ((preds[a] - preds[b2]) * (data[a].y - data[b2].y) > 0) ok++ }
-            pairAcc = if (tot >= 10) ok.toDouble() / tot else -1.0
             skill = if (mae0 > 0) (1 - mae / mae0).coerceIn(-0.5, 1.0) else 0.0
-            // confia na previsão na medida em que ela acerta: sem acerto quase não pesa; acertando bem pesa como 4–5 notas
             trust = when { pairAcc < 0 -> 1.5; pairAcc <= 0.52 -> 0.4; else -> (0.4 + (pairAcc - 0.5) * 16).coerceAtMost(4.5) }
-        } else { pairAcc = -1.0; skill = 0.0; trust = 1.5 }
-        val (ww, b) = fit(data)
+        } else { pairAcc = -1.0; skill = 0.0; trust = 1.5; mode = "linear"; scores = emptyMap() }
+        val (ww, b) = fit(data, 60, prior)
         w = ww; bias = b
-        Store.prefs(c).edit().putInt("pred_n", data.size).putFloat("pred_acc", pairAcc.toFloat()).apply()
+        net = if (mode != "linear") fitMlp(data) else null
+        Store.prefs(c).edit().putInt("pred_n", data.size).putFloat("pred_acc", pairAcc.toFloat()).putString("pred_mode", mode).apply()
+        Profiles.saveWeights(c, ww)
     }
 
-    private fun predict(f: List<String>) = (bias + f.sumOf { w[it] ?: 0.0 }).coerceIn(0.02, 0.98)
+    private fun predict(f: List<String>): Double {
+        val lin = (bias + f.sumOf { w[it] ?: 0.0 }).coerceIn(0.02, 0.98)
+        val n = net ?: return lin
+        return when (mode) { "rede" -> n.predict(f); "juntos" -> (lin + n.predict(f)) / 2; else -> lin }
+    }
 
     /** Chance (0..1) do vídeo ir bem se postar agora. */
     fun video(c: Context, o: JSONObject): Double { train(c); return if (w.isEmpty()) 0.5 else predict(videoFeats(c, o, o.optString("legenda"), System.currentTimeMillis())) }
@@ -199,10 +267,12 @@ object Predictor {
     /** Quanto dá pra confiar no modelo, em palavras. */
     fun accuracyText(c: Context): String {
         train(c)
-        if (nTrain < 4) return "🎯 Modelo de previsão: ainda aprendendo ($nTrain posts com resultado; precisa de 12 pra se testar)."
+        if (nTrain < 4) return "🎯 Modelo de previsão: ainda aprendendo ($nTrain posts com resultado; precisa de 12 pra se testar)." + (if (priorFrom.isNotEmpty()) " Enquanto isso usa o que aprendeu com $priorFrom." else "")
         if (pairAcc < 0) return "🎯 Modelo de previsão: treinado em $nTrain posts (precisa de 12 com resultados diferentes pra se testar)."
         val lvl = when { pairAcc >= 0.70 -> "alta"; pairAcc >= 0.60 -> "média"; pairAcc > 0.52 -> "baixa"; else -> "nenhuma por enquanto (está no chute: pesa quase nada no sorteio)" }
-        return "🎯 Modelo de previsão: entre dois posts que ele nunca viu, acerta qual vai melhor em ${(pairAcc * 100).toInt()}% das vezes ($nTrain posts) · confiança $lvl"
+        val tor = scores.filterValues { it >= 0 }.takeIf { it.size >= 2 }?.let { m -> " · 🏁 torneio: " + m.entries.joinToString(", ") { "${mapOf("linear" to "linear", "rede" to "rede neural", "juntos" to "os dois juntos")[it.key]} ${(it.value * 100).toInt()}%" } + " → venceu " + mapOf("linear" to "o linear", "rede" to "a rede neural", "juntos" to "os dois juntos")[mode] } ?: ""
+        val pf = if (priorFrom.isNotEmpty()) " · começou com o que aprendeu com $priorFrom" else ""
+        return "🎯 Modelo de previsão: entre dois posts que ele nunca viu, acerta qual vai melhor em ${(pairAcc * 100).toInt()}% das vezes ($nTrain posts) · confiança $lvl$tor$pf"
     }
 
     // ---------- o que aprendeu, em palavras

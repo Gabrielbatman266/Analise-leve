@@ -74,6 +74,13 @@
         </activity>
 
         <activity
+            android:name=".PhoenixActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:process=":phoenix"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <activity
             android:name=".ThreadsDelActivity"
             android:exported="false"
             android:excludeFromRecents="true"

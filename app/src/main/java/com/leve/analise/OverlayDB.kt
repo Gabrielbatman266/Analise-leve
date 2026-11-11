@@ -50,6 +50,14 @@ object OverlayDB {
     fun moveCtx(c: Context, from: String, to: String) { synchronized(lock) { load(c).filter { it.optString("ctx") == from }.forEach { it.put("ctx", to) }; save(c) } }
     fun setCtx(c: Context, t: String, ctx: String) { synchronized(lock) { find(c, t)?.put("ctx", ctx); save(c) } }
 
+    fun addIfNew(c: Context, t: String, ctx: String): Boolean { val before = size(c); add(c, t, "importada", ctx); return size(c) > before }
+
+    fun mapTexts(c: Context, f: (String) -> String) = synchronized(lock) {
+        val l = load(c); var ch = false
+        l.forEach { o -> val t = o.optString("t"); val n = f(t); if (n != t) { o.put("t", n); ch = true } }
+        if (ch) save(c)
+    }
+
     fun add(c: Context, t: String, src: String, ctx: String = "") {
         synchronized(lock) {
             val txt = t.trim(); if (txt.isEmpty()) return

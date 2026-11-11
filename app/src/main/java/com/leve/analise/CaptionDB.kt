@@ -70,7 +70,14 @@ object CaptionDB {
 
     fun remove(c: Context, t: String) = synchronized(lock) { load(c).removeAll { norm(it.optString("t")) == norm(t) }; save(c) }
 
-    private fun find(c: Context, t: String) = load(c).firstOrNull { norm(it.optString("t")) == norm(t) }
+    fun find(c: Context, t: String) = load(c).firstOrNull { norm(it.optString("t")) == norm(t) }
+
+    /** Troca o texto das legendas (nome trocado, edição do ChatGPT). Junta se ficar igual a outra. */
+    fun mapTexts(c: Context, f: (String) -> String) = synchronized(lock) {
+        val l = load(c); var ch = false
+        l.forEach { o -> val t = o.optString("t"); val n = f(t); if (n != t) { o.put("t", n); ch = true } }
+        if (ch) { val seen = HashSet<String>(); l.retainAll { seen.add(norm(it.optString("t"))) }; save(c) }
+    }
 
     /** Conta que a legenda foi usada num post. */
     fun used(c: Context, t: String, src: String = "ia") {
