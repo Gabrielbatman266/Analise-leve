@@ -1057,7 +1057,7 @@ class ScreenReader : AccessibilityService() {
         val me = Macro.handle(this).lowercase()
         val ownProfile = nt.any { it == "editar perfil" || it == "edit profile" || it == "compartilhar perfil" || it == "share profile" } || (me.isNotEmpty() && nt.any { it == me || it == "@$me" })
         // lista dos seus seguidores: "Followers" / "2,774" (rótulo e número separados)
-        if (!video && ownProfile) nt.indexOfFirst { it == "followers" || it == "seguidores" }.takeIf { it >= 0 && it + 1 < nt.size }?.let { i -> numOf(nt[i + 1])?.takeIf { it > 0 }?.let { ThreadsApi.addFollowers(this, it, "tela") } }
+        if (!video && ownProfile) nt.indexOfFirst { it == "followers" || it == "seguidores" }.takeIf { it >= 0 && it + 1 < nt.size }?.let { i -> numOf(nt[i + 1])?.takeIf { it > 0 }?.let { ThreadsApi.addFollowers(this, it, "lista"); try { ThreadsApi.repairNow(this) } catch (e: Exception) { } } }
         if (!video && ownProfile) nt.firstNotNullOfOrNull { FOLLOW.find(it) }?.let { m -> numOf(m.groupValues[1] + (m.groupValues[2].takeIf { it.isNotEmpty() }?.let { " $it" } ?: ""))?.let { ThreadsApi.addFollowers(this, it, "tela") } }
         val sends = SendLog.all(this).filter { System.currentTimeMillis() - it.optLong("at") < 60 * 86400_000L && (it.optString("kind") == "video") == video }
         if (sends.isEmpty()) return got

@@ -182,6 +182,9 @@ object ThreadsApi {
     }
 
     /** Uma vez: tira da série os "seguidores" que eram de OUTROS perfis (bem longe dos vizinhos). */
+    /** Leu da sua lista de seguidores (fonte confiável): refaz a limpeza da série na hora. */
+    fun repairNow(c: Context) { p(c).edit().remove("repair_fol").apply(); repairFollowers(c) }
+
     fun repairFollowers(c: Context) {
         if (!p(c).getBoolean("repair_fol2", false)) { p(c).edit().putBoolean("repair_fol2", true).remove("repair_fol").apply() } // limpa de novo (havia leituras erradas)
         if (p(c).getBoolean("repair_fol", false)) return
@@ -190,11 +193,14 @@ object ThreadsApi {
             // (cada registro entre -20% e +30% do anterior); o resto era número de outra tela/perfil
             val s = l.sortedBy { it.optLong("t") }
             if (s.size < 3) return@edit
-            var best: List<JSONObject> = emptyList()
+            // leitura da API ou da sua LISTA de seguidores vale 10x (é a fonte mais confiável)
+            fun w(o: JSONObject) = if (o.optString("src") == "api" || o.optString("src") == "lista") 10 else 1
+            var best: List<JSONObject> = emptyList(); var bestW = 0
             s.map { it.optInt("n") }.distinct().forEach { start ->
                 val keep = ArrayList<JSONObject>(); var last = start.toDouble()
-                s.forEach { o -> val n = o.optInt("n"); if (o.optString("src") == "api" || (n >= last * 0.8 && n <= last * 1.3)) { keep += o; last = n.toDouble() } }
-                if (keep.size > best.size) best = keep
+                s.forEach { o -> val n = o.optInt("n"); if (n >= last * 0.8 && n <= last * 1.3) { keep += o; last = n.toDouble() } }
+                val wt = keep.sumOf { w(it) }
+                if (wt > bestW) { best = keep; bestW = wt }
             }
             if (best.size >= 2) { l.clear(); l.addAll(best) }
         }
@@ -251,7 +257,7 @@ object ThreadsApi {
         if (n <= 0) return
         JsonFile.edit(folFile(c)) { l ->
             // número muito longe dos últimos registros = leitura de outra tela/perfil (a API sempre vale)
-            if (src != "api") {
+            if (src != "api" && src != "lista") {
                 val ref = l.filter { System.currentTimeMillis() - it.optLong("t") < 14 * 86400_000L }.map { it.optInt("n") }.sorted()
                 if (ref.size >= 3) { val med = ref[ref.size / 2]; if (n > med * 1.3 || n < med * 0.75) return@edit }
             }
