@@ -128,14 +128,8 @@ class FloatService : Service() {
     companion object { @Volatile var instance: FloatService? = null }
 
     private lateinit var wm: WindowManager
-    private var viaAcc = false
+    private val h = android.os.Handler(android.os.Looper.getMainLooper())
 
-    /** O leitor de tela ligou/desligou: refaz a bolha pela janela certa. */
-    fun rebuild(acc: Boolean) {
-        if (acc == viaAcc && root != null) return
-        try { root?.let { wm.removeView(it) } } catch (e: Exception) { }
-        root = null; addBubble()
-    }
     private var root: LinearLayout? = null
     private lateinit var bubble: BubbleView
     private lateinit var badge: TextView
@@ -212,20 +206,16 @@ class FloatService : Service() {
         frame.alpha = IDLE
         root = box
 
-        // Com o leitor de tela ligado, a bolha entra pela janela dele: assim o Android NÃO mostra
-        // a notificação "Post Leve está sobrepondo outros apps". Sem o leitor, usa a sobreposição normal.
-        val acc = ScreenReader.instance
-        wm = acc?.getSystemService(WindowManager::class.java) ?: getSystemService(WindowManager::class.java)
-        viaAcc = acc != null
+        // (a tentativa de passar a bolha pela janela do leitor de tela derrubava a bolha: voltou pro jeito estável)
+        wm = getSystemService(WindowManager::class.java)
         lp = WindowManager.LayoutParams(-2, -2,
-            if (acc != null) WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
-            else if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
+            if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, PixelFormat.TRANSLUCENT).apply {
             gravity = Gravity.TOP or Gravity.START
             x = p.getInt("bubble_x", resources.displayMetrics.widthPixels - dp(54)); y = p.getInt("bubble_y", resources.displayMetrics.heightPixels / 3)
         }
         dragging(frame)
-        try { wm.addView(box, lp) } catch (e: Exception) { stopSelf(); return }
+        try { wm.addView(box, lp) } catch (e: Exception) { ErrLog.log(this, "bolha", e); root = null; h.postDelayed({ if (root == null) addBubble() }, 5000); return } // tenta de novo em vez de sumir
         refresh()
     }
 

@@ -97,6 +97,8 @@ object RateWatch {
 
     /** Roda de hora em hora (e ao abrir o app). Devolve quantas notas deu sozinho. */
     fun run(c: Context, notify: Boolean = true): Int {
+        // a bolha sumiu (o celular fechou o app)? volta sozinha
+        try { if (PostBar.bubbleOn(c) && FloatService.instance == null) PostBar.update(c) } catch (x: Exception) { }
         val now = System.currentTimeMillis()
         if (ThreadsApi.on(c)) try { ThreadsApi.sync(c) } catch (x: Exception) { ErrLog.log(c, "API Threads", x) }
         else try { ThreadsApi.process(c) } catch (x: Exception) { ErrLog.log(c, "números da tela", x) }
@@ -253,9 +255,8 @@ class ScreenReader : AccessibilityService() {
     companion object { @Volatile var instance: ScreenReader? = null }
     private var last = 0L
 
-    override fun onServiceConnected() { super.onServiceConnected(); instance = this
-        h.postDelayed({ FloatService.instance?.rebuild(true) }, 500) } // bolha passa pela janela do leitor (sem o aviso "sobrepondo outros apps")
-    override fun onDestroy() { instance = null; hideReadBtn(); android.os.Handler(android.os.Looper.getMainLooper()).post { FloatService.instance?.rebuild(false) }; super.onDestroy() }
+    override fun onServiceConnected() { super.onServiceConnected(); instance = this }
+    override fun onDestroy() { instance = null; hideReadBtn(); super.onDestroy() }
 
     // ================= 📖 botão "Ler agora" (aparece só no Threads/Instagram) =================
     private var readBtn: android.view.View? = null
