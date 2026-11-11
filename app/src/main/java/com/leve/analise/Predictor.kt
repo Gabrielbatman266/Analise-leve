@@ -19,7 +19,8 @@ object Predictor {
     @Volatile private var nTrain = 0
     private val featCount = HashMap<String, Int>()
 
-    private fun score(k: String) = when (k) { "top" -> 1.0; "good" -> 0.8; "meh" -> 0.45; "bad" -> 0.0; else -> 0.5 }
+    /** Nota → mesma escala dos números reais (posição entre os seus posts), pra as duas fontes não brigarem no treino. */
+    private fun score(k: String) = when (k) { "top" -> 0.94; "good" -> 0.75; "meh" -> 0.45; "bad" -> 0.15; else -> 0.5 }
 
     // ---------- características
     private fun noAcc(s: String) = Normalizer.normalize(s.lowercase(), Normalizer.Form.NFD).replace(Regex("\\p{M}"), "")
@@ -86,7 +87,12 @@ object Predictor {
     }
 
     // ---------- treino
-    private class Sample(val f: List<String>, val y: Double, val w: Double)
+    /** Um post com resultado. [g] = de qual foto/vídeo ele é (o teste nunca separa reposts da mesma foto). */
+    private class Sample(val f: List<String>, val y: Double, val w: Double, val g: String = "")
+
+    /** Quantas vezes o item já tinha saído antes (cansaço do público com a mesma foto/vídeo). */
+    private fun repB(n: Int) = when { n <= 0 -> "0"; n == 1 -> "1"; n <= 3 -> "2-3"; else -> "4+" }
+    private fun repNow(c: Context, id: String) = SendLog.all(c).count { it.optString("id") == id }
 
     private fun gapB(ms: Long) = when { ms < 20 * 60_000L -> "colado"; ms < 60 * 60_000L -> "curto"; ms < 3 * 3600_000L -> "medio"; else -> "longo" }
 
@@ -109,12 +115,14 @@ object Predictor {
             // ritmo: quanto tempo depois do post anterior do mesmo tipo, e a posição na dupla/trio
             byKind[video]?.let { l -> val i = l.indexOfFirst { it.optLong("at") == at }; if (i > 0) extra += "g.gap:" + gapB(at - l[i - 1].optLong("at")) }
             if (!video && e.optInt("rajada", 1) > 1) extra += "g.pos:" + e.optInt("pos", 1)
-            if (video) lib[e.optString("id")]?.let { out += Sample(videoFeats(c, it, e.optString("cap"), at) + extra, y, wt(at)) }
-            else q[e.optString("id")]?.let { out += Sample(photoFeats(c, it, e.optString("cap"), at) + extra, y, wt(at)) }
+            val id = e.optString("id")
+            val before = byKind[video]?.count { it.optString("id") == id && it.optLong("at") < at } ?: 0
+            if (video) lib[id]?.let { out += Sample(videoFeats(c, it, e.optString("cap"), at) + extra + ("v.rep:" + repB(before)), y, wt(at), "v$id") }
+            else q[id]?.let { out += Sample(photoFeats(c, it, e.optString("cap"), at) + extra + ("f.rep:" + repB(before)), y, wt(at), "f$id") }
         }
         // notas antigas (antes do histórico de envios)
-        lib.values.forEach { o -> Learn.hist(o).forEach { (at, k) -> if (seen.add(o.optString("id") + "@" + (at / 3600_000L))) out += Sample(videoFeats(c, o, o.optString("legenda"), at), score(k), wt(at)) } }
-        q.values.forEach { o -> Learn.hist(o).forEach { (at, k) -> if (seen.add(o.optString("id") + "@" + (at / 3600_000L))) out += Sample(photoFeats(c, o, PostQueue.captionOf(o), at), score(k), wt(at)) } }
+        lib.values.forEach { o -> Learn.hist(o).forEach { (at, k) -> if (seen.add(o.optString("id") + "@" + (at / 3600_000L))) out += Sample(videoFeats(c, o, o.optString("legenda"), at), score(k), wt(at), "v" + o.optString("id")) } }
+        q.values.forEach { o -> Learn.hist(o).forEach { (at, k) -> if (seen.add(o.optString("id") + "@" + (at / 3600_000L))) out += Sample(photoFeats(c, o, PostQueue.captionOf(o), at), score(k), wt(at), "f" + o.optString("id")) } }
         return out
     }
 
@@ -211,13 +219,17 @@ object Predictor {
         val prior = pr.mapValues { it.value * shrink }
         if (raw.size < 4) { w = prior; bias = 0.5; pairAcc = -1.0; skill = 0.0; trust = if (prior.isEmpty()) 1.0 else 0.8; mode = "linear"; net = null; return }
         featCount.clear(); raw.forEach { it.f.forEach { k -> featCount[k] = (featCount[k] ?: 0) + 1 } }
-        val data = raw.map { s0 -> Sample(s0.f.filter { !(it.contains("w:") && (featCount[it] ?: 0) < 2) }, s0.y, s0.w) }
+        val data = raw.map { s0 -> Sample(s0.f.filter { !(it.contains("w:") && (featCount[it] ?: 0) < 2) }, s0.y, s0.w, s0.g) }
         if (data.size >= 12) {
-            val k = 5; val idx = data.indices.shuffled(java.util.Random(11))
+            // teste honesto: TODOS os posts da mesma foto/vídeo caem no mesmo grupo (senão o modelo "reconhece" o repost
+            // que viu no treino e parece acertar mais do que acerta de verdade numa foto nova)
+            val k = 5
+            val groups = data.indices.groupBy { data[it].g.ifEmpty { "#$it" } }.values.shuffled(java.util.Random(11))
+            val foldOf = IntArray(data.size); groups.forEachIndexed { gi, l -> l.forEach { foldOf[it] = gi % k } }
             val pL = DoubleArray(data.size); val pN = DoubleArray(data.size); val base = DoubleArray(data.size)
             val tryNet = data.size >= 25
             for (fold in 0 until k) {
-                val test = idx.filterIndexed { i, _ -> i % k == fold }.toSet()
+                val test = data.indices.filter { foldOf[it] == fold }.toSet()
                 val tr = data.filterIndexed { i, _ -> i !in test }
                 val (fw, fb) = fit(tr, 40, prior)
                 val nn = if (tryNet) fitMlp(tr, 50) else null
@@ -250,9 +262,9 @@ object Predictor {
     }
 
     /** Chance (0..1) do vídeo ir bem se postar agora. */
-    fun video(c: Context, o: JSONObject): Double { train(c); return if (w.isEmpty()) 0.5 else predict(videoFeats(c, o, o.optString("legenda"), System.currentTimeMillis())) }
+    fun video(c: Context, o: JSONObject): Double { train(c); return if (w.isEmpty()) 0.5 else predict(videoFeats(c, o, o.optString("legenda"), System.currentTimeMillis()) + ("v.rep:" + repB(repNow(c, o.optString("id"))))) }
     /** Chance da foto (com a legenda, se der) ir bem se postar agora. */
-    fun photo(c: Context, o: JSONObject, cap: String? = null): Double { train(c); return if (w.isEmpty()) 0.5 else predict(photoFeats(c, o, cap, System.currentTimeMillis())) }
+    fun photo(c: Context, o: JSONObject, cap: String? = null): Double { train(c); return if (w.isEmpty()) 0.5 else predict(photoFeats(c, o, cap, System.currentTimeMillis()) + ("f.rep:" + repB(repNow(c, o.optString("id"))))) }
     /** Só a parte da legenda (pra escolher legenda). */
     fun caption(c: Context, cap: String): Double { train(c); return if (w.isEmpty()) 0.5 else predict(textFeats(cap, "leg.").map { "f.$it" }) }
 
@@ -285,6 +297,7 @@ object Predictor {
             k.startsWith("dur:") -> "vídeo " + mapOf("curto" to "curto (até 7 s)", "medio" to "médio (8–11 s)", "longo" to "longo (12 s+)")[k.removePrefix("dur:")]
             k.startsWith("h:") -> "postar " + mapOf("madrugada" to "de madrugada", "manha" to "de manhã", "almoco" to "no almoço", "tarde" to "à tarde", "inicio_noite" to "no começo da noite", "noite" to "à noite")[k.removePrefix("h:")]
             k == "d:fds" -> "fim de semana"; k == "d:semana" -> "dia de semana"
+            k.startsWith("rep:") -> mapOf("0" to "primeira vez que sai", "1" to "2ª vez que sai", "2-3" to "3ª ou 4ª vez que sai", "4+" to "já saiu 4+ vezes")[k.removePrefix("rep:")]
             k.startsWith("gap:") -> "postar " + mapOf("colado" to "colado no anterior (menos de 20 min)", "curto" to "20–60 min depois do anterior", "medio" to "1–3 h depois do anterior", "longo" to "mais de 3 h depois do anterior")[k.removePrefix("gap:")]
             k.startsWith("pos:") -> k.removePrefix("pos:") + "º post da dupla/trio"
             k.startsWith("look:") -> null
