@@ -669,6 +669,7 @@ class MainActivity : Activity() {
             if (pk == null) toast("A fila está vazia")
             else startActivity(Intent(this, PostActivity::class.java).putExtra("id", pk.first).putExtra("caption", pk.second))
         }
+        button("🗓 Agendar vários de uma vez", cp) { startActivity(Intent(this, BatchActivity::class.java)) }
         tvPostInfo = text("", 13f, OK, parent = cp)
         val cpR = sub(cp, "⏰ Lembretes, blocos e horários")
         text("Lembrete pra postar: a notificação já vem com foto e legenda sorteadas. Toque em Postar e depois em Publicar no Threads.", 12f, MUTED, parent = cpR)

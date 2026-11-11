@@ -16,9 +16,9 @@ object SendLog {
     fun all(c: Context): List<JSONObject> = JsonFile.peek(file(c)) // só consulta (em cache); pra mudar: JsonFile.edit
 
     /** kind: "fila" (foto → Threads), "video" (→ Instagram), "fotoIg" (foto → Instagram) */
-    fun add(c: Context, kind: String, id: String, cap: String, app: String, manual: Boolean = false) {
+    fun add(c: Context, kind: String, id: String, cap: String, app: String, manual: Boolean = false, at: Long = System.currentTimeMillis()) {
         JsonFile.edit(file(c)) { l ->
-            val e = JSONObject().put("at", System.currentTimeMillis()).put("kind", kind).put("id", id).put("cap", cap).put("app", app)
+            val e = JSONObject().put("at", at).put("kind", kind).put("id", id).put("cap", cap).put("app", app)
                 .put("ok", manual).put("manual", manual)
             try { Burst.stamp(c, e, l.firstOrNull { it.optString("kind") == "fila" && !it.optBoolean("manual") }) } catch (x: Exception) { }
             l.add(0, e)

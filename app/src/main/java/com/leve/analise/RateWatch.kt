@@ -578,6 +578,9 @@ class ScreenReader : AccessibilityService() {
         android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
         android.graphics.PixelFormat.TRANSLUCENT)
 
+    /** Aviso por cima do app aberto (usado pelo agendamento em lote). */
+    fun hint(msg: String, ms: Long) { h.post { show(msg, 0xEE15803D.toInt()); h.postDelayed({ if (!running && !forcing) clearOverlay() }, ms) } }
+
     private fun show(msg: String, color: Int = 0xEE1C1C24.toInt()) {
         try {
             val v = pill ?: android.widget.TextView(this).apply {
