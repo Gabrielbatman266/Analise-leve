@@ -263,6 +263,7 @@ class ScreenReader : AccessibilityService() {
     private var forcing = false
     private var appHit = false
     private var foreignWarn = 0L
+    private var lastForeign: String? = null
     private val taught = HashMap<String, Int>()
     private val fgCheck = object : Runnable { override fun run() {
         val pk = try { rootInActiveWindow?.packageName?.toString() } catch (e: Exception) { null }
@@ -526,6 +527,7 @@ class ScreenReader : AccessibilityService() {
 
     private fun done(pkg: String, all0: Map<String, Int>, cap: String, texts: List<String>) {
         forcing = false
+        lastForeign?.let { nm -> show("👩 Esta é a conta de $nm: troque de modelo no Post Leve pra guardar os números dela", 0xEEB45309.toInt()); h.postDelayed({ if (!running) clearOverlay() }, 4500); return }
         val all = all0.toMutableMap(); all["follows"]?.let { all["fol"] = it; all.remove("follows") }
         all.putAll(taught)
         val clean = ThreadsApi.sane(all)
@@ -1061,9 +1063,11 @@ class ScreenReader : AccessibilityService() {
         val meIg = Macro.igHandle(this).lowercase()
         val foreign = Profiles.otherHandles(this).entries.firstOrNull { (h, _) -> h != me && h != meIg && shows(h) }
         if (foreign != null && !(me.isNotEmpty() && shows(me)) && !(meIg.isNotEmpty() && shows(meIg))) {
+            lastForeign = foreign.value
             if (System.currentTimeMillis() - foreignWarn > 60_000L) { foreignWarn = System.currentTimeMillis(); show("👩 Esta é a conta de ${foreign.value}: troque de modelo no Post Leve pra guardar os números dela", 0xEEB45309.toInt()); h.postDelayed({ if (!running && !forcing) clearOverlay() }, 4000) }
             return got
         }
+        lastForeign = null
         // seguidores: só quando a tela é do SEU perfil (com o seu @ na tela, se você já colocou o @)
         val ownProfile = if (me.isNotEmpty()) shows(me) else nt.any { it == "editar perfil" || it == "edit profile" || it == "compartilhar perfil" || it == "share profile" }
         // lista dos seus seguidores: "Followers" / "2,774" (rótulo e número separados)
