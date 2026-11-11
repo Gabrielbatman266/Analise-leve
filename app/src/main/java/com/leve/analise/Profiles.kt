@@ -25,7 +25,7 @@ object Profiles {
     /** Ficam iguais pra todas as modelos. */
     private val GLOBAL = setOf("provider", "key", "model", "modelos", "img_model", "ai_day_max", "ai_day", "ai_used", "auto_update", "upd_last", "upd_notified",
         "upd_skip", "tab", "bubble_x", "bubble_y", "readbtn_y", "reader_rules", "read_btn", "reader_toast", "reader_pause", "quality", "clip_ttl", "ed_panel")
-    private fun global(k: String) = k in GLOBAL || k.startsWith("fold_")
+    private fun global(k: String) = k in GLOBAL || k.startsWith("fold")
 
     /** Estado (histórico, filas, contas) que NÃO vai pra modelo nova quando ela copia os ajustes. */
     private val STATE = listOf("rec_", "vid_", "pick_", "lab_", "aud_", "promo_pending", "promo_first", "promo_styles", "promo_tune_last", "study_", "quar_", "repair_",

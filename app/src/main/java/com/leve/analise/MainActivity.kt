@@ -367,21 +367,22 @@ class MainActivity : Activity() {
                 .setMessage("Abre a aba Reels do seu perfil, abre cada Reel em ordem, confere pela legenda se é um vídeo do app, abre \"Ver insights\" se tiver, lê os números e volta. Só lê.\n\nLimite: ${Macro.maxPosts(this)} Reels ou 5 minutos. Pra parar: ⏹ na notificação.")
                 .setPositiveButton("Começar") { _, _ -> toast(Macro.startInstagram(this)) }.setNegativeButton("Cancelar", null).show()
         }
-        chips(crk, listOf("Ler todos os meus posts", "Só os do app"), { if (Macro.readAll(this)) "Ler todos os meus posts" else "Só os do app" }) { Macro.setReadAll(this, it.startsWith("Ler")) }
-        text("✋ Modo manual: role e abra os posts você mesmo; quando o leitor captar, aparece um aviso verde.", 12f, MUTED, parent = crk)
-        text("📖 Forçar leitura: no Threads/Instagram aparece um botãozinho 📖 na borda. Abra o post ou o \"Ver insights\" e toque nele: lê, espera carregar, lê de novo, desce pra ver o resto e guarda (até post feito fora do app). Arraste pra mudar de lugar; segure pra esconder 30 min.", 12f, MUTED, parent = crk)
-        chips(crk, listOf("📖 Botão de leitura ligado", "Sem botão"), { if (Macro.readBtn(this)) "📖 Botão de leitura ligado" else "Sem botão" }) { Macro.setReadBtn(this, it.startsWith("📖")) }
-        text("🎓 Ensinar: embaixo do 📖 tem o 🎓. Abra um post ou os insights, toque no 🎓 e marque o que é cada número (Views, Curtidas, Visitas…). Ele guarda e passa a ler sozinho naquele tipo de tela, na coleta e no modo manual.", 12f, MUTED, parent = crk)
-        val tvRules = text("🎓 Ensinado: " + ReaderRules.summary(this), 12f, OK, parent = crk)
-        button("Apagar o que ensinei", crk) { ReaderRules.clear(this); tvRules.text = "🎓 Ensinado: " + ReaderRules.summary(this); toast("Regras apagadas") }
-        text("✍ Legenda forçada: se ao mandar o post pro Threads/Instagram o campo da legenda vier vazio, o leitor de tela escreve a legenda lá (não publica nada, só preenche).", 12f, MUTED, parent = crk)
-        chips(crk, listOf("✍ Forçar legenda", "Não forçar"), { if (CapForce.on(this)) "✍ Forçar legenda" else "Não forçar" }) { CapForce.setOn(this, it.startsWith("✍")) }
-        val rpz = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; crk.addView(rpz, lpMatch())
+        val crO = sub(crk, "⚙ Opções do leitor de tela (📖 ler, 🎓 ensinar, ✍ legenda)")
+        chips(crO, listOf("Ler todos os meus posts", "Só os do app"), { if (Macro.readAll(this)) "Ler todos os meus posts" else "Só os do app" }) { Macro.setReadAll(this, it.startsWith("Ler")) }
+        text("✋ Modo manual: role e abra os posts você mesmo; quando o leitor captar, aparece um aviso verde.", 12f, MUTED, parent = crO)
+        text("📖 Forçar leitura: no Threads/Instagram aparece um botãozinho 📖 na borda. Abra o post ou o \"Ver insights\" e toque nele: lê, espera carregar, lê de novo, desce pra ver o resto e guarda (até post feito fora do app). Arraste pra mudar de lugar; segure pra esconder 30 min.", 12f, MUTED, parent = crO)
+        chips(crO, listOf("📖 Botão de leitura ligado", "Sem botão"), { if (Macro.readBtn(this)) "📖 Botão de leitura ligado" else "Sem botão" }) { Macro.setReadBtn(this, it.startsWith("📖")) }
+        text("🎓 Ensinar: embaixo do 📖 tem o 🎓. Abra um post ou os insights, toque no 🎓 e marque o que é cada número (Views, Curtidas, Visitas…). Ele guarda e passa a ler sozinho naquele tipo de tela, na coleta e no modo manual.", 12f, MUTED, parent = crO)
+        val tvRules = text("🎓 Ensinado: " + ReaderRules.summary(this), 12f, OK, parent = crO)
+        button("Apagar o que ensinei", crO) { ReaderRules.clear(this); tvRules.text = "🎓 Ensinado: " + ReaderRules.summary(this); toast("Regras apagadas") }
+        text("✍ Legenda forçada: se ao mandar o post pro Threads/Instagram o campo da legenda vier vazio, o leitor de tela escreve a legenda lá (não publica nada, só preenche).", 12f, MUTED, parent = crO)
+        chips(crO, listOf("✍ Forçar legenda", "Não forçar"), { if (CapForce.on(this)) "✍ Forçar legenda" else "Não forçar" }) { CapForce.setOn(this, it.startsWith("✍")) }
+        val rpz = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; crO.addView(rpz, lpMatch())
         val bPz = button("", rpz, weight = true) { }
         fun pzT() { bPz.text = if (Macro.paused(this)) "▶ Retomar o leitor de tela" else "⏸ Pausar o leitor por 1 h" }
         bPz.setOnClickListener { if (Macro.paused(this)) { Macro.pause(this, 0); toast("Leitor ligado de novo") } else { Macro.pause(this, 3600_000L); toast("Leitor pausado por 1 h: abra o Threads e veja se os seguidores/bio aparecem") }; pzT() }
         pzT()
-        chips(crk, listOf("Aviso ligado", "Sem aviso"), { if (Macro.manualToast(this)) "Aviso ligado" else "Sem aviso" }) { Macro.setManualToast(this, it == "Aviso ligado") }
+        chips(crO, listOf("Aviso ligado", "Sem aviso"), { if (Macro.manualToast(this)) "Aviso ligado" else "Sem aviso" }) { Macro.setManualToast(this, it == "Aviso ligado") }
         Macro.lastRun(this).takeIf { it.isNotBlank() }?.let { text("Última coleta: $it", 11f, MUTED, parent = crk) }
         val rkBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         crk.addView(rkBox, lpMatch())
@@ -668,16 +669,11 @@ class MainActivity : Activity() {
             if (pk == null) toast("A fila está vazia")
             else startActivity(Intent(this, PostActivity::class.java).putExtra("id", pk.first).putExtra("caption", pk.second))
         }
-        text("Lembrete pra postar: a notificação já vem com foto e legenda sorteadas. Toque em Postar e depois em Publicar no Threads.", 12f, MUTED, parent = cp)
-        text("Quanto valorizar as fotos que deram certo:", 13f, FG, parent = cp, bold = true)
-        val tvSel = text("", 12f, MUTED, parent = cp)
-        fun selT() { Thread { val t = try { Selection.summary(this) } catch (e: Exception) { "" }; ui.post { tvSel.text = t } }.start() }
-        chips(cp, Selection.MODES.values.map { it.first }, { Selection.MODES.getValue(Selection.mode(this)).first }) { v -> Selection.setMode(this, Selection.MODES.entries.first { it.value.first == v }.key); selT() }
-        selT()
-        textPostsUi()
-        promoUi()
+        tvPostInfo = text("", 13f, OK, parent = cp)
+        val cpR = sub(cp, "⏰ Lembretes, blocos e horários")
+        text("Lembrete pra postar: a notificação já vem com foto e legenda sorteadas. Toque em Postar e depois em Publicar no Threads.", 12f, MUTED, parent = cpR)
         everyRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        cp.addView(everyRow, lpMatch())
+        cpR.addView(everyRow, lpMatch())
         listOf(Triple(0, 0, "Off"), Triple(15, 15, "15 em 15"), Triple(15, 30, "15–30m"),
             Triple(30, 50, "30–50m"), Triple(60, 120, "1–2h"), Triple(120, 180, "2–3h")).chunked(3).forEach { row ->
             val rr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -689,14 +685,14 @@ class MainActivity : Activity() {
         }
         // 👯 modo rajada
         text("👯 Postar em blocos (o intervalo acima vira a pausa entre os blocos)", 13f, FG, parent = cp, bold = true)
-        val tvBurst = text("", 12f, MUTED, parent = cp)
+        val tvBurst = text("", 12f, MUTED, parent = cpR)
         fun burstT() {
             val n = Burst.size(this)
             tvBurst.text = (if (Burst.auto(this)) "🤖 Automático, agora em: ${Burst.label(n)}. " else "") +
                 (if (n > 1) "Posta ${Burst.label(n)}: ${n} posts com ${Burst.gap(this).first}–${Burst.gap(this).second} min entre eles (foto e legenda de tipos diferentes), depois espera o intervalo." else "Um post por vez.") +
                 Burst.note(this).takeIf { it.isNotBlank() }?.let { "\n$it" }.orEmpty() + "\n" + Burst.report(this)
         }
-        chips(cp, listOf("1 por vez", "👯 Dupla", "3️⃣ Trio", "🤖 Auto"), { if (Burst.auto(this)) "🤖 Auto" else when (Burst.size(this)) { 2 -> "👯 Dupla"; 3 -> "3️⃣ Trio"; else -> "1 por vez" } }) { o ->
+        chips(cpR, listOf("1 por vez", "👯 Dupla", "3️⃣ Trio", "🤖 Auto"), { if (Burst.auto(this)) "🤖 Auto" else when (Burst.size(this)) { 2 -> "👯 Dupla"; 3 -> "3️⃣ Trio"; else -> "1 por vez" } }) { o ->
             when (o) {
                 "🤖 Auto" -> Burst.setSize(this, maxOf(2, Burst.size(this)), true, "🤖 Começando em ${Burst.label(maxOf(2, Burst.size(this)))}: a cada 3 dias comparo 1º × último do bloco e ajusto")
                 "👯 Dupla" -> Burst.setSize(this, 2, false, "")
@@ -705,17 +701,17 @@ class MainActivity : Activity() {
             }
             burstT(); refresh()
         }
-        text("Tempo entre os posts do bloco:", 12f, MUTED, parent = cp)
-        chips(cp, listOf("5–10 min", "10–15 min", "15–25 min"), { Burst.gap(this).let { "${it.first}–${it.second} min" } }) { o ->
+        text("Tempo entre os posts do bloco:", 12f, MUTED, parent = cpR)
+        chips(cpR, listOf("5–10 min", "10–15 min", "15–25 min"), { Burst.gap(this).let { "${it.first}–${it.second} min" } }) { o ->
             val (a, b) = o.removeSuffix(" min").split("–").map { it.toInt() }; Burst.setGap(this, a, b); burstT()
         }
         burstT()
 
-        val day = button("", cp) { }
+        val day = button("", cpR) { }
         fun dayText() { day.text = if (Reminder.dayOnly(this)) "Só entre 8h e 23h: ligado" else "Só entre 8h e 23h: desligado" }
         dayText()
         day.setOnClickListener { Store.prefs(this).edit().putBoolean("post_day_only", !Reminder.dayOnly(this)).apply(); Reminder.schedule(this); dayText(); refresh() }
-        button("Sortear horários de hoje pra agendar no Threads", cp) {
+        button("Sortear horários de hoje pra agendar no Threads", cpR) {
             val plan = Reminder.planToday(this)
             if (plan.isEmpty()) toast("Escolha uma faixa de lembrete primeiro (ou já passou das 23h)")
             else AlertDialog.Builder(this).setTitle("Horários pra agendar hoje")
@@ -723,7 +719,13 @@ class MainActivity : Activity() {
                     "\n\nNo Threads: três pontinhos › Agendar, um post pra cada horário. Ele publica sozinho.")
                 .setPositiveButton("Ok", null).show()
         }
-        val gal = button("", cp) { }
+        val cpS = sub(cp, "🏆 Quanto valorizar as que deram certo")
+        val tvSel = text("", 12f, MUTED, parent = cpS)
+        fun selT() { Thread { val t = try { Selection.summary(this) } catch (e: Exception) { "" }; ui.post { tvSel.text = t } }.start() }
+        chips(cpS, Selection.MODES.values.map { it.first }, { Selection.MODES.getValue(Selection.mode(this)).first }) { v -> Selection.setMode(this, Selection.MODES.entries.first { it.value.first == v }.key); selT() }
+        selT()
+        val cpM = sub(cp, "⚙ Galeria e pasta automática (Flow)")
+        val gal = button("", cpM) { }
         fun galText() { gal.text = if (PostQueue.galleryOn(this)) "Foto em primeiro na galeria: ligado" else "Foto em primeiro na galeria: desligado" }
         galText()
         gal.setOnClickListener {
@@ -732,23 +734,24 @@ class MainActivity : Activity() {
             if (!on) Thread { PostQueue.cleanGallery(this, true) }.start()
             galText()
         }
-        text("Ao postar, a foto vai pra galeria (pasta PostLeve) em primeiro lugar. A cópia anterior é apagada, então nunca acumula duplicada.", 12f, MUTED, parent = cp)
-        tvPostInfo = text("", 13f, OK, parent = cp)
+        text("Ao postar, a foto vai pra galeria (pasta PostLeve) em primeiro lugar. A cópia anterior é apagada, então nunca acumula duplicada.", 12f, MUTED, parent = cpM)
         // pasta do Flow
-        text("Pasta automática (ex.: Flow)", 12f, MUTED, parent = cp)
-        btnFolder = button("", cp) { askFolder() }
-        btn2k = button("", cp) { FolderScan.setOnly2k(this, !FolderScan.only2k(this)); updateFolderUi() }
-        btnFlowNames = button("", cp) { FolderScan.setFlowNames(this, !FolderScan.flowNames(this)); updateFolderUi() }
-        btnVideos = button("", cp) {
+        text("Pasta automática (ex.: Flow)", 12f, MUTED, parent = cpM)
+        btnFolder = button("", cpM) { askFolder() }
+        btn2k = button("", cpM) { FolderScan.setOnly2k(this, !FolderScan.only2k(this)); updateFolderUi() }
+        btnFlowNames = button("", cpM) { FolderScan.setFlowNames(this, !FolderScan.flowNames(this)); updateFolderUi() }
+        btnVideos = button("", cpM) {
             FolderScan.setVideosOn(this, !FolderScan.videosOn(this))
             if (FolderScan.videosOn(this) && !FolderScan.hasVideoPerm(this)) requestPermissions(FolderScan.perms, 22)
             updateFolderUi()
         }
-        btnExisting = button("", cp) { importExisting() }
-        btnCleanDl = button("", cp) { cleanDownloads() }
-        text("Escolha a pasta Download. Cada foto do Flow que cair lá entra sozinha na fila, sem metadados, e vai pra pasta \"PostLeve Flow\" da galeria. Depois você apaga as do Download com um toque. Foto que não era pra estar: toque em Apagar nela, que some da fila e da pasta.", 12f, MUTED, parent = cp)
+        btnExisting = button("", cpM) { importExisting() }
+        btnCleanDl = button("", cpM) { cleanDownloads() }
+        text("Escolha a pasta Download. Cada foto do Flow que cair lá entra sozinha na fila, sem metadados, e vai pra pasta \"PostLeve Flow\" da galeria. Depois você apaga as do Download com um toque. Foto que não era pra estar: toque em Apagar nela, que some da fila e da pasta.", 12f, MUTED, parent = cpM)
         updateFolderUi()
 
+        textPostsUi()
+        promoUi()
         postList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         cp.addView(postList, lpMatch())
         styleEvery()
@@ -1068,6 +1071,23 @@ class MainActivity : Activity() {
                 ui.post { tvG.text = if (ch < 0) "Erro ao ler a resposta" else if (read == 0) "Não achei linhas no formato \"N) texto\". Copiou a resposta certa?" else "✓ Li $read linha(s), troquei $ch texto(s)" + (if (bad > 0) " · $bad linha(s) que não reconheci" else ""); renderMine() } }.start()
         }
         drawParts()
+    }
+
+    /** Grupo recolhível dentro de um cartão (opções que você não mexe todo dia). O app lembra se está aberto. */
+    internal fun sub(parent: LinearLayout, title: String): LinearLayout {
+        val key = "fold3_sub_" + title.hashCode()
+        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), 0, 0, dp(4)) }
+        val head = TextView(this).apply {
+            textSize = 14f; setTextColor(0xFFC9CCD6.toInt()); typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            setPadding(dp(12), dp(11), dp(12), dp(11)); background = GradientDrawable().apply { setColor(SURF); cornerRadius = dp(12).toFloat() }
+        }
+        fun draw() { head.text = title + if (body.visibility == View.VISIBLE) "   ⌄" else "   ›" }
+        body.visibility = if (Store.prefs(this).getBoolean(key, true)) View.GONE else View.VISIBLE
+        draw()
+        head.setOnClickListener { body.visibility = if (body.visibility == View.VISIBLE) View.GONE else View.VISIBLE; Store.prefs(this).edit().putBoolean(key, body.visibility != View.VISIBLE).apply(); draw() }
+        parent.addView(head, lpMatch().apply { topMargin = dp(8) })
+        parent.addView(body, lpMatch())
+        return body
     }
 
     /** Título de seção (agrupa os cartões por assunto). */
@@ -1496,6 +1516,8 @@ class MainActivity : Activity() {
     internal fun lpMatch() = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
     /** Cartões avançados começam fechados (toque no título abre/fecha; o app lembra). */
+    /** Abertos por padrão (o resto começa fechado: toque no título pra abrir; o app lembra). */
+    private val OPEN = setOf("✅ Configuração", "🏠 Painel", "Fila de posts", "📈 Vigia do crescimento")
     private val FOLDED = setOf("🩺 Saúde das filas", "📌 Botão de postar sempre à mão", "🤖 Tudo automático", "💾 Backup", "🧪 Autoteste e diagnóstico",
         "🔕 Notificações do Threads", "🤖 Piloto automático", "Celular limpo", "Atualizações", "🕘 Envios e notas")
 
@@ -1509,7 +1531,7 @@ class MainActivity : Activity() {
         if (title == null) return c
         cards[title] = c
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(6), 0, 0) }
-        val key = "fold_" + title.hashCode()
+        val key = "fold3_" + title.hashCode()
         // título à esquerda, setinha discreta à direita (toque abre/fecha; o app lembra)
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(2), 0, dp(2)) }
         row.addView(TextView(this).apply { text = title; textSize = 16f; setTextColor(FG); typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -1517,7 +1539,7 @@ class MainActivity : Activity() {
         row.addView(chev)
         c.addView(row, lpMatch()); c.addView(body, lpMatch())
         fun draw() { chev.text = if (body.visibility == View.VISIBLE) "⌄" else "›" }
-        body.visibility = if (Store.prefs(this).getBoolean(key, title in FOLDED)) View.GONE else View.VISIBLE
+        body.visibility = if (Store.prefs(this).getBoolean(key, title !in OPEN)) View.GONE else View.VISIBLE
         draw()
         row.setOnClickListener {
             body.visibility = if (body.visibility == View.VISIBLE) View.GONE else View.VISIBLE
@@ -1527,11 +1549,17 @@ class MainActivity : Activity() {
     }
 
     internal fun text(t: String, size: Float, color: Int, parent: LinearLayout = root, bold: Boolean = false): TextView {
+        // explicação longa vira 1 linha "ⓘ …" que abre ao tocar (a tela fica limpa, a ajuda continua lá)
+        val help = color == MUTED && !bold && size <= 12.5f && t.length >= 90 && parent !== root
         val v = TextView(this).apply {
-            text = t; textSize = size; setTextColor(color)
+            text = if (help) "ⓘ  $t" else t; textSize = size; setTextColor(color)
             if (bold) typeface = Typeface.DEFAULT_BOLD
             setLineSpacing(0f, 1.22f)
             setPadding(0, dp(3), 0, dp(3))
+            if (help) {
+                maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; alpha = 0.75f
+                setOnClickListener { val open = maxLines == 1; maxLines = if (open) Int.MAX_VALUE else 1; ellipsize = if (open) null else android.text.TextUtils.TruncateAt.END; alpha = if (open) 1f else 0.75f }
+            }
         }
         parent.addView(v, lpMatch())
         return v
