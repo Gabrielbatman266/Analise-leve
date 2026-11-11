@@ -52,9 +52,13 @@ object PostBar {
         Intent(c, PostBarReceiver::class.java).setAction(action), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
     fun status(c: Context): String {
-        val n = QuickPost.countReady(c); val nv = QuickPost.countVideos(c)
+        // total que pode sair (as que já saíram voltam no giro) e quantas ainda são novas
+        val fotos = PostQueue.load(c).filter { it.optString("status") != "arquivada" }
+        val vids = VideoExport.library(c).filter { !it.optBoolean("arquivado") }
+        val nNew = QuickPost.countReady(c); val vNew = vids.count { it.optInt("posts") == 0 }
         val g = Daily.goal(c)
-        return "📸 $n fotos · 🎬 $nv vídeos" + if (g > 0) " · hoje ${Daily.postedToday(c)}/$g" else ""
+        return "📸 ${fotos.size} fotos" + (if (nNew > 0) " ($nNew novas)" else "") + " · 🎬 ${vids.size} vídeos" + (if (vNew > 0) " ($vNew novos)" else "") +
+            if (g > 0) " · hoje ${Daily.postedToday(c)}/$g" else ""
     }
 
     fun build(c: Context): Notification {
@@ -124,6 +128,14 @@ class FloatService : Service() {
     companion object { @Volatile var instance: FloatService? = null }
 
     private lateinit var wm: WindowManager
+    private var viaAcc = false
+
+    /** O leitor de tela ligou/desligou: refaz a bolha pela janela certa. */
+    fun rebuild(acc: Boolean) {
+        if (acc == viaAcc && root != null) return
+        try { root?.let { wm.removeView(it) } } catch (e: Exception) { }
+        root = null; addBubble()
+    }
     private var root: LinearLayout? = null
     private lateinit var bubble: BubbleView
     private lateinit var badge: TextView
@@ -200,8 +212,14 @@ class FloatService : Service() {
         frame.alpha = IDLE
         root = box
 
+        // Com o leitor de tela ligado, a bolha entra pela janela dele: assim o Android NÃO mostra
+        // a notificação "Post Leve está sobrepondo outros apps". Sem o leitor, usa a sobreposição normal.
+        val acc = ScreenReader.instance
+        wm = acc?.getSystemService(WindowManager::class.java) ?: getSystemService(WindowManager::class.java)
+        viaAcc = acc != null
         lp = WindowManager.LayoutParams(-2, -2,
-            if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
+            if (acc != null) WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+            else if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, PixelFormat.TRANSLUCENT).apply {
             gravity = Gravity.TOP or Gravity.START
             x = p.getInt("bubble_x", resources.displayMetrics.widthPixels - dp(54)); y = p.getInt("bubble_y", resources.displayMetrics.heightPixels / 3)

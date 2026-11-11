@@ -253,8 +253,9 @@ class ScreenReader : AccessibilityService() {
     companion object { @Volatile var instance: ScreenReader? = null }
     private var last = 0L
 
-    override fun onServiceConnected() { super.onServiceConnected(); instance = this }
-    override fun onDestroy() { instance = null; hideReadBtn(); super.onDestroy() }
+    override fun onServiceConnected() { super.onServiceConnected(); instance = this
+        h.postDelayed({ FloatService.instance?.rebuild(true) }, 500) } // bolha passa pela janela do leitor (sem o aviso "sobrepondo outros apps")
+    override fun onDestroy() { instance = null; hideReadBtn(); android.os.Handler(android.os.Looper.getMainLooper()).post { FloatService.instance?.rebuild(false) }; super.onDestroy() }
 
     // ================= 📖 botão "Ler agora" (aparece só no Threads/Instagram) =================
     private var readBtn: android.view.View? = null
