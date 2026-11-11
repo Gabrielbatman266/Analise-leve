@@ -16,6 +16,7 @@ import java.io.File
 class App : Application() {
     override fun onCreate() {
         super.onCreate()
+        try { Profiles.heal(this) } catch (e: Throwable) { }
         val prev = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
             try { ErrLog.log(this, "FECHOU (${t.name})", e) } catch (x: Throwable) { }

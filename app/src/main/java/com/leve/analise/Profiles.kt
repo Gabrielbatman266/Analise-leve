@@ -84,24 +84,39 @@ object Profiles {
         val cur = currentId(c); if (id == cur) return null
         if (byId(c, id) == null) return "Modelo não encontrada"
         if (busy()) return "Espere terminar a produção de vídeos"
-        val p = Store.prefs(c)
-        // 1) guarda a atual
+        reg(c).edit().putString("troca", "$cur>$id").putInt("fase", 1).commit() // diário: se cair no meio, termina ou desfaz ao abrir
+        phase1(c, cur)
+        reg(c).edit().putInt("fase", 2).commit()
+        phase2(c, id)
+        return null
+    }
+
+    private fun move(from: File, to: File) { if (to.exists()) to.deleteRecursively(); if (!from.renameTo(to)) { from.copyRecursively(to, true); from.deleteRecursively() } }
+
+    /** 1) guarda a atual na pasta dela. */
+    private fun phase1(c: Context, cur: String) {
         val curFiles = File(dir(c, cur), "files").apply { mkdirs() }
-        c.filesDir.listFiles().orEmpty().filter { it.name !in KEEP }.forEach { f ->
-            val dst = File(curFiles, f.name); if (dst.exists()) dst.deleteRecursively()
-            if (!f.renameTo(dst)) { f.copyRecursively(dst, true); f.deleteRecursively() }
-        }
-        File(dir(c, cur), "prefs.json").writeText(prefsToJson(p) { !global(it) }.toString())
-        // 2) põe a outra no lugar
-        File(dir(c, id), "files").listFiles().orEmpty().forEach { f ->
-            val dst = File(c.filesDir, f.name); if (dst.exists()) dst.deleteRecursively()
-            if (!f.renameTo(dst)) { f.copyRecursively(dst, true); f.deleteRecursively() }
-        }
-        val e = p.edit(); p.all.keys.filter { !global(it) }.forEach { e.remove(it) }
+        c.filesDir.listFiles().orEmpty().filter { it.name !in KEEP }.forEach { move(it, File(curFiles, it.name)) }
+        File(dir(c, cur), "prefs.json").writeText(prefsToJson(Store.prefs(c)) { !global(it) }.toString())
+    }
+
+    /** 2) põe a outra no lugar. */
+    private fun phase2(c: Context, id: String) {
+        File(dir(c, id), "files").listFiles().orEmpty().forEach { move(it, File(c.filesDir, it.name)) }
+        val p = Store.prefs(c); val e = p.edit(); p.all.keys.filter { !global(it) }.forEach { e.remove(it) }
         File(dir(c, id), "prefs.json").takeIf { it.exists() }?.let { try { jsonToPrefs(e, JSONObject(it.readText())) } catch (x: Exception) { } }
         e.commit()
-        reg(c).edit().putString("atual", id).commit()
-        return null
+        reg(c).edit().putString("atual", id).remove("troca").remove("fase").commit()
+    }
+
+    /** Ao abrir: se uma troca foi interrompida (app fechou no meio), termina (fase 2) ou desfaz (fase 1). */
+    fun heal(c: Context) {
+        val t = reg(c).getString("troca", null) ?: return
+        val (cur, id) = t.split(">").let { (it.getOrNull(0) ?: return) to (it.getOrNull(1) ?: return) }
+        try {
+            if (reg(c).getInt("fase", 1) >= 2) phase2(c, id)
+            else { File(dir(c, cur), "files").listFiles().orEmpty().forEach { move(it, File(c.filesDir, it.name)) }; reg(c).edit().remove("troca").remove("fase").commit() }
+        } catch (e: Exception) { }
     }
 
     /** Cria uma modelo nova (vazia, com os mesmos ajustes se [copySettings]) e já troca pra ela. */
