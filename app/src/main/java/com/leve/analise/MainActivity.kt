@@ -756,8 +756,9 @@ class MainActivity : Activity() {
         page = pages["Ajustes"]!!
         modelsUi()
         page = pages["Legendas"]!!
-        namesUi()
         buildCaptionsTab()
+        page = pages["Legendas"]!!
+        namesUi()
 
         // ===== Instagram
         page = pages["Instagram"]!!
