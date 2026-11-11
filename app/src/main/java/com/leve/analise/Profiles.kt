@@ -145,6 +145,32 @@ object Profiles {
         Runtime.getRuntime().exit(0)
     }
 
+    // ---------------------------------------------------------------- de quem é a conta aberta no Threads/Instagram
+    @Volatile private var hCache: Pair<String, Map<String, String>>? = null
+    /** @ das OUTRAS modelos (Threads e Instagram) → nome do perfil. */
+    fun otherHandles(c: Context): Map<String, String> {
+        val oth = others(c)
+        val sig = oth.joinToString { it.optString("id") + File(dir(c, it.optString("id")), "prefs.json").lastModified() }
+        hCache?.takeIf { it.first == sig }?.let { return it.second }
+        val m = HashMap<String, String>()
+        oth.forEach { o ->
+            try {
+                val pj = JSONObject(File(dir(c, o.optString("id")), "prefs.json").readText())
+                listOf("th_handle", "ig_handle").forEach { k -> pj.optJSONObject(k)?.optString("v")?.trim()?.removePrefix("@")?.lowercase()?.takeIf { it.isNotEmpty() }?.let { m[it] = o.optString("name") } }
+            } catch (e: Exception) { }
+        }
+        hCache = sig to m; return m
+    }
+
+    /** Seguidores (mediana recente) das outras modelos: pra não confundir com os desta. */
+    fun otherFollowerMedians(c: Context): List<Int> = others(c).mapNotNull { o ->
+        try {
+            val a = JSONArray(File(File(dir(c, o.optString("id")), "files"), "seguidores.json").readText())
+            val l = (0 until a.length()).map { a.getJSONObject(it).optInt("n") }.filter { it > 0 }.takeLast(20).sorted()
+            l.getOrNull(l.size / 2)
+        } catch (e: Exception) { null }
+    }
+
     // ---------------------------------------------------------------- aprendizado transferido
     private fun weightsFile(c: Context) = File(c.filesDir, "pesos.json")
     fun saveWeights(c: Context, w: Map<String, Double>) = try { weightsFile(c).writeText(JSONObject(w.filterValues { Math.abs(it) > 0.002 }).toString()) } catch (e: Exception) { }

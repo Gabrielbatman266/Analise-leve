@@ -186,11 +186,15 @@ object ThreadsApi {
     fun repairNow(c: Context) { p(c).edit().remove("repair_fol").apply(); repairFollowers(c) }
 
     fun repairFollowers(c: Context) {
-        if (!p(c).getBoolean("repair_fol2", false)) { p(c).edit().putBoolean("repair_fol2", true).remove("repair_fol").apply() } // limpa de novo (havia leituras erradas)
+        if (!p(c).getBoolean("repair_fol3", false)) { p(c).edit().putBoolean("repair_fol3", true).remove("repair_fol").apply() } // limpa de novo (havia leituras erradas)
         if (p(c).getBoolean("repair_fol", false)) return
         JsonFile.edit(folFile(c)) { l ->
             // seguidores não despencam nem dobram de uma leitura pra outra: fica a sequência coerente MAIS LONGA
             // (cada registro entre -20% e +30% do anterior); o resto era número de outra tela/perfil
+            // números iguais (±15%) aos das OUTRAS modelos eram leitura da conta delas
+            val oth = try { Profiles.otherFollowerMedians(c) } catch (e: Exception) { emptyList() }
+            val anchor = l.filter { it.optString("src") == "api" || it.optString("src") == "lista" }.map { it.optInt("n") }.sorted().let { it.getOrNull(it.size / 2) }
+            if (oth.isNotEmpty()) l.removeAll { o -> o.optString("src") != "api" && o.optString("src") != "lista" && oth.any { m -> Math.abs(o.optInt("n") - m) <= m * 0.15 && (anchor == null || Math.abs(anchor - m) > m * 0.4) } }
             val s = l.sortedBy { it.optLong("t") }
             if (s.size < 3) return@edit
             // leitura da API ou da sua LISTA de seguidores vale 10x (é a fonte mais confiável)
