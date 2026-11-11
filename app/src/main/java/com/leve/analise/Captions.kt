@@ -259,6 +259,7 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
      */
     fun randomPick(c: Context, promo: Boolean = true): Pair<String, String>? {
         if (promo) Promo.maybe(c)?.let { return it } // 📣 é a vez da divulgação do Instagram
+        if (promo) TextPosts.maybe(c)?.let { return it } // ✍ é a vez de um post só de texto
         val all = PostQueue.load(c).filter { PostQueue.imageFile(c, it.optString("id")).exists() && it.optString("status") != "arquivada" && Saturation.photoOk(it) }
             .ifEmpty { PostQueue.load(c).filter { PostQueue.imageFile(c, it.optString("id")).exists() && it.optString("status") != "arquivada" } }
             .ifEmpty { PostQueue.load(c).filter { PostQueue.imageFile(c, it.optString("id")).exists() } }
@@ -460,5 +461,91 @@ object Banks {
             if (CaptionDB.find(c, t) == null) { CaptionDB.add(c, t, "minha"); n++ }
         }
         return n
+    }
+}
+
+/**
+ * ✍ Posts só de texto no Threads (liga/desliga). Entram no meio dos posts com foto, a cada N posts.
+ * A legenda vem do banco ativo (as criadas pra texto têm preferência) e cada uma aprende pela nota/números
+ * que teve COMO TEXTO (separado de como foi com foto).
+ */
+object TextPosts {
+    private fun p(c: Context) = Store.prefs(c)
+    fun on(c: Context) = p(c).getBoolean("txt_on", false)
+    fun setOn(c: Context, v: Boolean) = p(c).edit().putBoolean("txt_on", v).apply()
+    fun every(c: Context) = p(c).getInt("txt_every", 4)
+    fun setEvery(c: Context, v: Int) = p(c).edit().putInt("txt_every", v).apply()
+    fun perDay(c: Context) = p(c).getInt("txt_day", 4)
+    fun setPerDay(c: Context, v: Int) = p(c).edit().putInt("txt_day", v).apply()
+    fun isText(id: String?) = id?.startsWith("texto_") == true
+
+    private fun sends(c: Context) = SendLog.all(c).filter { it.optString("kind") == "fila" }
+    fun sinceLast(c: Context): Int { val l = sends(c); val i = l.indexOfFirst { isText(it.optString("id")) }; return if (i < 0) l.size else i }
+    fun today(c: Context): Int {
+        val d0 = java.util.Calendar.getInstance().apply { set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0) }.timeInMillis
+        return sends(c).count { isText(it.optString("id")) && it.optLong("at") >= d0 }
+    }
+    fun due(c: Context) = on(c) && !Burst.inBlock(c) && today(c) < perDay(c) && sinceLast(c) >= every(c)
+
+    // ---- aprendizado: como cada legenda foi COMO TEXTO
+    private fun stats(c: Context): org.json.JSONObject = try { org.json.JSONObject(p(c).getString("txt_stats", "{}")) } catch (e: Exception) { org.json.JSONObject() }
+    private fun k(t: String) = t.trim().lowercase().hashCode().toString()
+    fun mean(c: Context, t: String): Double? = stats(c).optJSONObject(k(t))?.let { o -> if (o.optInt("n") == 0) null else (o.optDouble("s") + 0.5) / (o.optInt("n") + 1.0) }
+
+    /** De hora em hora: notas dos posts de texto → aprendizado. */
+    fun tick(c: Context) {
+        val st = stats(c); var ch = false
+        SendLog.all(c).filter { isText(it.optString("id")) && !it.optBoolean("tx") }.forEach { e ->
+            val y = ThreadsApi.targetFor(c, e.optLong("at")) ?: when (e.optString("nota")) { "top" -> 1.0; "good" -> 0.8; "meh" -> 0.45; "bad" -> 0.0; else -> null } ?: return@forEach
+            if (System.currentTimeMillis() - e.optLong("at") < 12 * 3600_000L && e.optString("nota").isEmpty()) return@forEach
+            val o = st.optJSONObject(k(e.optString("cap"))) ?: org.json.JSONObject()
+            o.put("n", o.optInt("n") + 1).put("s", o.optDouble("s", 0.0) + y); st.put(k(e.optString("cap")), o); ch = true
+            SendLog.mark(c, e.optLong("at"), "tx")
+        }
+        if (ch) p(c).edit().putString("txt_stats", st.toString()).apply()
+    }
+
+    /** Legenda pro post de texto: as feitas pra texto primeiro; as que foram bem como texto voltam mais; nunca as últimas. */
+    private fun pickCap(c: Context): String? {
+        val avoid = (Captions.capAvoid(c) + sends(c).filter { isText(it.optString("id")) }.take(20).map { it.optString("cap").trim() }).toSet()
+        val made = CaptionDB.all(c).filter { it.optString("src") == "texto" }.map { it.optString("t") }
+        val pool = (if (made.count { it.trim() !in avoid } >= 5) made else CaptionDB.all(c).filter { it.optString("src") != "viral" }.map { it.optString("t") })
+            .filter { it.isNotBlank() && it.trim() !in avoid }.ifEmpty { return null }
+        return CaptionDB.pick(c, pool, avoid) { t -> mean(c, t)?.let { Math.exp(4.0 * (it - 0.5)) } ?: 1.2 }
+    }
+
+    private fun pending(c: Context): Pair<String, String>? = try { p(c).getString("txt_pending", null)?.let { val o = org.json.JSONObject(it); o.optString("id") to o.optString("cap") } } catch (e: Exception) { null }
+
+    /** No sorteio: se é a vez, devolve o post de texto (o mesmo até sair). */
+    fun maybe(c: Context): Pair<String, String>? {
+        if (!due(c)) return null
+        pending(c)?.takeIf { (id, _) -> SendLog.all(c).none { it.optString("id") == id } }?.let { return it }
+        return now(c)
+    }
+
+    fun now(c: Context): Pair<String, String>? {
+        val cap = pickCap(c) ?: return null
+        val id = "texto_" + System.currentTimeMillis().toString(36)
+        p(c).edit().putString("txt_pending", org.json.JSONObject().put("id", id).put("cap", cap).toString()).apply()
+        return id to cap
+    }
+
+    /** ✨ Cria posts feitos pra sair SÓ como texto (sem foto). */
+    fun generate(c: Context, n: Int): Int {
+        val wins = (all(c).sortedByDescending { mean(c, it) ?: 0.0 }.take(6) + CaptionDB.winners(c, 6).map { it.optString("t") }).distinct().take(10)
+        val l = Ai.textPosts(c, wins, Captions.mine(c).take(8), n)
+        var k = 0; l.forEach { if (CaptionDB.find(c, it) == null) { CaptionDB.add(c, it, "texto"); k++ } }
+        return k
+    }
+    private fun all(c: Context) = CaptionDB.all(c).filter { it.optString("src") == "texto" }.map { it.optString("t") }
+
+    fun summary(c: Context): String {
+        if (!on(c)) return "Desligado."
+        val left = maxOf(0, every(c) - sinceLast(c))
+        val st = stats(c)
+        val best = CaptionDB.all(c).map { it.optString("t") }.mapNotNull { t -> mean(c, t)?.let { t to it } }.sortedByDescending { it.second }.take(3)
+        return "Ligado · 1 a cada ${every(c)} posts · " + (if (today(c) >= perDay(c)) "hoje já foram ${today(c)}/${perDay(c)}" else if (left == 0) "o próximo é AGORA" else "próximo daqui a $left post(s)") +
+            " · ${all(c).size} textos feitos pra texto · ${st.length()} já testados" +
+            (if (best.isNotEmpty()) "\nMelhores como texto: " + best.joinToString("  |  ") { "\"" + it.first.replace('\n', ' ').take(40) + "\" ${(it.second * 100).toInt()}pts" } else "")
     }
 }

@@ -137,6 +137,22 @@ Responda só com JSON: {"legendas":["..."]}"""
         return (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotBlank() }.take(n)
     }
 
+    /** ✍ Posts só de texto pro Threads (sem foto). */
+    fun textPosts(c: Context, wins: List<String>, mine: List<String>, n: Int): List<String> {
+        val prompt = """Você escreve posts SÓ DE TEXTO (sem foto) pro Threads de uma criadora de conteúdo, em português do Brasil.
+${MetaKnow.THREADS}
+${if (wins.isNotEmpty()) "Posts dela que FUNCIONARAM (siga o tom):\n" + wins.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
+${if (mine.isNotEmpty()) "Jeito dela de escrever:\n" + mine.joinToString("\n") { "- " + it.replace('\n', ' ') } else ""}
+${Lab.aiText(c)}
+${Study.aiText(c)}
+Crie $n posts NOVOS feitos pra funcionar SEM imagem: o texto sozinho tem que parar a rolagem e puxar resposta.
+Varie entre: pergunta que todo mundo quer responder, opinião levemente polêmica, confissão curta, "complete a frase", enquete de duas opções, situação em que a pessoa se reconhece, provocação leve.
+Regras: curtos (1 a 3 linhas), naturais como ela escreve, no máximo 1 emoji, sem hashtags, nada explícito, não descreva a aparência dela.
+Responda só com JSON: {"posts":["..."]}"""
+        val arr = parseObj(ask(c, prompt, emptyList())).optJSONArray("posts") ?: throw AiException(-2, "Resposta que não entendi")
+        return (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotBlank() }.take(n)
+    }
+
     /** 🧪 Estudo da semana: lê todos os números e devolve o que fazer. */
     fun study(c: Context, data: String): JSONObject {
         val prompt = """Você é analista de crescimento de uma criadora de conteúdo (Threads com fotos + Reels no Instagram). O objetivo dela é GANHAR SEGUIDORES e levar gente do Threads pro Instagram.

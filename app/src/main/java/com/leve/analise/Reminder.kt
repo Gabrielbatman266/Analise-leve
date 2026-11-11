@@ -94,6 +94,7 @@ object Reminder {
         } else {
             val (id, cap) = pick
             b.setContentText(cap)
+            if (TextPosts.isText(id)) b.setContentTitle("Hora de postar · ✍ só texto").setStyle(Notification.BigTextStyle().bigText(cap))
             try {
                 val o = BitmapFactory.Options().apply { inSampleSize = 4 }
                 val bmp = BitmapFactory.decodeFile(PostQueue.imageFile(c, id).path, o)
@@ -122,6 +123,22 @@ class ReminderReceiver : BroadcastReceiver() {
 
 /** Invisível: copia a legenda, manda foto+legenda pro Threads e marca como postada. */
 class PostActivity : Activity() {
+    /** ✍ Post só de texto: abre o Threads com o texto pronto (sem foto). */
+    private fun postText(id: String, cap: String) {
+        if (cap.isBlank()) { Toast.makeText(this, "Sem texto pra postar", Toast.LENGTH_SHORT).show(); return }
+        ClipSync.copy(this, cap)
+        val i = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, cap).setPackage(PostQueue.THREADS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            startActivity(i)
+            Captions.remember(this, null, cap)
+            PostConfirm.start(this, "fila", id, cap, "Threads")
+            Store.prefs(this).edit().remove("txt_pending").apply()
+            getSystemService(android.app.NotificationManager::class.java).cancel(9)
+            if (Reminder.every(this) > 0) Reminder.schedule(this)
+            Toast.makeText(this, "✍ Post só de texto: o texto já está no Threads (e copiado)", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) { Toast.makeText(this, "Não achei o Threads pra enviar", Toast.LENGTH_LONG).show() }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // "Postar próximo" (widget, atalho, barra): sorteia foto e legenda na hora
@@ -131,6 +148,7 @@ class PostActivity : Activity() {
             finish(); return
         }
         val id = pick?.first ?: intent.getStringExtra("id")
+        if (TextPosts.isText(id)) { postText(id!!, pick?.second ?: intent.getStringExtra("caption").orEmpty()); finish(); return }
         val item = id?.let { PostQueue.get(this, it) }
         if (id == null || (item == null && !Promo.isPromo(id)) || !PostQueue.imageFile(this, id).exists()) {
             Toast.makeText(this, "Essa foto não está mais na fila", Toast.LENGTH_SHORT).show()

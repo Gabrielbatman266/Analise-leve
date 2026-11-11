@@ -674,6 +674,7 @@ class MainActivity : Activity() {
         fun selT() { Thread { val t = try { Selection.summary(this) } catch (e: Exception) { "" }; ui.post { tvSel.text = t } }.start() }
         chips(cp, Selection.MODES.values.map { it.first }, { Selection.MODES.getValue(Selection.mode(this)).first }) { v -> Selection.setMode(this, Selection.MODES.entries.first { it.value.first == v }.key); selT() }
         selT()
+        textPostsUi()
         promoUi()
         everyRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         cp.addView(everyRow, lpMatch())
@@ -1084,7 +1085,7 @@ class MainActivity : Activity() {
                 else cards[t]?.let { v -> (v.parent as? ViewGroup)?.removeView(v); p.addView(v, idx++) }
             }
         }
-        place("Postar", listOf("✅ Configuração", "🏠 Painel", "#Postar no Threads", "Fila de posts", "📣 Divulgação do Instagram", "🕘 Envios e notas"))
+        place("Postar", listOf("✅ Configuração", "🏠 Painel", "#Postar no Threads", "Fila de posts", "✍ Posts só de texto", "📣 Divulgação do Instagram", "🕘 Envios e notas"))
         place("Números", listOf("#Crescimento", "📈 Vigia do crescimento", "🧪 Laboratório", "#Posts e coleta", "🏆 Ranking e postagem perfeita", "🩺 Saúde das filas"))
         place("Ajustes", listOf("#Modelos", "👩 Modelos", "#Automação", "🤖 Tudo automático", "🤖 Piloto automático", "📌 Botão de postar sempre à mão",
             "#Conexões", "Configurações da IA", "🔗 API do Threads (números exatos)", "🔕 Notificações do Threads",
@@ -1166,6 +1167,28 @@ class MainActivity : Activity() {
     }
 
     // ------------------------------------------------------------------ aba Legendas
+
+    private fun textPostsUi() {
+        val ct = card("✍ Posts só de texto")
+        text("Posts sem foto no meio dos posts com foto. A legenda vem do banco de legendas em uso (as criadas pra texto têm preferência) e cada uma aprende pelo resultado que teve COMO TEXTO.", 12f, MUTED, parent = ct)
+        val tv = text("", 12f, OK, parent = ct)
+        fun t() { Thread { val s = try { TextPosts.summary(this) } catch (e: Exception) { "" }; ui.post { tv.text = s } }.start() }
+        chips(ct, listOf("✍ Ligado", "Desligado"), { if (TextPosts.on(this)) "✍ Ligado" else "Desligado" }) { TextPosts.setOn(this, it.startsWith("✍")); t() }
+        chips(ct, listOf("1 a cada 3", "1 a cada 4", "1 a cada 6", "1 a cada 8"), { "1 a cada " + TextPosts.every(this) }) { TextPosts.setEvery(this, it.substringAfterLast(' ').toInt()); t() }
+        chips(ct, listOf("Até 2/dia", "Até 4/dia", "Até 6/dia", "Até 10/dia"), { "Até ${TextPosts.perDay(this)}/dia" }) { TextPosts.setPerDay(this, it.removePrefix("Até ").substringBefore('/').toInt()); t() }
+        val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; ct.addView(r, lpMatch())
+        button("✨ Criar textos (IA)", r, weight = true) {
+            toast("Criando 12 posts de texto…")
+            Thread { val m = try { "✓ ${TextPosts.generate(this, 12)} posts de texto novos" } catch (e: Exception) { "Erro: ${e.message}" }; ui.post { toast(m); t() } }.start()
+        }
+        button("✍ Postar um agora", r, primary = true, weight = true) {
+            Thread { val pk = TextPosts.now(this); ui.post {
+                if (pk == null) toast("Sem legendas no banco: crie textos com a IA ou cole uma lista em Legendas")
+                else startActivity(Intent(this, PostActivity::class.java).putExtra("id", pk.first).putExtra("caption", pk.second))
+            } }.start()
+        }
+        t()
+    }
 
     // ------------------------------------------------------------------ 📣 divulgação do Instagram
     private var promoRedraw: () -> Unit = {}

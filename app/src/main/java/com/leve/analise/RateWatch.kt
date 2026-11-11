@@ -114,6 +114,7 @@ object RateWatch {
         try { Promo.tick(c) } catch (x: Exception) { ErrLog.log(c, "divulgação", x) }
         try { Growth.tick(c) } catch (x: Exception) { ErrLog.log(c, "vigia do crescimento", x) }
         try { Lab.tick(c) } catch (x: Exception) { ErrLog.log(c, "laboratório", x) }
+        try { TextPosts.tick(c) } catch (x: Exception) { ErrLog.log(c, "posts de texto", x) }
         try { Audience.tick(c) } catch (x: Exception) { ErrLog.log(c, "relógio da audiência", x) }
         try { Archive.tick(c)?.let { p(c).edit().putString("health_last", it).apply() } } catch (x: Exception) { ErrLog.log(c, "vigia", x) }
         try { Stock.check(c) } catch (x: Exception) { ErrLog.log(c, "vigia", x) }
