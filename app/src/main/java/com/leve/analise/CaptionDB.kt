@@ -46,6 +46,11 @@ object CaptionDB {
 
     private fun save(c: Context) = synchronized(lock) { cache?.let { write(c, it) } }
 
+    /** Esquece o que está na memória (o arquivo foi trocado: outro banco ativo). */
+    fun reload() = synchronized(lock) { cache = null }
+    /** Grava o que está na memória antes de trocar o arquivo. */
+    fun flush(c: Context) = save(c)
+
     private fun norm(t: String) = t.trim().lowercase()
 
     fun all(c: Context, src: String? = null): List<JSONObject> = load(c).filter { src == null || it.optString("src") == src }

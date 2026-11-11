@@ -96,6 +96,17 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         ids.forEach { id -> PostQueue.update(c, id) { it.put("status", "gerando") } }
         return ids.size
     }
+    /** ✨ Enche o banco ativo com legendas novas no estilo DELE (as que já tem; vencedoras primeiro). */
+    fun fillBank(c: Context, n: Int): String {
+        val all = CaptionDB.all(c).filter { it.optString("src") != "viral" }
+        val ex = (CaptionDB.winners(c, 6).map { it.optString("t") } + all.shuffled().take(10).map { it.optString("t") }).distinct().take(12)
+            .ifEmpty { mine(c).take(10) }
+        if (ex.isEmpty()) return "Banco vazio: cole algumas legendas de exemplo primeiro (📋 Colar lista) pra IA pegar o estilo"
+        val l = Ai.variations(c, ex, CaptionDB.losers(c, 6).map { it.optString("t") }, emptyList(), n)
+        var k = 0; l.forEach { if (CaptionDB.find(c, it) == null) { CaptionDB.add(c, it, "ia"); k++ } }
+        return "✓ $k legenda(s) novas no banco ${Banks.activeName(c)}"
+    }
+
     /** ✨ IA: variações novas das legendas que bombaram (entram no banco e no sorteio). */
     fun variationsOfWinners(c: Context, n: Int): Int {
         val wins = CaptionDB.winners(c, 10).map { it.optString("t") }
@@ -262,7 +273,7 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         Health.takeForced(c, "force_fotos") { id -> id in byId && id !in rec.take(2) }?.let { fid ->
             val o = byId.getValue(fid)
             val own = o.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
-            val pool = (own + mine(c) + CaptionDB.winners(c, 20).map { it.optString("t") }).filter { it.isNotBlank() }.distinct()
+            val pool = Banks.pool(c, own) ?: (own + mine(c) + CaptionDB.winners(c, 20).map { it.optString("t") }).filter { it.isNotBlank() }.distinct()
             val cap = (if (pool.isNotEmpty()) CaptionDB.pick(c, pool, capAvoid(c), capBonus(c, fid)) else null) ?: randomCaption(c, capAvoid(c))
             return hold(c, fid, cap)
         }
@@ -293,7 +304,7 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
         val own = o.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
         val avoid = capAvoid(c)
         val wins = CaptionDB.winners(c, 20).map { it.optString("t") }
-        val pool1 = (own + mine(c) + wins + CaptionDB.texts(c, "var").take(30)).filter { it.isNotBlank() }.distinct()
+        val pool1 = Banks.pool(c, own) ?: (own + mine(c) + wins + CaptionDB.texts(c, "var").take(30)).filter { it.isNotBlank() }.distinct()
         // 👯 e outro tipo de legenda (tamanho/pergunta/emoji) que as do bloco
         val pool = if (blockTypes.isEmpty()) pool1 else pool1.filter { Burst.capType(it) !in blockTypes }.ifEmpty { pool1 }
         // 🧪 laboratório: a foto já foi escolhida; agora sorteia de que lado do teste este post cai
@@ -346,5 +357,108 @@ object Selection {
         fun pc(k: String) = "${((q[k] ?: 0.0) * 100).toInt()}%"
         return "🏆 Provadas: ${t["provada"] ?: 0} (saem em ~${pc("provada")} dos posts) · 🌱 Promessas: ${t["promessa"] ?: 0} (${pc("promessa")}) · ✨ Novas: ${t["nova"] ?: 0} (${pc("nova")}) · resto: ${t["resto"] ?: 0} (${pc("resto")})\n" +
             "Provada = 2+ notas boas ou números reais altos. Mesmo provada, ela espera outras fotos antes de voltar."
+    }
+}
+
+/**
+ * 🗂 Bancos de legendas: além do banco principal, você monta outros (do zero, copiando, de outra modelo, colando uma lista
+ * ou pedindo pra IA) e escolhe qual o sorteio usa. Cada banco aprende separado (notas, vencedoras).
+ * Trocar de banco só troca o arquivo de legendas: fotos, vídeos e números continuam.
+ */
+object Banks {
+    const val MAIN = "principal"
+    private fun p(c: Context) = Store.prefs(c)
+    private fun dir(c: Context) = java.io.File(c.filesDir, "bancos").apply { mkdirs() }
+    private fun live(c: Context) = java.io.File(c.filesDir, "legendas_db.json")
+    private fun fileOf(c: Context, id: String) = java.io.File(dir(c), "$id.json")
+
+    fun list(c: Context): List<org.json.JSONObject> {
+        val a = try { org.json.JSONArray(p(c).getString("bancos", "[]")) } catch (e: Exception) { org.json.JSONArray() }
+        val l = (0 until a.length()).map { a.getJSONObject(it) }
+        return if (l.any { it.optString("id") == MAIN }) l else listOf(org.json.JSONObject().put("id", MAIN).put("name", "Principal")) + l
+    }
+    private fun save(c: Context, l: List<org.json.JSONObject>) = p(c).edit().putString("bancos", org.json.JSONArray().apply { l.forEach { put(it) } }.toString()).apply()
+    fun active(c: Context) = p(c).getString("banco_ativo", MAIN) ?: MAIN
+    fun activeName(c: Context) = list(c).firstOrNull { it.optString("id") == active(c) }?.optString("name") ?: "Principal"
+
+    /** "so" = só o banco ativo; "mais" = banco ativo + legendas presas às fotos. */
+    fun mode(c: Context) = p(c).getString("banco_modo", "so") ?: "so"
+    fun setMode(c: Context, v: String) = p(c).edit().putString("banco_modo", v).apply()
+    /** Mistura as vencedoras do Principal num banco alternativo. */
+    fun mixMain(c: Context) = p(c).getBoolean("banco_mix", false)
+    fun setMixMain(c: Context, v: Boolean) = p(c).edit().putBoolean("banco_mix", v).apply()
+
+    /** Legendas pro sorteio quando um banco alternativo está ativo (null = Principal: sorteio normal). */
+    fun pool(c: Context, own: List<String>): List<String>? {
+        if (active(c) == MAIN) return null
+        val bank = CaptionDB.all(c).filter { it.optString("src") != "viral" }.map { it.optString("t") }.filter { it.isNotBlank() }
+        if (bank.size < 3) return null // banco quase vazio: sorteio normal até ele encher
+        val extra = if (mixMain(c)) mainWinners(c) else emptyList()
+        return ((if (mode(c) == "mais") own else emptyList()) + bank + extra).distinct()
+    }
+
+    private fun mainWinners(c: Context): List<String> = try {
+        val a = org.json.JSONArray(fileOf(c, MAIN).readText())
+        (0 until a.length()).map { a.getJSONObject(it) }.filter { it.optInt("good") > 0 && CaptionDB.mean(it) > 0.6 }.sortedByDescending { CaptionDB.mean(it) }.take(20).map { it.optString("t") }
+    } catch (e: Exception) { emptyList() }
+
+    /** Troca o banco ativo (guarda o atual na pasta dos bancos). */
+    @Synchronized fun switchTo(c: Context, id: String) {
+        val cur = active(c); if (cur == id) return
+        CaptionDB.flush(c)
+        val lv = live(c)
+        if (lv.exists()) { val d = fileOf(c, cur); d.delete(); if (!lv.renameTo(d)) { lv.copyTo(d, true); lv.delete() } }
+        val src = fileOf(c, id)
+        if (src.exists()) { if (!src.renameTo(lv)) { src.copyTo(lv, true); src.delete() } } else lv.writeText("[]")
+        p(c).edit().putString("banco_ativo", id).apply()
+        CaptionDB.reload()
+    }
+
+    /**
+     * Cria um banco. [from]: "vazio", "copia" (do ativo), "banco:<id>" (de outro banco) ou "modelo:<id>" (de outra modelo, nome trocado).
+     * Não muda o ativo.
+     */
+    fun create(c: Context, name: String, from: String): String {
+        val id = "b" + System.currentTimeMillis().toString(36)
+        CaptionDB.flush(c)
+        val f = fileOf(c, id)
+        fun clean(a: org.json.JSONArray): org.json.JSONArray { // começa sem as notas (aprende do zero neste banco)
+            val out = org.json.JSONArray()
+            for (i in 0 until a.length()) a.optJSONObject(i)?.let { o -> out.put(org.json.JSONObject().put("t", o.optString("t")).put("src", o.optString("src").ifEmpty { "ia" }).put("at", System.currentTimeMillis()).put("uses", 0).put("good", 0).put("bad", 0).put("meh", 0)) }
+            return out
+        }
+        when {
+            from == "copia" -> f.writeText(clean(org.json.JSONArray(live(c).takeIf { it.exists() }?.readText() ?: "[]")).toString())
+            from.startsWith("banco:") -> { val b = from.removePrefix("banco:"); val sf = if (b == active(c)) live(c) else fileOf(c, b)
+                f.writeText(clean(try { org.json.JSONArray(sf.readText()) } catch (e: Exception) { org.json.JSONArray() }).toString()) }
+            from.startsWith("modelo:") -> {
+                val mid = from.removePrefix("modelo:")
+                val a = try { org.json.JSONArray(java.io.File(java.io.File(java.io.File(java.io.File(c.filesDir, "perfis"), mid), "files"), "legendas_db.json").readText()) } catch (e: Exception) { org.json.JSONArray() }
+                val fromN = Profiles.modelName(c, mid); val toN = Profiles.modelName(c)
+                val out = clean(a)
+                if (fromN.isNotBlank() && toN.isNotBlank()) for (i in 0 until out.length()) out.getJSONObject(i).let { it.put("t", Names.swap(it.optString("t"), fromN, toN)) }
+                f.writeText(out.toString())
+            }
+            else -> f.writeText("[]")
+        }
+        save(c, list(c) + org.json.JSONObject().put("id", id).put("name", name.ifBlank { "Banco ${list(c).size + 1}" }))
+        return id
+    }
+
+    fun delete(c: Context, id: String): Boolean {
+        if (id == MAIN || id == active(c)) return false
+        fileOf(c, id).delete(); save(c, list(c).filter { it.optString("id") != id }); return true
+    }
+
+    fun size(c: Context, id: String): Int = if (id == active(c)) CaptionDB.size(c) else try { org.json.JSONArray(fileOf(c, id).readText()).length() } catch (e: Exception) { 0 }
+
+    /** Cola uma lista (uma legenda por linha; linha em branco separa legendas de várias linhas) no banco ativo. */
+    fun paste(c: Context, text: String): Int {
+        val blocks = if (text.contains("\n\n")) text.split(Regex("\n\\s*\n")) else text.lines()
+        var n = 0
+        blocks.map { it.trim().replace(Regex("^\\s*(\\d+[).:-]|[-•*])\\s*"), "") }.filter { it.length >= 3 }.forEach { t ->
+            if (CaptionDB.find(c, t) == null) { CaptionDB.add(c, t, "minha"); n++ }
+        }
+        return n
     }
 }

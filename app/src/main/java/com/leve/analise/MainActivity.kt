@@ -758,6 +758,7 @@ class MainActivity : Activity() {
         page = pages["Legendas"]!!
         buildCaptionsTab()
         page = pages["Legendas"]!!
+        banksUi()
         namesUi()
 
         // ===== Instagram
@@ -967,6 +968,53 @@ class MainActivity : Activity() {
                 AlertDialog.Builder(this).setMessage("Apagar ${o.optString("name")} e TODO o banco dela (fotos, vídeos, legendas, números)? Não dá pra desfazer.")
                     .setPositiveButton("Apagar") { _, _ -> Profiles.delete(this, o.optString("id")); toast("Apagada"); recreate() }.setNegativeButton("Cancelar", null).show()
             }.show()
+        }
+    }
+
+    private fun banksUi() {
+        val cb = card("🗂 Bancos de legendas")
+        text("Monte bancos diferentes (outro estilo, outra modelo, um teste) e escolha qual o sorteio usa. Cada banco aprende separado. Trocar de banco não mexe em fotos, vídeos nem números.", 12f, MUTED, parent = cb)
+        val tv = text("", 14f, FG, parent = cb, bold = true)
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }; cb.addView(box, lpMatch())
+        fun draw() {
+            tv.text = "Usando agora: " + Banks.activeName(this) + " (${CaptionDB.size(this)} legendas)"
+            box.removeAllViews()
+            Banks.list(this).forEach { b ->
+                val id = b.optString("id"); val on = id == Banks.active(this)
+                val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }; box.addView(r, lpMatch())
+                r.addView(TextView(this).apply { text = (if (on) "● " else "○ ") + b.optString("name") + "  ·  ${Banks.size(this@MainActivity, id)}"; textSize = 14f; setTextColor(if (on) 0xFFFF9DB4.toInt() else FG) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                if (!on) button("Usar", r) { Thread { Banks.switchTo(this, id); ui.post { toast("Agora o sorteio usa: ${b.optString("name")}"); draw(); renderMine() } }.start() }
+                if (!on && id != Banks.MAIN) button("🗑", r) {
+                    AlertDialog.Builder(this).setMessage("Apagar o banco \"${b.optString("name")}\"?").setPositiveButton("Apagar") { _, _ -> Banks.delete(this, id); draw() }.setNegativeButton("Cancelar", null).show()
+                }
+            }
+        }
+        draw()
+        text("Num banco alternativo, o sorteio usa:", 12f, MUTED, parent = cb)
+        chips(cb, listOf("Só este banco", "Este banco + legendas das fotos"), { if (Banks.mode(this) == "so") "Só este banco" else "Este banco + legendas das fotos" }) { Banks.setMode(this, if (it.startsWith("Só")) "so" else "mais") }
+        chips(cb, listOf("+ vencedoras do Principal", "Sem misturar"), { if (Banks.mixMain(this)) "+ vencedoras do Principal" else "Sem misturar" }) { Banks.setMixMain(this, it.startsWith("+")) }
+        button("➕ Montar um banco novo", cb, primary = true) {
+            val opts = arrayListOf("Vazio (eu encho: colar lista ou IA)" to "vazio", "Cópia do banco atual (sem as notas)" to "copia")
+            Banks.list(this).filter { it.optString("id") != Banks.active(this) }.forEach { opts += "Cópia de \"${it.optString("name")}\"" to "banco:" + it.optString("id") }
+            Profiles.others(this).forEach { opts += "Legendas de ${it.optString("name")} (nome trocado)" to "modelo:" + it.optString("id") }
+            val et = EditText(this).apply { hint = "Nome do banco (ex.: Provocante, Teste B)"; setSingleLine(true) }
+            AlertDialog.Builder(this).setTitle("Começar de onde?").setItems(opts.map { it.first }.toTypedArray()) { _, w ->
+                AlertDialog.Builder(this).setTitle("Nome do banco").setView(LinearLayout(this).apply { setPadding(dp(20), dp(6), dp(20), 0); addView(et, lpMatch()) })
+                    .setPositiveButton("Criar e usar") { _, _ ->
+                        Thread { val id = Banks.create(this, et.text.toString(), opts[w].second); Banks.switchTo(this, id)
+                            ui.post { toast("Banco criado e em uso. Encha com ✨ IA ou colando uma lista."); draw(); renderMine() } }.start()
+                    }.setNegativeButton("Cancelar", null).show()
+            }.show()
+        }
+        val r2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; cb.addView(r2, lpMatch())
+        button("📋 Colar lista", r2, weight = true) {
+            val clip = (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).primaryClip?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
+            if (clip.isBlank()) { toast("Copie a lista primeiro (uma legenda por linha)"); return@button }
+            Thread { val n = Banks.paste(this, clip); ui.post { toast("✓ $n legenda(s) no banco ${Banks.activeName(this)}"); draw(); renderMine() } }.start()
+        }
+        button("✨ Encher com IA", r2, weight = true) {
+            toast("Criando 20 legendas no estilo deste banco…")
+            Thread { val m = try { Captions.fillBank(this, 20) } catch (e: Exception) { "Erro: ${e.message}" }; ui.post { toast(m); draw(); renderMine() } }.start()
         }
     }
 
