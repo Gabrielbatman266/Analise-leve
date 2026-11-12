@@ -57,7 +57,7 @@ class AgendaAndroidTest {
     /** O app usa UM alarme só (sempre o mesmo, trocado a cada mudança). */
     private fun alarmAt(): Long? {
         val l = shadowOf(c.getSystemService(AlarmManager::class.java)).scheduledAlarms
-        assertTrue("devia ter 1 alarme só, tem ${l.size}", l.size <= 1)
+        assertTrue("devia ter 1 alarme só, tem ${l.size}: " + l.joinToString { "${it.triggerAtMs - now()} ms ${it.operation}" }, l.size <= 1)
         return l.firstOrNull()?.triggerAtMs
     }
     private fun notifs() = shadowOf(c.getSystemService(NotificationManager::class.java)).allNotifications
@@ -170,6 +170,7 @@ class AgendaAndroidTest {
         val am = c.getSystemService(AlarmManager::class.java)
         shadowOf(am).scheduledAlarms.toList().forEach { am.cancel(it.operation) }
         assertNull(alarmAt())
+        println("após cancelar: ok")
         Agenda.patch(c, perdido.optString("id")) { it.put("at", now() - 20 * min) }
         // o sistema avisa que ligou
         c.sendBroadcast(Intent(Intent.ACTION_BOOT_COMPLETED).setComponent(ComponentName(c, AgendaReceiver::class.java)))
@@ -314,7 +315,8 @@ class AgendaAndroidTest {
         ThreadsPublish.runPending(c)
         assertEquals(AgendaCore.PUBLICADA, Agenda.get(c, o.optString("id"))!!.optString("status"))
         assertTrue(reqs.none { it.path.orEmpty().startsWith("/v1.0/u1/threads_publish") })
-        assertTrue(reqs.none { it.method == "POST" && it.path.orEmpty().startsWith("/v1.0/u1/threads") })
+        assertTrue(reqs.joinToString { it.method + " " + it.path } + " | " + Agenda.get(c, o.optString("id"))!!.optJSONArray("log"),
+            reqs.none { it.method == "POST" && it.path.orEmpty().startsWith("/v1.0/u1/threads") })
     }
 
     @Test fun semPermissaoViraErroELembrete() {
