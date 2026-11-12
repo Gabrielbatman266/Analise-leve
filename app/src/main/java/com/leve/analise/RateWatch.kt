@@ -651,6 +651,13 @@ class ScreenReader : AccessibilityService() {
 
     private fun tap(n: AccessibilityNodeInfo) = tapNode(n) || clickable(n)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
 
+    /** Anota o passo (e o que tinha na tela) pro 📋 diagnóstico. */
+    private fun clog(msg: String, all: List<AccessibilityNodeInfo>) {
+        val labels = all.mapNotNull { n -> ((n.contentDescription ?: n.text)?.toString()?.trim()?.takeIf { it.isNotEmpty() })?.take(24)?.let { it + (if (n.isClickable) "*" else "") } }.distinct().take(40)
+        val l = (Store.prefs(this).getString("agendar_log", "") ?: "").split("\n").takeLast(12) + (android.text.format.DateFormat.format("HH:mm:ss", System.currentTimeMillis()).toString() + " [$cStep] $msg · " + labels.joinToString(" | "))
+        Store.prefs(this).edit().putString("agendar_log", l.joinToString("\n")).apply()
+    }
+
     private fun composeStep() {
         val now = System.currentTimeMillis(); if (now - cLast < 600) return; cLast = now
         if (now - cTapAt < 1500) { h.postDelayed({ composeStep() }, 1600); return } // espera a tela reagir ao último toque
@@ -669,7 +676,8 @@ class ScreenReader : AccessibilityService() {
             1 -> { // novo post
                 if (editor) { cStep = 2; cTries = 0; composeStep(); return }
                 val b = all.firstOrNull { CREATE.matches(lab(it)) } ?: all.firstOrNull { lab(it) == "+" }
-                if (b == null) { if (cTries >= 6) cFail("Não achei o botão de novo post.", all) else again(); return }
+                if (b == null) { clog("sem botão de novo post", all); if (cTries >= 6) cFail("Não achei o botão de novo post.", all) else again(); return }
+                clog("toquei em novo post: " + lab(b), all)
                 show("🗓 Abrindo um post novo…"); if (tap(b)) cTapAt = now; again()
             }
             2 -> { // anexar foto (o editor já tem foto? pula)
@@ -680,7 +688,8 @@ class ScreenReader : AccessibilityService() {
                     // sem nome: o 1º ícone da fileira de ferramentas embaixo do texto (galeria)
                     ?: all.filter { val r = rect(it); r.top > er.top && r.width() in dpx(24)..dpx(72) && r.height() in dpx(24)..dpx(72) && it.isClickable }
                         .groupBy { rect(it).centerY() / dpx(16) }.values.filter { it.size >= 3 }.minByOrNull { rect(it.first()).top }?.minByOrNull { rect(it).left }
-                if (b == null) { if (cTries >= 5) cFail("Não achei o botão de anexar foto.", all) else again(); return }
+                if (b == null) { clog("sem botão de anexar", all); if (cTries >= 5) cFail("Não achei o botão de anexar foto.", all) else again(); return }
+                clog("toquei em anexar: " + lab(b), all)
                 show("🗓 Anexando a foto…"); if (tap(b)) { cTapAt = now; cStep = 3; cTries = 0 }; again()
             }
             3 -> { // galeria do Threads: toca UMA vez na foto mais recente; depois só confirma e segue (nunca escolhe duas)
@@ -694,7 +703,8 @@ class ScreenReader : AccessibilityService() {
                     .map { it to rect(it) }.filter { (n, r) -> r.width() in dpx(60)..(dm.widthPixels / 2) && Math.abs(r.width() - r.height()) < dpx(30) && r.top > dm.heightPixels * 0.12 && !Regex("c[aâ]mera").containsMatchIn(lab(n)) }
                     .sortedWith(compareBy({ it.second.top / dpx(30) }, { it.second.left }))
                 val first = thumbs.firstOrNull()?.first
-                if (first == null) { if (cTries >= 6) cFail("Não achei as fotos da galeria do Threads.", all) else again(); return }
+                if (first == null) { clog("sem fotos na galeria", all); if (cTries >= 6) cFail("Não achei as fotos da galeria do Threads.", all) else again(); return }
+                clog("toquei na 1ª foto", all)
                 show("🗓 Escolhendo a foto…"); if (tap(first)) { cTapAt = now; cPicked = true; cTries = 0 } else cTries++; again()
             }
             4 -> { // legenda
@@ -719,7 +729,8 @@ class ScreenReader : AccessibilityService() {
                 val more = all.filter { val r = rect(it); r.top < dm.heightPixels * 0.2 && r.left > dm.widthPixels * 0.6 && (MORE.matches(lab(it)) || it.isClickable && r.width() in dpx(24)..dpx(72)) }
                     .filter { !POSTBTN.matches(lab(it)) }.maxByOrNull { rect(it).left }
                 if (all.any { Regex("ai label|rótulo de ia|rotulo de ia").containsMatchIn(lab(it)) }) { performGlobalAction(GLOBAL_ACTION_BACK); cStep = 4; cTapAt = now; cTries++; again(); return } // menu sem Agendar = sem texto ainda
-                if (more == null || cTries >= 5) { cFail("Não achei o ⋯ › Agendar.", all); return }
+                if (more == null || cTries >= 5) { clog("sem ⋯/Agendar", all); cFail("Não achei o ⋯ › Agendar.", all); return }
+                clog("toquei no ⋯: " + lab(more), all)
                 show("🗓 Abrindo o ⋯ › Agendar…"); if (tap(more)) cTapAt = now; cTries++; again()
             }
         }

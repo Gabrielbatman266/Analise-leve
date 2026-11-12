@@ -191,8 +191,11 @@ class BatchActivity : Activity() {
             PostQueue.putInGallery(this, o.optString("id"), force = true)
             Store.prefs(this).edit().putInt("lote_wait", i).apply()
             val r = ScreenReader.instance
-            startActivity(VideoExport.shareTo(this, PostQueue.uri(o.optString("id")), "image/jpeg", PostQueue.THREADS, listOf("share", "compose", "post"), o.optString("cap")))
-            if (r != null) { r.armCompose("$day às $t", o.optString("cap")); r.hint("🗓 Montando o post ${i + 1} de ${l.size} pra agendar ($day às $t)…", 3000) }
+            // O editor que abre pelo "Compartilhar" NÃO tem Agendar. Só o do botão de novo post (dentro do Threads) tem.
+            // Galeria leve: a pasta PostLeve fica só com a foto deste post, a mais nova do celular → é a 1ª na galeria do Threads.
+            val launch = packageManager.getLaunchIntentForPackage(PostQueue.THREADS)?.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) ?: throw Exception("sem Threads")
+            startActivity(launch)
+            if (r != null) { r.armCompose("$day às $t", o.optString("cap"), fromShare = false); r.hint("🗓 Montando o post ${i + 1} de ${l.size} pra agendar ($day às $t)…", 3000) }
             else Toast.makeText(this, "Ligue o Leitor de tela pra eu montar o post sozinho. Na mão: + › foto mais recente › colar legenda › ⋯ › Agendar ($day às $t)", Toast.LENGTH_LONG).show()
         } catch (e: Exception) { Toast.makeText(this, "Não achei o Threads", Toast.LENGTH_LONG).show() }
     }

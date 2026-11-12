@@ -140,6 +140,7 @@ object PostQueue {
                 put(MediaStore.Images.Media.DISPLAY_NAME, "post_${System.currentTimeMillis()}.jpg")
                 put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
                 put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/PostLeve")
+                put(MediaStore.Images.Media.DATE_TAKEN, System.currentTimeMillis()) // mais nova de todas: 1ª na galeria do Threads
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }
             val uri = cr.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: return null
