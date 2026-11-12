@@ -625,6 +625,87 @@ class ScreenReader : AccessibilityService() {
         if (tapNode(next) || clickable(next)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) { schedStep = 1; schedTapAt = now }
     }
 
+    // ================= 🗓 lote pelo editor COMPLETO do Threads (é só nele que existe o Agendar) =================
+    // Passos: 1) toca em novo post  2) toca em anexar foto  3) escolhe a foto mais recente (a que o app acabou de pôr na galeria)
+    //         4) escreve a legenda  5) ⋯ › Agendar. Nunca toca em "Postar/Post".
+    private var composeUntil = 0L; private var cStep = 0; private var cCap = ""; private var cLabel = ""; private var cLast = 0L; private var cTapAt = 0L; private var cTries = 0
+    private val CREATE = Regex("^(create|criar|new thread|novo thread|nova thread|novo post|create thread|criar thread|compose|escrever|start a thread|comece um thread|iniciar thread)$")
+    private val ATTACH = Regex("^(attach media|anexar mídia|anexar midia|anexar|add media|adicionar mídia|adicionar midia|add photos|add photos and videos|adicionar fotos|adicionar fotos e vídeos|gallery|galeria|photo library|biblioteca de fotos|attach photos|media|mídia|midia|foto e vídeo|photos and videos|fotos e vídeos)$")
+    private val PICK_DONE = Regex("^(add|adicionar|next|avançar|avancar|done|concluir|ok|choose|escolher|select|selecionar)$")
+    private val POSTBTN = Regex("^(post|postar|publicar|publish|share|compartilhar)$")
+
+    fun armCompose(label: String, cap: String) {
+        composeUntil = System.currentTimeMillis() + 180_000L; cStep = 1; cCap = cap; cLabel = label; cTries = 0; cTapAt = 0
+        h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, 1800)
+    }
+
+    private fun cFail(msg: String, all: List<AccessibilityNodeInfo>) {
+        composeUntil = 0
+        dump(all.mapNotNull { (it.text ?: it.contentDescription)?.toString() })
+        show("🗓 $msg\nFaça esse passo na mão: a foto é a mais recente da galeria e a legenda já está copiada. Depois ⋯ › Agendar › $cLabel", 0xEEB45309.toInt())
+        h.postDelayed({ if (!running && !forcing) clearOverlay() }, 12000)
+    }
+
+    private fun tap(n: AccessibilityNodeInfo) = tapNode(n) || clickable(n)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+
+    private fun composeStep() {
+        val now = System.currentTimeMillis(); if (now - cLast < 600) return; cLast = now
+        if (now - cTapAt < 1500) { h.postDelayed({ composeStep() }, 1600); return } // espera a tela reagir ao último toque
+        val root = rootInActiveWindow ?: return
+        if (root.packageName?.toString() != ThreadsNotif.THREADS) return
+        val all = nodes(root).filter { it.isVisibleToUser }
+        fun lab(n: AccessibilityNodeInfo) = norm(((n.contentDescription ?: n.text) ?: "").toString())
+        val dm = resources.displayMetrics
+        val editor = all.any { it.isEditable }
+        val photosInEditor = all.filter { it.className?.toString()?.contains("Image") == true }.map { rect(it) }.filter { it.width() > dm.widthPixels * 0.35 && it.height() > dpx(150) }
+        fun again() { if (++cTries > 8) return; h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, 1500) }
+        when (cStep) {
+            1 -> { // novo post
+                if (editor) { cStep = 2; cTries = 0; composeStep(); return }
+                val b = all.firstOrNull { CREATE.matches(lab(it)) } ?: all.firstOrNull { lab(it) == "+" }
+                if (b == null) { if (cTries >= 6) cFail("Não achei o botão de novo post.", all) else again(); return }
+                show("🗓 Abrindo um post novo…"); if (tap(b)) cTapAt = now; again()
+            }
+            2 -> { // anexar foto (o editor já tem foto? pula)
+                if (!editor) { again(); return }
+                if (photosInEditor.isNotEmpty()) { cStep = 4; cTries = 0; composeStep(); return }
+                val ed = all.first { it.isEditable }; val er = rect(ed)
+                val b = all.firstOrNull { ATTACH.matches(lab(it)) }
+                    // sem nome: o 1º ícone da fileira de ferramentas embaixo do texto (galeria)
+                    ?: all.filter { val r = rect(it); r.top > er.top && r.width() in dpx(24)..dpx(72) && r.height() in dpx(24)..dpx(72) && it.isClickable }
+                        .groupBy { rect(it).centerY() / dpx(16) }.values.filter { it.size >= 3 }.minByOrNull { rect(it.first()).top }?.minByOrNull { rect(it).left }
+                if (b == null) { if (cTries >= 5) cFail("Não achei o botão de anexar foto.", all) else again(); return }
+                show("🗓 Anexando a foto…"); if (tap(b)) { cTapAt = now; cStep = 3; cTries = 0 }; again()
+            }
+            3 -> { // galeria do Threads: a foto mais recente (a 1ª que não é a câmera)
+                if (editor && photosInEditor.isNotEmpty()) { cStep = 4; cTries = 0; composeStep(); return }
+                all.firstOrNull { PICK_DONE.matches(lab(it)) && !POSTBTN.matches(lab(it)) }?.let { b -> if (cTries > 0) { if (tap(b)) cTapAt = now; again(); return } }
+                val thumbs = all.filter { it.className?.toString()?.let { c -> c.contains("Image") || c.contains("View") } == true }
+                    .map { it to rect(it) }.filter { (n, r) -> r.width() in dpx(60)..(dm.widthPixels / 2) && Math.abs(r.width() - r.height()) < dpx(30) && r.top > dm.heightPixels * 0.12 && !Regex("c[aâ]mera").containsMatchIn(lab(n)) }
+                    .sortedWith(compareBy({ it.second.top / dpx(30) }, { it.second.left }))
+                val first = thumbs.firstOrNull()?.first
+                if (first == null) { if (cTries >= 6) cFail("Não achei as fotos da galeria do Threads.", all) else again(); return }
+                show("🗓 Escolhendo a foto…"); if (tap(first)) cTapAt = now; cTries++; again()
+            }
+            4 -> { // legenda
+                val ed = all.firstOrNull { it.isEditable } ?: run { again(); return }
+                val cur = if (android.os.Build.VERSION.SDK_INT >= 26 && ed.isShowingHintText) "" else (ed.text ?: "").toString().trim()
+                if (cur.isEmpty()) ed.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, android.os.Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, cCap) })
+                cStep = 5; cTries = 0; cTapAt = now; again()
+            }
+            5 -> { // ⋯ de cima › Agendar
+                all.firstOrNull { SCHED.matches(lab(it)) || SCHED.matches(norm((it.text ?: "").toString())) }?.let { b ->
+                    if (tap(b)) { composeUntil = 0; show("🗓 Agora escolha a data e a hora: $cLabel\ne toque em Agendar", 0xEE15803D.toInt()); h.postDelayed({ if (!running && !forcing) clearOverlay() }, 10000) }
+                    return
+                }
+                val more = all.filter { val r = rect(it); r.top < dm.heightPixels * 0.2 && r.left > dm.widthPixels * 0.6 && (MORE.matches(lab(it)) || it.isClickable && r.width() in dpx(24)..dpx(72)) }
+                    .filter { !POSTBTN.matches(lab(it)) }.maxByOrNull { rect(it).left }
+                if (more == null || cTries >= 5) { cFail("Não achei o ⋯ › Agendar.", all); return }
+                show("🗓 Abrindo o ⋯ › Agendar…"); if (tap(more)) cTapAt = now; cTries++; again()
+            }
+        }
+    }
+
     /** Aviso por cima do app aberto (usado pelo agendamento em lote). */
     fun hint(msg: String, ms: Long) { h.post { show(msg, 0xEE15803D.toInt()); h.postDelayed({ if (!running && !forcing) clearOverlay() }, ms) } }
 
@@ -1015,7 +1096,8 @@ class ScreenReader : AccessibilityService() {
         val ep = e?.packageName?.toString()
         if (!running && Macro.on(this) && ep == Macro.app(this)) { appPkg = ep; doneCells.clear(); startMacro() }
         if (ep != null && !running) try { forceCaption(ep) } catch (x: Exception) { }
-        if (ep == ThreadsNotif.THREADS && schedUntil > System.currentTimeMillis()) try { trySchedule() } catch (x: Exception) { }
+        if (ep == ThreadsNotif.THREADS && composeUntil > System.currentTimeMillis()) try { composeStep() } catch (x: Exception) { ErrLog.log(this, "agendar: passo $cStep", x) }
+        else if (ep == ThreadsNotif.THREADS && schedUntil > System.currentTimeMillis()) try { trySchedule() } catch (x: Exception) { }
         if ((ep == ThreadsNotif.THREADS || ep == ThreadsNotif.INSTA) && !running) h.post { showReadBtn() }
         if (ep == ThreadsRefs.THREADS) ThreadsRefs.threadsActive(this) // 📌 salvou mídia no Threads? já puxa pras Referências
         if (running) return // durante a coleta, quem lê é o próprio macro

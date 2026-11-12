@@ -131,9 +131,9 @@ object PostQueue {
     fun galleryOn(c: Context) = Store.prefs(c).getBoolean("gallery_first", true)
 
     /** Coloca a foto em primeiro na galeria (pasta Pictures/PostLeve). Apaga a cópia anterior antes. */
-    fun putInGallery(c: Context, id: String): Uri? {
+    fun putInGallery(c: Context, id: String, force: Boolean = false): Uri? {
         cleanGallery(c, true)
-        if (Build.VERSION.SDK_INT < 29 || !galleryOn(c)) return null
+        if (Build.VERSION.SDK_INT < 29 || (!galleryOn(c) && !force)) return null
         return try {
             val cr = c.contentResolver
             val cv = ContentValues().apply {

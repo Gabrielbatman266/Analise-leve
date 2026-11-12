@@ -167,15 +167,16 @@ class BatchActivity : Activity() {
         val o = l[i]; val t = hm(o.optLong("at"))
         val day = if (android.text.format.DateUtils.isToday(o.optLong("at"))) "hoje" else "amanhã"
         try {
+            // O Agendar só existe no editor COMPLETO do Threads (o do "Compartilhar" não tem). Então: a foto vira a mais recente
+            // da galeria, a legenda fica copiada, o Threads abre normal e o leitor faz: novo post › anexar › foto › legenda › ⋯ › Agendar.
             ClipSync.copy(this, o.optString("cap"))
-            PostQueue.putInGallery(this, o.optString("id"))
-            startActivity(VideoExport.shareTo(this, PostQueue.uri(o.optString("id")), "image/jpeg", PostQueue.THREADS, listOf("share", "compose", "post"), o.optString("cap")))
-            CapForce.arm(this, "fila", o.optString("cap"))
+            PostQueue.putInGallery(this, o.optString("id"), force = true)
             Store.prefs(this).edit().putInt("lote_wait", i).apply()
-            val msg = "🗓 Agende para $day às $t  (${i + 1} de ${l.size})\nToque nos ⋯ do post › Agendar"
             val r = ScreenReader.instance
-            if (r != null) { r.armSchedule("$day às $t"); r.hint(msg, 6000) } // o leitor abre o ⋯ › Agendar sozinho
-            else Toast.makeText(this, msg + "\n(ligue o Leitor de tela pra eu abrir o Agendar sozinho)", Toast.LENGTH_LONG).show()
+            val launch = packageManager.getLaunchIntentForPackage(PostQueue.THREADS)?.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) ?: throw Exception("sem Threads")
+            startActivity(launch)
+            if (r != null) { r.armCompose("$day às $t", o.optString("cap")); r.hint("🗓 Montando o post ${i + 1} de ${l.size} pra agendar ($day às $t)…", 3000) }
+            else Toast.makeText(this, "Ligue o Leitor de tela pra eu montar o post sozinho. Na mão: + › foto mais recente › colar legenda › ⋯ › Agendar ($day às $t)", Toast.LENGTH_LONG).show()
         } catch (e: Exception) { Toast.makeText(this, "Não achei o Threads", Toast.LENGTH_LONG).show() }
     }
 }
