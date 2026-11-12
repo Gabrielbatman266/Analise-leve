@@ -83,6 +83,7 @@ class AgendaActivity : Activity() {
         intent.getStringExtra("id")?.let { id -> Agenda.get(this, id)?.let { sel = dayOf(it.optLong("at")); view = "dia" } }
         draw()
         intent.getStringExtra("id")?.let { id -> Agenda.get(this, id)?.let { scroll.post { actions(it) } } }
+        if (intent.getBooleanExtra("lot", false)) scroll.post { lot() }
     }
 
     override fun onResume() { super.onResume(); if (screen == "agenda" && ::root.isInitialized) draw() }
@@ -100,7 +101,7 @@ class AgendaActivity : Activity() {
         val top = row(root)
         btn("+ Novo agendamento", top, primary = true, weight = true) { editor(null) }
         val r2 = row(root)
-        btn("✨ Montar vários", r2, weight = true, small = true) { lot() }
+        btn("✨ Vários de uma vez", r2, weight = true, small = true) { lot() }
         btn("⚙ Publicação", r2, weight = true, small = true) { settings() }
         btn("🧪 Testar", r2, weight = true, small = true) {
             val o = Agenda.selfTest(this, 60)
@@ -480,39 +481,62 @@ class AgendaActivity : Activity() {
     }
 
     // ================================================================= montar vários
+    /**
+     * ✨ Agendar vários de uma vez: escolhe quantos dias e quantos posts por dia; o app sorteia foto+legenda
+     * (mesmo sorteio da fila) e põe cada um num horário em que sua audiência está ativa, sem bater com o que já tem.
+     */
     private fun lot() {
-        var n = 5; var tomorrow = LocalTime.now().isAfter(LocalTime.of(21, 0)); var mode = Agenda.defaultMode(this)
+        var perDay = 5; var days = 3; var fromTomorrow = LocalTime.now().isAfter(LocalTime.of(21, 0))
+        var mode = if (ThreadsPublish.ready(this)) "api" else Agenda.defaultMode(this).let { if (it == "threads") "lembrete" else it }
+        var startH = 9; var endH = 23
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(8), dp(18), dp(8)) }
         fun drawBox() {
             box.removeAllViews()
-            tv("Quantos", 13f, FG, box, true)
-            val r = row(box); listOf(3, 5, 8, 10).forEach { k -> btn("$k", r, weight = true, small = true, on = n == k) { n = k; drawBox() } }
-            tv("Quando", 13f, FG, box, true)
-            val r2 = row(box); btn("Hoje", r2, weight = true, small = true, on = !tomorrow) { tomorrow = false; drawBox() }; btn("Amanhã", r2, weight = true, small = true, on = tomorrow) { tomorrow = true; drawBox() }
+            tv("Posts por dia", 13f, FG, box, true)
+            val r = row(box); listOf(2, 3, 5, 8, 10).forEach { k -> btn("$k", r, weight = true, small = true, on = perDay == k) { perDay = k; drawBox() } }
+            tv("Por quantos dias", 13f, FG, box, true)
+            val r1 = row(box); listOf(1, 2, 3, 5, 7).forEach { k -> btn(if (k == 1) "1 dia" else "$k", r1, weight = true, small = true, on = days == k) { days = k; drawBox() } }
+            val r2 = row(box); btn("Começando hoje", r2, weight = true, small = true, on = !fromTomorrow) { fromTomorrow = false; drawBox() }; btn("Começando amanhã", r2, weight = true, small = true, on = fromTomorrow) { fromTomorrow = true; drawBox() }
+            tv("Entre", 13f, FG, box, true)
+            val r4 = row(box)
+            btn("das %02dh".format(startH), r4, weight = true, small = true) { TimePickerDialog(this, { _, h, _ -> startH = h.coerceAtMost(endH - 1); drawBox() }, startH, 0, true).show() }
+            btn("às %02dh".format(endH), r4, weight = true, small = true) { TimePickerDialog(this, { _, h, _ -> endH = h.coerceIn(startH + 1, 23); drawBox() }, endH, 0, true).show() }
             tv("Como sai", 13f, FG, box, true)
-            val r3 = row(box); listOf("api" to "🤖 Sozinho", "lembrete" to "🔔 Me chama", "threads" to "📲 Eu agendo no Threads").forEach { (k, l) -> btn(l, r3, weight = true, small = true, on = mode == k) { mode = k; drawBox() } }
-            tv("Horários nas horas em que sua audiência está mais ativa, com espaço entre os posts. Foto e legenda pelo mesmo sorteio da fila." +
-                (if (mode == "threads") " Depois eu te levo um por um pro Threads (tela 'Agendar vários')." else ""), 11.5f, MUTED, box)
+            val r3 = row(box); listOf("api" to "🤖 Sozinho", "lembrete" to "🔔 Me chama").forEach { (k, l) -> btn(l, r3, weight = true, small = true, on = mode == k) { mode = k; drawBox() } }
+            tv("Total: ${perDay * days} posts. " + if (mode == "api") (if (!ThreadsPublish.ready(this)) "⚠ A publicação sozinha ainda não está liberada (⚙ Publicação). Até liberar, cada um vira lembrete na hora."
+                else if (!ThreadsPublish.hostReady(this)) "⚠ Pra foto sair sozinha falta a hospedagem (⚙ Publicação). Até lá, cada um vira lembrete na hora."
+                else "Cada um sai sozinho na hora, você não precisa fazer nada (o celular só precisa estar ligado e com internet).")
+                else "Na hora de cada um chega uma notificação com foto e legenda; um toque abre o Threads pronto.", 11.5f, if (mode == "api" && !ThreadsPublish.canPhoto(this)) WARN else MUTED, box)
         }
         drawBox()
-        AlertDialog.Builder(this).setTitle("✨ Montar vários").setView(box).setPositiveButton("Montar") { _, _ ->
-            if (mode == "threads") { Batch.build(this, n, tomorrow); startActivity(Intent(this, BatchActivity::class.java)); return@setPositiveButton }
-            val day = LocalDate.now().plusDays(if (tomorrow) 1 else 0)
-            val from = if (tomorrow) ZonedDateTime.of(day, LocalTime.of(8, 0), zone).toInstant().toEpochMilli() else System.currentTimeMillis() + 40 * 60_000L
-            val to = ZonedDateTime.of(day, LocalTime.of(23, 30), zone).toInstant().toEpochMilli()
-            if (to - from < 30 * 60_000L) { toast("Não sobra horário hoje: escolha Amanhã"); return@setPositiveButton }
-            val busy = Agenda.all(this).filter { it.optString("status") in AgendaCore.ACTIVE }.map { it.optLong("at") }
-            val slots = Batch.slots(this, n + busy.size, from, to).filter { t -> busy.none { Math.abs(it - t) < Agenda.gapMin(this) * 60_000L } }.take(n)
-            var made = 0
-            slots.forEach { t ->
-                val pk = Captions.randomPick(this, promo = false) ?: return@forEach
-                Captions.remember(this, pk.first, pk.second)
-                Agenda.create(this, t, mode, "foto", pk.first, pk.second); made++
-            }
-            sel = day; view = "dia"
-            toast(if (made == 0) "Fila vazia ou sem horário livre" else "✨ $made posts agendados: " + slots.take(made).joinToString(" · ") { hm(it) })
+        AlertDialog.Builder(this).setTitle("✨ Agendar vários de uma vez").setView(ScrollView(this).apply { addView(box) }).setPositiveButton("Agendar") { _, _ ->
+            val made = buildLot(perDay, days, fromTomorrow, startH, endH, mode)
+            if (made.isEmpty()) { toast("Fila vazia ou sem horário livre nesses dias"); return@setPositiveButton }
+            sel = dayOf(made.first()); view = "lista"; listFilter = "proximos"
+            toast("✨ ${made.size} posts agendados: de " + AgendaCore.fmt(made.first()) + " até " + AgendaCore.fmt(made.last()))
             draw()
         }.setNegativeButton("Cancelar", null).show()
+    }
+
+    /** Monta os agendamentos; devolve os horários criados. */
+    private fun buildLot(perDay: Int, days: Int, fromTomorrow: Boolean, startH: Int, endH: Int, mode: String): List<Long> {
+        val out = ArrayList<Long>()
+        val gap = Agenda.gapMin(this) * 60_000L
+        for (k in 0 until days) {
+            val day = LocalDate.now().plusDays((k + if (fromTomorrow) 1 else 0).toLong())
+            var from = ZonedDateTime.of(day, LocalTime.of(startH, 0), zone).toInstant().toEpochMilli()
+            val to = ZonedDateTime.of(day, LocalTime.of(endH, if (endH == 23) 30 else 0), zone).toInstant().toEpochMilli()
+            from = maxOf(from, System.currentTimeMillis() + 30 * 60_000L)
+            if (to - from < 30 * 60_000L) continue
+            val busy = Agenda.all(this).filter { it.optString("status") in AgendaCore.ACTIVE }.map { it.optLong("at") } + out
+            val slots = Batch.slots(this, perDay + busy.size, from, to).filter { t -> busy.none { Math.abs(it - t) < gap } }.take(perDay)
+            for (t in slots) {
+                val pk = Captions.randomPick(this, promo = false) ?: break
+                Captions.remember(this, pk.first, pk.second) // reservada: o próximo sorteio pega outra
+                Agenda.create(this, t, mode, "foto", pk.first, pk.second); out += t
+            }
+        }
+        return out.sorted()
     }
 
     // ================================================================= ajustes

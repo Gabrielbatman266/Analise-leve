@@ -676,7 +676,8 @@ class MainActivity : Activity() {
         }
         val agInfo = text(try { Agenda.summary(this) } catch (e: Exception) { "" }, 12f, MUTED, parent = cp)
         agendaRedraw = { agInfo.text = try { Agenda.summary(this) } catch (e: Exception) { "" } }
-        button("🗓 Agenda (calendário, repetição, publicar sozinho)", cp, primary = true) { startActivity(Intent(this, AgendaActivity::class.java)) }
+        button("✨ Agendar vários de uma vez", cp, primary = true) { startActivity(Intent(this, AgendaActivity::class.java).putExtra("lot", true)) }
+        button("🗓 Agenda (calendário, editar, repetição)", cp) { startActivity(Intent(this, AgendaActivity::class.java)) }
         button("🗓 Agendar vários no Threads (um por um)", cp) { startActivity(Intent(this, BatchActivity::class.java)) }
         tvPostInfo = text("", 13f, OK, parent = cp)
         val cpR = sub(cp, "⏰ Lembretes, blocos e horários")

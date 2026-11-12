@@ -401,4 +401,24 @@ class AgendaAndroidTest {
         // ajustes
         click(a, "⚙ Publicação"); assertTrue(has(a, "Hospedagem da foto")); assertTrue(has(a, "Diagnóstico da agenda"))
     }
+
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @Test fun variosDeUmaVezEmVariosDias() {
+        repeat(12) { k -> PostQueue.add(c, Bitmap.createBitmap(300, 400, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.rgb(k * 20, 80, 120)) }) }
+        PostQueue.load(c).forEach { o -> PostQueue.update(c, o.optString("id")) { it.put("status", "pronta").put("legendas", org.json.JSONArray(listOf("legenda " + o.optString("id")))) } }
+        val a = Robolectric.buildActivity(AgendaActivity::class.java, Intent(c, AgendaActivity::class.java).putExtra("lot", true)).setup().get()
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        val dlg = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog() as android.app.AlertDialog
+        assertTrue(dlg.isShowing)
+        fun tap(t: String) { texts(dlg.window!!.decorView).first { it.text.toString() == t }.performClick(); shadowOf(android.os.Looper.getMainLooper()).idle() }
+        tap("3"); tap("Começando amanhã"); tap("🔔 Me chama")
+        dlg.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick(); shadowOf(android.os.Looper.getMainLooper()).idle()
+        val l = Agenda.all(c).sortedBy { it.optLong("at") }
+        val days = l.map { java.time.Instant.ofEpochMilli(it.optLong("at")).atZone(ZoneId.systemDefault()).toLocalDate() }.toSet()
+        assertEquals("posts: " + l.joinToString { AgendaCore.fmt(it.optLong("at")) }, 9, l.size) // 3 por dia × 3 dias
+        assertEquals(setOf(1L, 2L, 3L).map { LocalDate.now().plusDays(it) }.toSet(), days)
+        assertTrue(l.all { it.optString("photo").isNotEmpty() && it.optString("cap").isNotEmpty() && it.optString("mode") == "lembrete" })
+        assertTrue(Agenda.conflicts(c).isEmpty()) // nenhum colado no outro
+        assertEquals(9, l.map { it.optString("photo") }.toSet().size) // fotos diferentes
+    }
 }
