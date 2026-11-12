@@ -487,7 +487,7 @@ class AgendaActivity : Activity() {
      */
     private fun lot() {
         var perDay = 5; var days = 3; var fromTomorrow = LocalTime.now().isAfter(LocalTime.of(21, 0))
-        var mode = if (ThreadsPublish.ready(this)) "api" else Agenda.defaultMode(this).let { if (it == "threads") "lembrete" else it }
+        var mode = if (ThreadsPublish.canPhoto(this)) "api" else "threads"
         var startH = 9; var endH = 23
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(8), dp(18), dp(8)) }
         fun drawBox() {
@@ -502,14 +502,24 @@ class AgendaActivity : Activity() {
             btn("das %02dh".format(startH), r4, weight = true, small = true) { TimePickerDialog(this, { _, h, _ -> startH = h.coerceAtMost(endH - 1); drawBox() }, startH, 0, true).show() }
             btn("às %02dh".format(endH), r4, weight = true, small = true) { TimePickerDialog(this, { _, h, _ -> endH = h.coerceIn(startH + 1, 23); drawBox() }, endH, 0, true).show() }
             tv("Como sai", 13f, FG, box, true)
-            val r3 = row(box); listOf("api" to "🤖 Sozinho", "lembrete" to "🔔 Me chama").forEach { (k, l) -> btn(l, r3, weight = true, small = true, on = mode == k) { mode = k; drawBox() } }
-            tv("Total: ${perDay * days} posts. " + if (mode == "api") (if (!ThreadsPublish.ready(this)) "⚠ A publicação sozinha ainda não está liberada (⚙ Publicação). Até liberar, cada um vira lembrete na hora."
+            val r3 = row(box); listOf("threads" to "📲 No Agendar do Threads", "api" to "🤖 App publica", "lembrete" to "🔔 Me chama").forEach { (k, l) -> btn(l, r3, weight = true, small = true, on = mode == k) { mode = k; drawBox() } }
+            tv("Total: ${perDay * days} posts. " + if (mode == "threads") "Um toque e eu vou no Threads e agendo um por um no Agendar dele (foto, legenda, data e hora). Depois o Threads publica sozinho, mesmo com o celular desligado. Não mexa no celular enquanto ele agenda (uns 30 s por post)." + (if (ScreenReader.instance == null) " ⚠ Precisa do Leitor de tela ligado." else "") else if (mode == "api") (if (!ThreadsPublish.ready(this)) "⚠ A publicação sozinha ainda não está liberada (⚙ Publicação). Até liberar, cada um vira lembrete na hora."
                 else if (!ThreadsPublish.hostReady(this)) "⚠ Pra foto sair sozinha falta a hospedagem (⚙ Publicação). Até lá, cada um vira lembrete na hora."
                 else "Cada um sai sozinho na hora, você não precisa fazer nada (o celular só precisa estar ligado e com internet).")
                 else "Na hora de cada um chega uma notificação com foto e legenda; um toque abre o Threads pronto.", 11.5f, if (mode == "api" && !ThreadsPublish.canPhoto(this)) WARN else MUTED, box)
         }
         drawBox()
         AlertDialog.Builder(this).setTitle("✨ Agendar vários de uma vez").setView(ScrollView(this).apply { addView(box) }).setPositiveButton("Agendar") { _, _ ->
+            if (mode == "threads") {
+                val items = pickLot(perDay, days, fromTomorrow, startH, endH).map { (t, pk) -> JSONObject().put("id", pk.first).put("cap", pk.second).put("at", t).put("done", false) }
+                if (items.isEmpty()) { toast("Fila vazia ou sem horário livre nesses dias"); return@setPositiveButton }
+                Batch.setItems(this, items)
+                val r = ScreenReader.instance
+                if (r == null) { toast("Ligue o Leitor de tela do Post Leve: é ele que faz os toques no Threads. Depois toque em 🤖 Agendar todos."); startActivity(Intent(this, BatchActivity::class.java))
+                    try { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (e: Exception) { } }
+                else { toast("🤖 Agendando ${items.size} posts no Threads… não mexa no celular"); r.runBatchAuto() }
+                return@setPositiveButton
+            }
             val made = buildLot(perDay, days, fromTomorrow, startH, endH, mode)
             if (made.isEmpty()) { toast("Fila vazia ou sem horário livre nesses dias"); return@setPositiveButton }
             sel = dayOf(made.first()); view = "lista"; listFilter = "proximos"
@@ -519,8 +529,12 @@ class AgendaActivity : Activity() {
     }
 
     /** Monta os agendamentos; devolve os horários criados. */
-    private fun buildLot(perDay: Int, days: Int, fromTomorrow: Boolean, startH: Int, endH: Int, mode: String): List<Long> {
-        val out = ArrayList<Long>()
+    private fun buildLot(perDay: Int, days: Int, fromTomorrow: Boolean, startH: Int, endH: Int, mode: String): List<Long> =
+        pickLot(perDay, days, fromTomorrow, startH, endH).map { (t, pk) -> Agenda.create(this, t, mode, "foto", pk.first, pk.second); t }
+
+    /** Horários (audiência ativa, sem bater com nada) + foto e legenda sorteadas pra cada um. */
+    private fun pickLot(perDay: Int, days: Int, fromTomorrow: Boolean, startH: Int, endH: Int): List<Pair<Long, Pair<String, String>>> {
+        val out = ArrayList<Pair<Long, Pair<String, String>>>()
         val gap = Agenda.gapMin(this) * 60_000L
         for (k in 0 until days) {
             val day = LocalDate.now().plusDays((k + if (fromTomorrow) 1 else 0).toLong())
@@ -528,15 +542,15 @@ class AgendaActivity : Activity() {
             val to = ZonedDateTime.of(day, LocalTime.of(endH, if (endH == 23) 30 else 0), zone).toInstant().toEpochMilli()
             from = maxOf(from, System.currentTimeMillis() + 30 * 60_000L)
             if (to - from < 30 * 60_000L) continue
-            val busy = Agenda.all(this).filter { it.optString("status") in AgendaCore.ACTIVE }.map { it.optLong("at") } + out
+            val busy = Agenda.all(this).filter { it.optString("status") in AgendaCore.ACTIVE }.map { it.optLong("at") } + out.map { it.first }
             val slots = Batch.slots(this, perDay + busy.size, from, to).filter { t -> busy.none { Math.abs(it - t) < gap } }.take(perDay)
             for (t in slots) {
                 val pk = Captions.randomPick(this, promo = false) ?: break
                 Captions.remember(this, pk.first, pk.second) // reservada: o próximo sorteio pega outra
-                Agenda.create(this, t, mode, "foto", pk.first, pk.second); out += t
+                out += t to pk
             }
         }
-        return out.sorted()
+        return out.sortedBy { it.first }
     }
 
     // ================================================================= ajustes

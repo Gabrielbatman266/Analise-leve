@@ -58,6 +58,9 @@ object Batch {
         save(c, l); return l.size
     }
 
+    /** Lote pronto (vários dias): troca o lote pelos itens dados. */
+    fun setItems(c: Context, l: List<JSONObject>) { save(c, l.sortedBy { it.optLong("at") }); p(c).edit().remove("lote_wait").apply() }
+
     /** Horário que já passou (ou está em cima): refaz os horários dos que faltam, a partir de daqui a 20 min. */
     fun refreshTimes(c: Context) {
         val l = load(c); val left = l.filter { !it.optBoolean("done") }
@@ -160,7 +163,8 @@ class BatchActivity : Activity() {
             tv(o.optString("cap").replace('\n', ' ').take(70), 12f, MUTED, col)
             if (!o.optBoolean("done")) card.setOnClickListener { itemMenu(i) }
         }
-        if (left > 0) btn("▶ Agendar o próximo · ${hm(l.first { !it.optBoolean("done") }.optLong("at"))}", root, primary = true) { next() }
+        if (left > 0) btn("🤖 Agendar todos sozinho no Threads ($left)", root, primary = true) { auto() }
+        if (left > 0) btn("▶ Só o próximo · ${hm(l.first { !it.optBoolean("done") }.optLong("at"))}", root) { next() }
         btn("🗑 Recomeçar o lote", root) {
             AlertDialog.Builder(this).setMessage("Apagar este lote e montar outro? (o que você já agendou continua no Threads)").setPositiveButton("Recomeçar") { _, _ -> Batch.clear(this); draw() }.setNegativeButton("Cancelar", null).show()
         }
@@ -177,6 +181,14 @@ class BatchActivity : Activity() {
                 else -> { l.removeAt(i); Batch.save(this, l); draw() }
             }
         }.show()
+    }
+
+    /** 🤖 Um toque: o leitor de tela agenda todos, um atrás do outro, no Agendar do próprio Threads. */
+    private fun auto() {
+        val r = ScreenReader.instance
+        if (r == null) { Toast.makeText(this, "Ligue o Leitor de tela do Post Leve (Acessibilidade) — é ele que faz os toques no Threads", Toast.LENGTH_LONG).show()
+            try { startActivity(android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (e: Exception) { }; return }
+        r.runBatchAuto()
     }
 
     /** Abre o Threads com foto+legenda do próximo e avisa o horário por cima do Threads. */

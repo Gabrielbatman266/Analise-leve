@@ -421,4 +421,24 @@ class AgendaAndroidTest {
         assertTrue(Agenda.conflicts(c).isEmpty()) // nenhum colado no outro
         assertEquals(9, l.map { it.optString("photo") }.toSet().size) // fotos diferentes
     }
+
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @Test fun variosNoAgendarDoThreadsMontaOLote() {
+        repeat(8) { k -> PostQueue.add(c, Bitmap.createBitmap(300, 400, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.rgb(k * 25, 60, 90)) }) }
+        PostQueue.load(c).forEach { o -> PostQueue.update(c, o.optString("id")) { it.put("status", "pronta").put("legendas", org.json.JSONArray(listOf("leg " + o.optString("id")))) } }
+        val a = Robolectric.buildActivity(AgendaActivity::class.java, Intent(c, AgendaActivity::class.java).putExtra("lot", true)).setup().get()
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        val dlg = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog() as android.app.AlertDialog
+        fun tap(t: String) { texts(dlg.window!!.decorView).first { it.text.toString() == t }.performClick(); shadowOf(android.os.Looper.getMainLooper()).idle() }
+        assertTrue(texts(dlg.window!!.decorView).any { it.text.toString().contains("Um toque e eu vou no Threads") }) // padrão: Agendar do Threads
+        tap("2"); tap("2"); tap("Começando amanhã")
+        dlg.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick(); shadowOf(android.os.Looper.getMainLooper()).idle()
+        val b = Batch.load(c)
+        assertEquals(4, b.size); assertTrue(b.none { it.optBoolean("done") })
+        assertEquals(4, b.map { it.optString("id") }.toSet().size)
+        assertTrue(b.zipWithNext().all { (x, y) -> x.optLong("at") < y.optLong("at") })
+        assertTrue(Agenda.all(c).isEmpty()) // só entra na agenda quando o Threads confirmar o agendamento
+        // sem o leitor de tela ligado: abre a tela do lote pra ligar e tocar em "Agendar todos"
+        assertEquals(BatchActivity::class.java.name, shadowOf(a).nextStartedActivity.component?.className)
+    }
 }
