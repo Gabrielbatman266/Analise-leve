@@ -581,6 +581,7 @@ class ScreenReader : AccessibilityService() {
         android.graphics.PixelFormat.TRANSLUCENT)
 
     // ================= 🗓 agendamento em lote: leva direto pra tela de AGENDAR do Threads =================
+    private var schedTapAt = 0L
     private var schedUntil = 0L; private var schedLabel = ""; private var schedStep = 0; private var schedLast = 0L; private var schedTries = 0
     private val SCHED = Regex("^(agendar|agendar\\.\\.\\.|agendar…|agendar publicação|programar|programar publicação|schedule|schedule\\.\\.\\.|schedule…|schedule post|schedule thread)$")
     private val MORE = Regex("^(mais|mais opções|mais opcoes|more|more options|opções|options|menu)$")
@@ -603,12 +604,12 @@ class ScreenReader : AccessibilityService() {
         }
         // 2) só no editor do post novo (tem campo de texto): toca no ⋯ do canto de cima
         if (all.none { it.isEditable }) return
-        if (schedStep == 1 && now - schedLast < 2500) return
+        if (schedStep == 1 && now - schedTapAt < 2500) return // menu ainda abrindo: espera antes de tocar de novo
         val dm = resources.displayMetrics
         val more = all.filter { MORE.matches(lab(it)) || (it.contentDescription?.toString()?.let { d -> Regex("^(mais|more)\\b", RegexOption.IGNORE_CASE).containsMatchIn(d) } == true) }
             .filter { rect(it).top < dm.heightPixels * 0.35 }.maxByOrNull { rect(it).left } ?: return
         if (++schedTries > 4) { schedUntil = 0; show("🗓 Não achei o ⋯ do post: toque nos ⋯ › Agendar e escolha $schedLabel", 0xEEB45309.toInt()); return }
-        if (tapNode(more) || clickable(more)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) schedStep = 1
+        if (tapNode(more) || clickable(more)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) { schedStep = 1; schedTapAt = now }
     }
 
     /** Aviso por cima do app aberto (usado pelo agendamento em lote). */
