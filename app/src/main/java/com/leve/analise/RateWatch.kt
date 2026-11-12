@@ -628,6 +628,7 @@ class ScreenReader : AccessibilityService() {
     // ================= 🗓 lote pelo editor COMPLETO do Threads (é só nele que existe o Agendar) =================
     // Passos: 1) toca em novo post  2) toca em anexar foto  3) escolhe a foto mais recente (a que o app acabou de pôr na galeria)
     //         4) escreve a legenda  5) ⋯ › Agendar. Nunca toca em "Postar/Post".
+    private var cPicked = false
     private var composeUntil = 0L; private var cStep = 0; private var cCap = ""; private var cLabel = ""; private var cLast = 0L; private var cTapAt = 0L; private var cTries = 0
     private val CREATE = Regex("^(create|criar|new thread|novo thread|nova thread|novo post|create thread|criar thread|compose|escrever|start a thread|comece um thread|iniciar thread)$")
     private val ATTACH = Regex("^(attach media|anexar mídia|anexar midia|anexar|add media|adicionar mídia|adicionar midia|add photos|add photos and videos|adicionar fotos|adicionar fotos e vídeos|gallery|galeria|photo library|biblioteca de fotos|attach photos|media|mídia|midia|foto e vídeo|photos and videos|fotos e vídeos)$")
@@ -636,6 +637,7 @@ class ScreenReader : AccessibilityService() {
 
     /** [fromShare]: o post já abriu com a foto (Compartilhar); senão começa do "novo post". */
     fun armCompose(label: String, cap: String, fromShare: Boolean = true) {
+        cPicked = false
         composeUntil = System.currentTimeMillis() + 180_000L; cStep = if (fromShare) 0 else 1; cCap = cap; cLabel = label; cTries = 0; cTapAt = 0
         h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, 1800)
     }
@@ -661,8 +663,8 @@ class ScreenReader : AccessibilityService() {
         val photosInEditor = all.filter { it.className?.toString()?.contains("Image") == true }.map { rect(it) }.filter { it.width() > dm.widthPixels * 0.35 && it.height() > dpx(150) }
         fun again() { if (++cTries > 8) return; h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, 1500) }
         when (cStep) {
-            0 -> { // veio pelo Compartilhar: o editor já tem a foto → vai direto pra legenda
-                if (editor) { cStep = if (photosInEditor.isNotEmpty()) 4 else 2; cTries = 0; composeStep() } else again()
+            0 -> { // veio pelo Compartilhar: a foto JÁ está no post (nunca anexa outra) → vai direto pra legenda
+                if (editor) { cStep = 4; cTries = 0; composeStep() } else again()
             }
             1 -> { // novo post
                 if (editor) { cStep = 2; cTries = 0; composeStep(); return }
@@ -681,15 +683,19 @@ class ScreenReader : AccessibilityService() {
                 if (b == null) { if (cTries >= 5) cFail("Não achei o botão de anexar foto.", all) else again(); return }
                 show("🗓 Anexando a foto…"); if (tap(b)) { cTapAt = now; cStep = 3; cTries = 0 }; again()
             }
-            3 -> { // galeria do Threads: a foto mais recente (a 1ª que não é a câmera)
-                if (editor && photosInEditor.isNotEmpty()) { cStep = 4; cTries = 0; composeStep(); return }
-                all.firstOrNull { PICK_DONE.matches(lab(it)) && !POSTBTN.matches(lab(it)) }?.let { b -> if (cTries > 0) { if (tap(b)) cTapAt = now; again(); return } }
+            3 -> { // galeria do Threads: toca UMA vez na foto mais recente; depois só confirma e segue (nunca escolhe duas)
+                if (editor && (cPicked || photosInEditor.isNotEmpty())) { cStep = 4; cTries = 0; composeStep(); return }
+                if (cPicked) {
+                    all.firstOrNull { PICK_DONE.matches(lab(it)) && !POSTBTN.matches(lab(it)) }?.let { b -> if (tap(b)) cTapAt = now }
+                    if (++cTries >= 4) { cStep = 4; cTries = 0 }
+                    again(); return
+                }
                 val thumbs = all.filter { it.className?.toString()?.let { c -> c.contains("Image") || c.contains("View") } == true }
                     .map { it to rect(it) }.filter { (n, r) -> r.width() in dpx(60)..(dm.widthPixels / 2) && Math.abs(r.width() - r.height()) < dpx(30) && r.top > dm.heightPixels * 0.12 && !Regex("c[aâ]mera").containsMatchIn(lab(n)) }
                     .sortedWith(compareBy({ it.second.top / dpx(30) }, { it.second.left }))
                 val first = thumbs.firstOrNull()?.first
                 if (first == null) { if (cTries >= 6) cFail("Não achei as fotos da galeria do Threads.", all) else again(); return }
-                show("🗓 Escolhendo a foto…"); if (tap(first)) cTapAt = now; cTries++; again()
+                show("🗓 Escolhendo a foto…"); if (tap(first)) { cTapAt = now; cPicked = true; cTries = 0 } else cTries++; again()
             }
             4 -> { // legenda
                 val ed = all.firstOrNull { it.isEditable } ?: run { again(); return }
