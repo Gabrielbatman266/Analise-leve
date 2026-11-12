@@ -59,3 +59,12 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.13")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }
+
+// mostra a mensagem inteira quando um teste falha (no log do GitHub)
+tasks.withType<Test>().configureEach {
+    testLogging {
+        events("failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showStandardStreams = false
+    }
+}
