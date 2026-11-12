@@ -173,7 +173,9 @@ class BatchActivity : Activity() {
             CapForce.arm(this, "fila", o.optString("cap"))
             Store.prefs(this).edit().putInt("lote_wait", i).apply()
             val msg = "🗓 Agende para $day às $t  (${i + 1} de ${l.size})\nToque nos ⋯ do post › Agendar"
-            ScreenReader.instance?.hint(msg, 9000) ?: Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+            val r = ScreenReader.instance
+            if (r != null) { r.armSchedule("$day às $t"); r.hint(msg, 6000) } // o leitor abre o ⋯ › Agendar sozinho
+            else Toast.makeText(this, msg + "\n(ligue o Leitor de tela pra eu abrir o Agendar sozinho)", Toast.LENGTH_LONG).show()
         } catch (e: Exception) { Toast.makeText(this, "Não achei o Threads", Toast.LENGTH_LONG).show() }
     }
 }

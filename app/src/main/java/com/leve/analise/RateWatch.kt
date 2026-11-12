@@ -580,6 +580,37 @@ class ScreenReader : AccessibilityService() {
         android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
         android.graphics.PixelFormat.TRANSLUCENT)
 
+    // ================= 🗓 agendamento em lote: leva direto pra tela de AGENDAR do Threads =================
+    private var schedUntil = 0L; private var schedLabel = ""; private var schedStep = 0; private var schedLast = 0L; private var schedTries = 0
+    private val SCHED = Regex("^(agendar|agendar\\.\\.\\.|agendar…|agendar publicação|programar|programar publicação|schedule|schedule\\.\\.\\.|schedule…|schedule post|schedule thread)$")
+    private val MORE = Regex("^(mais|mais opções|mais opcoes|more|more options|opções|options|menu)$")
+
+    /** O próximo post do lote vai pro Threads: quando o editor abrir, toca em ⋯ › Agendar sozinho (não publica nada). */
+    fun armSchedule(label: String) { schedUntil = System.currentTimeMillis() + 150_000L; schedLabel = label; schedStep = 0; schedTries = 0 }
+
+    private fun trySchedule() {
+        val now = System.currentTimeMillis(); if (now - schedLast < 700) return; schedLast = now
+        val root = rootInActiveWindow ?: return
+        if (root.packageName?.toString() != ThreadsNotif.THREADS) return
+        val all = nodes(root).filter { it.isVisibleToUser }
+        fun lab(n: AccessibilityNodeInfo) = norm(((n.text ?: n.contentDescription) ?: "").toString())
+        // 1) a opção "Agendar" está na tela (menu aberto)? toca nela
+        all.firstOrNull { SCHED.matches(lab(it)) }?.let { n ->
+            if (tapNode(n) || clickable(n)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) {
+                schedUntil = 0; show("🗓 Agora escolha a data e a hora: $schedLabel\ne toque em Agendar", 0xEE15803D.toInt()); h.postDelayed({ if (!running && !forcing) clearOverlay() }, 9000)
+            }
+            return
+        }
+        // 2) só no editor do post novo (tem campo de texto): toca no ⋯ do canto de cima
+        if (all.none { it.isEditable }) return
+        if (schedStep == 1 && now - schedLast < 2500) return
+        val dm = resources.displayMetrics
+        val more = all.filter { MORE.matches(lab(it)) || (it.contentDescription?.toString()?.let { d -> Regex("^(mais|more)\\b", RegexOption.IGNORE_CASE).containsMatchIn(d) } == true) }
+            .filter { rect(it).top < dm.heightPixels * 0.35 }.maxByOrNull { rect(it).left } ?: return
+        if (++schedTries > 4) { schedUntil = 0; show("🗓 Não achei o ⋯ do post: toque nos ⋯ › Agendar e escolha $schedLabel", 0xEEB45309.toInt()); return }
+        if (tapNode(more) || clickable(more)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) schedStep = 1
+    }
+
     /** Aviso por cima do app aberto (usado pelo agendamento em lote). */
     fun hint(msg: String, ms: Long) { h.post { show(msg, 0xEE15803D.toInt()); h.postDelayed({ if (!running && !forcing) clearOverlay() }, ms) } }
 
@@ -970,6 +1001,7 @@ class ScreenReader : AccessibilityService() {
         val ep = e?.packageName?.toString()
         if (!running && Macro.on(this) && ep == Macro.app(this)) { appPkg = ep; doneCells.clear(); startMacro() }
         if (ep != null && !running) try { forceCaption(ep) } catch (x: Exception) { }
+        if (ep == ThreadsNotif.THREADS && schedUntil > System.currentTimeMillis()) try { trySchedule() } catch (x: Exception) { }
         if ((ep == ThreadsNotif.THREADS || ep == ThreadsNotif.INSTA) && !running) h.post { showReadBtn() }
         if (ep == ThreadsRefs.THREADS) ThreadsRefs.threadsActive(this) // 📌 salvou mídia no Threads? já puxa pras Referências
         if (running) return // durante a coleta, quem lê é o próprio macro
