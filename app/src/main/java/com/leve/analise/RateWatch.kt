@@ -731,12 +731,17 @@ class ScreenReader : AccessibilityService() {
                 val ed = all.firstOrNull { it.isEditable } ?: run { again(); return }
                 fun curText() = if (android.os.Build.VERSION.SDK_INT >= 26 && ed.isShowingHintText) "" else (ed.text ?: "").toString().trim().let { t -> if (Regex("^(what.s new\\??|o que há de novo\\??|o que ha de novo\\??|start a thread.*|comece um thread.*)$", RegexOption.IGNORE_CASE).matches(t)) "" else t }
                 if (curText().isEmpty()) {
-                    // sem texto o Threads esconde o Agendar: escreve a legenda (ou cola, que já está copiada)
-                    if (!ed.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, android.os.Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, cCap) })) {
-                        ed.performAction(AccessibilityNodeInfo.ACTION_FOCUS); ed.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                    // sem texto o Threads esconde o Agendar. O Threads ignora "escrever direto" às vezes:
+                    // 1º toca no campo (abre o teclado) e escreve; depois cola (a legenda já está copiada); por último seleciona e cola.
+                    val args = android.os.Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, cCap) }
+                    when (cTries % 3) {
+                        0 -> { tapCenter(ed); ed.performAction(AccessibilityNodeInfo.ACTION_FOCUS); h.postDelayed({ try { (rootInActiveWindow?.let { r -> nodes(r).firstOrNull { it.isEditable } } ?: ed).performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args) } catch (e: Exception) { } }, 500) }
+                        1 -> { ClipSync.copy(this, cCap); ed.performAction(AccessibilityNodeInfo.ACTION_CLICK); ed.performAction(AccessibilityNodeInfo.ACTION_FOCUS); h.postDelayed({ try { (rootInActiveWindow?.let { r -> nodes(r).firstOrNull { it.isEditable } } ?: ed).performAction(AccessibilityNodeInfo.ACTION_PASTE) } catch (e: Exception) { } }, 500) }
+                        else -> { ed.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, android.os.Bundle().apply { putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0); putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, 0) }); ed.performAction(AccessibilityNodeInfo.ACTION_PASTE); ed.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args) }
                     }
+                    clog("legenda: tentativa ${cTries % 3}", all)
                     show("🗓 Escrevendo a legenda…"); cTapAt = now
-                    if (++cTries >= 4) { cFail("A legenda não entrou no post (sem texto o Threads esconde o Agendar).", all); return }
+                    if (cTries >= 8) { saveTree(all, "legenda não entrou"); cFail("A legenda não entrou no post (sem texto o Threads esconde o Agendar).", all); return }
                     again(); return
                 }
                 cStep = 5; cTries = 0; cTapAt = now; again()
