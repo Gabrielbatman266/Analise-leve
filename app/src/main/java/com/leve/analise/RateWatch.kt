@@ -876,16 +876,36 @@ class ScreenReader : AccessibilityService() {
         if (cTries == 0) saveTree(all, "tela de agendar")
         val texts = textsOf(all)
         val sel = all.filter { it.isSelected || it.isChecked || it.isEditable }.mapNotNull { (it.text ?: it.contentDescription)?.toString() }
-        // ---- calendário aberto (vários dias com data completa na descrição)?
-        val days = all.mapNotNull { n -> n.contentDescription?.toString()?.let { d -> if (AgendaCore.findTime(listOf(d)) == null) AgendaCore.findDate(listOf(d), today)?.let { n to it } else null } }
+        // ---- calendário aberto? (dias com data completa na descrição, ou grade de números 1..31 com "Mês Ano" em cima)
+        val days = all.mapNotNull { n -> n.contentDescription?.toString()?.let { d -> if (AgendaCore.findTime(listOf(d)) == null) AgendaCore.findDate(listOf(d), today)?.let { n to it } else null } }.toMutableList()
+        val header = all.mapNotNull { n -> Regex("^([a-zç]+)\\.?\\s+(?:de\\s+)?(\\d{4})$").find(lab(n))?.let { m -> AgendaCore.findDate(listOf("1 " + m.groupValues[1] + " " + m.groupValues[2]), today)?.let { it.withDayOfMonth(1) } } }.firstOrNull()
+        if (days.size < 20 && header != null) {
+            val grid = all.filter { Regex("^\\d{1,2}$").matches(lab(it)) && (it.isClickable || clickable(it) != null) }
+            if (grid.size >= 20) grid.forEach { n -> lab(n).toInt().let { d -> if (d <= header.lengthOfMonth()) days += n to header.withDayOfMonth(d) } }
+        }
         if (days.size >= 20) {
-            val hit = days.firstOrNull { it.second == tDate }
+            val month = header ?: days.groupingBy { it.second.withDayOfMonth(1) }.eachCount().maxByOrNull { it.value }!!.key
+            val tKey = tDate.toEpochDay().toInt()
             val chosen = days.firstOrNull { (n, _) -> n.isSelected || n.isChecked }?.second
-            if (chosen == tDate) { all.filter { OKBTN.matches(lab(it)) }.maxByOrNull { rect(it).top }?.let { if (act(it, "calendário: ok")) { again(); return } } }
-            if (hit != null) { act(hit.first, "calendário: dia ${tDate.dayOfMonth}"); again(); return }
-            val fwd = days.first().second.isBefore(tDate)
-            all.firstOrNull { Regex(if (fwd) "next month|próximo mês|proximo mes|mês seguinte|mes seguinte" else "previous month|mês anterior|mes anterior").containsMatchIn(lab(it)) }?.let { act(it, "calendário: mês"); again(); return }
-            saveTree(all, "calendário sem o dia"); again(); return
+            val timeHere = AgendaCore.findTime(textsOf(all))
+            val okRe = Regex("^(ok|done|concluir|concluído|next|avançar|avancar|próximo|proximo|set|definir|confirmar|confirm|salvar|save)$")
+            if (chosen == tDate || cWheel["day"] == tKey) {
+                // dia escolhido: se a hora também está nesta tela e está errada, ajusta a hora antes (cai pro resto); senão confirma a data
+                if (timeHere == null || timeHere == tTime) {
+                    val ok = all.filter { okRe.matches(lab(it)) }.maxByOrNull { rect(it).top }
+                    if (ok != null && (cWheel["dayOk"] ?: 0) < 2) { cWheel["dayOk"] = (cWheel["dayOk"] ?: 0) + 1; act(ok, "calendário: confirmei o dia (" + lab(ok) + ")"); again(); return }
+                }
+            } else if (month.year == tDate.year && month.monthValue == tDate.monthValue) {
+                val hit = days.firstOrNull { it.second == tDate }
+                if (hit != null && (cWheel["dayTaps"] ?: 0) < 3) { cWheel["day"] = tKey; cWheel["dayTaps"] = (cWheel["dayTaps"] ?: 0) + 1; act(hit.first, "calendário: toquei no dia ${tDate.dayOfMonth}"); again(); return }
+            } else {
+                val fwd = month.isBefore(tDate.withDayOfMonth(1))
+                all.firstOrNull { Regex(if (fwd) "next month|próximo mês|proximo mes|mês seguinte|mes seguinte|^next$|^›$|^>$" else "previous month|mês anterior|mes anterior|^previous$|^‹$|^<$").containsMatchIn(lab(it)) }
+                    ?.let { act(it, "calendário: mês " + (if (fwd) "›" else "‹")); again(); return }
+                // sem botão de mês: rola a grade
+                all.firstOrNull { it.isScrollable }?.let { it.performAction(if (fwd) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD); clog("calendário: rolei o mês", all); cTapAt = now; again(); return }
+            }
+            if (cTries % 8 == 7) saveTree(all, "calendário: mês $month, escolhido $chosen, alvo $tDate")
         }
         // ---- relógio do Android: passa pro modo teclado se der
         all.firstOrNull { Regex("text input|entrada de texto|modo de texto|keyboard|teclado").containsMatchIn(lab(it)) && it.isClickable }?.let { if (all.none { it.isEditable && it.className?.toString()?.contains("EditText") == true && Regex("^\\d{1,2}$").matches((it.text ?: "").toString()) }) { act(it, "relógio: modo teclado"); again(); return } }
@@ -913,8 +933,10 @@ class ScreenReader : AccessibilityService() {
             all.firstOrNull { Regex("^(ok|set|definir|done|concluir)$").matches(lab(it)) }?.let { cWheel.remove("dialH"); cWheel.remove("dialM"); act(it, "relógio: ok"); again(); return }
         }
         if (dialog && cWheel["kb"] != null) { all.firstOrNull { Regex("^(ok|set|definir|done|concluir)$").matches(lab(it)) }?.let { cWheel.remove("kb"); act(it, "relógio: ok"); again(); return } }
+        val sig = "lido $readD $readT · alvo $tDate $tTime · dias ${days.size}"
+        if (Store.prefs(this).getString("ag_pick_sig", "") != sig) { Store.prefs(this).edit().putString("ag_pick_sig", sig).apply(); clog(sig, all) }
         // ---- já está certo: confirma
-        val dateOk = readD == tDate || (readD == null && tDate == today && texts.any { Regex("(?i)hoje|today").containsMatchIn(it) })
+        val dateOk = readD == tDate || (readD == null && tDate == today && texts.any { Regex("(?i)hoje|today").containsMatchIn(it) }) || (cWheel["dayOk"] != null && readD == null) || (days.size >= 20 && cWheel["day"] == tDate.toEpochDay().toInt())
         if (readT == tTime && dateOk) {
             val b = all.filter { val l = lab(it); OKBTN.matches(l) && !POSTBTN.matches(l) && it.isClickable || (OKBTN.matches(l) && clickable(it) != null) }.maxByOrNull { rect(it).top }
             if (b != null) { if (act(b, "confirmei " + AgendaCore.fmt(cTarget) + " (" + lab(b) + ")")) { cStep = 7; cTries = 0 }; again(); return }
