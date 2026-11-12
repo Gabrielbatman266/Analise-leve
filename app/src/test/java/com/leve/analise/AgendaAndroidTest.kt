@@ -431,11 +431,11 @@ class AgendaAndroidTest {
         val dlg = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog() as android.app.AlertDialog
         fun tap(t: String) { texts(dlg.window!!.decorView).first { it.text.toString() == t }.performClick(); shadowOf(android.os.Looper.getMainLooper()).idle() }
         assertTrue(texts(dlg.window!!.decorView).any { it.text.toString().contains("Um toque e eu vou no Threads") }) // padrão: Agendar do Threads
-        tap("2"); tap("2"); tap("Começando amanhã")
+        tap("3"); tap("1 dia"); tap("Começando amanhã") // 3 posts, 1 dia
         dlg.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick(); shadowOf(android.os.Looper.getMainLooper()).idle()
         val b = Batch.load(c)
-        assertEquals(4, b.size); assertTrue(b.none { it.optBoolean("done") })
-        assertEquals(4, b.map { it.optString("id") }.toSet().size)
+        assertEquals(3, b.size); assertTrue(b.none { it.optBoolean("done") })
+        assertEquals(3, b.map { it.optString("id") }.toSet().size)
         assertTrue(b.zipWithNext().all { (x, y) -> x.optLong("at") < y.optLong("at") })
         assertTrue(Agenda.all(c).isEmpty()) // só entra na agenda quando o Threads confirmar o agendamento
         // sem o leitor de tela ligado: abre a tela do lote pra ligar e tocar em "Agendar todos"
