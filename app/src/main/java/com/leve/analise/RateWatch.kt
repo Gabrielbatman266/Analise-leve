@@ -657,7 +657,14 @@ class ScreenReader : AccessibilityService() {
         h.postDelayed({ if (!running && !forcing) clearOverlay() }, 12000)
     }
 
-    private fun tap(n: AccessibilityNodeInfo) = tapNode(n) || clickable(n)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+    /** Toque de verdade no MEIO do botão (vale pra barra de baixo e de cima também). Alterna com o "clique" de acessibilidade se o 1º não funcionou. */
+    private fun tapCenter(n: AccessibilityNodeInfo): Boolean {
+        val r = rect(n); if (r.width() <= 0 || r.height() <= 0) return false
+        val path = android.graphics.Path().apply { moveTo(r.exactCenterX(), r.exactCenterY()) }
+        return try { dispatchGesture(android.accessibilityservice.GestureDescription.Builder().addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 70)).build(), null, null) } catch (e: Exception) { false }
+    }
+    private fun click(n: AccessibilityNodeInfo) = clickable(n)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+    private fun tap(n: AccessibilityNodeInfo) = if (cTries % 2 == 0) (tapCenter(n) || click(n)) else (click(n) || tapCenter(n))
 
     /** Anota o passo (e o que tinha na tela) pro 📋 diagnóstico. */
     private fun clog(msg: String, all: List<AccessibilityNodeInfo>) {
@@ -676,16 +683,21 @@ class ScreenReader : AccessibilityService() {
         val dm = resources.displayMetrics
         val editor = all.any { it.isEditable }
         val photosInEditor = all.filter { it.className?.toString()?.contains("Image") == true }.map { rect(it) }.filter { it.width() > dm.widthPixels * 0.35 && it.height() > dpx(150) }
-        fun again() { if (++cTries > (if (cStep >= 6) 60 else 8)) { if (cStep >= 6) cFail("Não consegui acertar a data/hora no Agendar.", all); return }; h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, if (cStep >= 6) 700 else 1500) }
+        fun again() { if (++cTries > (if (cStep >= 6) 60 else 10)) { saveTree(all, "travou no passo $cStep"); cFail(when (cStep) { 1 -> "Toquei no + mas o post novo não abriu."; 2 -> "Não consegui anexar a foto."; 3 -> "Não consegui escolher a foto."; 4 -> "A legenda não entrou."; 5 -> "Não achei o ⋯ › Agendar."; 6 -> "Não consegui acertar a data/hora no Agendar."; else -> "O post não foi agendado." }, all); return }; h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, if (cStep >= 6) 700 else 1500) }
         when (cStep) {
             0 -> { // veio pelo Compartilhar: a foto JÁ está no post (nunca anexa outra) → vai direto pra legenda
                 if (editor) { cStep = 4; cTries = 0; composeStep() } else again()
             }
             1 -> { // novo post
                 if (editor) { cStep = 2; cTries = 0; composeStep(); return }
-                val b = all.firstOrNull { CREATE.matches(lab(it)) } ?: all.firstOrNull { lab(it) == "+" }
+                // 1º o botão + do meio da barra de baixo, depois o "What's new?/O que há de novo?" (abre o mesmo editor), por último qualquer "Criar"
+                val bottomPlus = all.filter { val r = rect(it); r.top > dm.heightPixels * 0.82 && Math.abs(r.centerX() - dm.widthPixels / 2) < dm.widthPixels * 0.12 && (it.isClickable || CREATE.matches(lab(it)) || lab(it) == "+") }
+                    .maxByOrNull { (if (CREATE.matches(lab(it))) 2 else 0) + (if (it.isClickable) 1 else 0) }
+                val whatsNew = all.firstOrNull { Regex("^(what.s new\\??|o que há de novo\\??|o que ha de novo\\??|start a thread.*|comece um thread.*|inicie um thread.*)$").matches(lab(it)) }
+                val cands = listOfNotNull(bottomPlus, all.firstOrNull { CREATE.matches(lab(it)) }, whatsNew)
+                val b = cands.getOrNull((cTries / 3) % maxOf(1, cands.size))
                 if (b == null) { clog("sem botão de novo post", all); if (cTries >= 6) cFail("Não achei o botão de novo post.", all) else again(); return }
-                clog("toquei em novo post: " + lab(b), all)
+                clog("toquei em novo post: " + lab(b) + " @" + rect(b).toShortString(), all)
                 show("🗓 Abrindo um post novo…"); if (tap(b)) cTapAt = now; again()
             }
             2 -> { // anexar foto (o editor já tem foto? pula)
