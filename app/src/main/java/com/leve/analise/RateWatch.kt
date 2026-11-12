@@ -629,6 +629,7 @@ class ScreenReader : AccessibilityService() {
     // Passos: 1) toca em novo post  2) toca em anexar foto  3) escolhe a foto mais recente (a que o app acabou de pôr na galeria)
     //         4) escreve a legenda  5) ⋯ › Agendar. Nunca toca em "Postar/Post".
     private var cPicked = false
+    private var cAway = 0L
     private val cMenus = HashSet<String>(); private var cMenuOpen = ""
     /** Guarda o que tinha em cada menu aberto (pro diagnóstico). */
     private fun saveMenu(all: List<AccessibilityNodeInfo>, why: String) {
@@ -649,6 +650,9 @@ class ScreenReader : AccessibilityService() {
         cPicked = false; cTarget = target; cWheel.clear()
         composeUntil = System.currentTimeMillis() + 180_000L; cStep = if (fromShare) 0 else 1; cCap = cap; cLabel = label; cTries = 0; cTapAt = 0
         h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, 1800)
+        // passou do tempo e não terminou: tira o aviso (não fica preso na tela)
+        val until = composeUntil
+        h.postDelayed({ if (composeUntil == until && until > 0) { composeUntil = 0; if (autoRunning) stopBatchAuto("Demorou demais no post de $label: parei. Mande o 📋 diagnóstico.") else clearOverlay() } }, 182_000L)
     }
 
     private fun cFail(msg: String, all: List<AccessibilityNodeInfo>) {
@@ -683,8 +687,15 @@ class ScreenReader : AccessibilityService() {
     private fun composeStep() {
         val now = System.currentTimeMillis(); if (now - cLast < 600) return; cLast = now
         if (now - cTapAt < 1500) { h.postDelayed({ composeStep() }, 1600); return } // espera a tela reagir ao último toque
-        val root = rootInActiveWindow ?: return
-        if (root.packageName?.toString() != ThreadsNotif.THREADS) return
+        val root = rootInActiveWindow
+        if (root == null || root.packageName?.toString() != ThreadsNotif.THREADS) {
+            // saiu do Threads: espera um pouco (pode ser a galeria/teclado); depois de 15 s para e tira o aviso
+            if (cAway == 0L) cAway = now
+            if (now - cAway > 15_000L) { composeUntil = 0; cAway = 0; if (autoRunning) autoRunning = false; clog("parei: saiu do Threads", emptyList()); h.post { clearOverlay() } }
+            else h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, 2000)
+            return
+        }
+        cAway = 0
         val all = nodes(root).filter { it.isVisibleToUser }
         fun lab(n: AccessibilityNodeInfo) = norm(((n.contentDescription ?: n.text) ?: "").toString())
         val dm = resources.displayMetrics
