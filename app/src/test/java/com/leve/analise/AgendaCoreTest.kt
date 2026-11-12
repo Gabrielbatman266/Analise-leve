@@ -129,4 +129,16 @@ class AgendaCoreTest {
         assertEquals(null, AgendaCore.findDate(listOf("1/2", "3/4"), now.toLocalDate()))
         assertEquals(LocalDate.of(2026, 12, 5), AgendaCore.findDate(listOf("1/2", "5/12/2026"), now.toLocalDate()))
     }
+
+    @Test fun rodinhaDoThreads() {
+        val hoje = now.toLocalDate() // 12/11/2026
+        assertEquals(LocalDate.of(2026, 11, 22), AgendaCore.findDate(listOf("Sun, Nov 22"), hoje))
+        assertEquals(LocalDate.of(2026, 11, 16), AgendaCore.findDate(listOf("Mon, Nov 16"), hoje))
+        assertEquals(LocalDate.of(2027, 1, 3), AgendaCore.findDate(listOf("Sun, Jan 3"), hoje)) // virada do ano
+        assertEquals(LocalDate.of(2026, 11, 22), AgendaCore.findDate(listOf("dom., 22 de nov."), hoje))
+        assertEquals(hoje, AgendaCore.findDate(listOf("Today"), hoje))
+        assertEquals(null, AgendaCore.findTime(listOf("Sun, Nov 22"))) // dia sem hora
+        assertEquals(null, AgendaCore.findDate(listOf("7"), hoje)) // número da rodinha não é data
+        assertEquals(null, AgendaCore.findDate(listOf("00"), hoje))
+    }
 }

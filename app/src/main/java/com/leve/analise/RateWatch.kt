@@ -871,6 +871,81 @@ class ScreenReader : AccessibilityService() {
         Store.prefs(this).edit().putString("agendar_tela", android.text.format.DateFormat.format("dd/MM HH:mm", System.currentTimeMillis()).toString() + " ($why)\n" + lines.take(90).joinToString("\n")).apply()
     }
 
+    /**
+     * Tela "Schedule post" do Threads: 4 rodinhas (dia "Sun, Nov 22" · hora 1–12 · minuto 00–59 · AM/PM) e o botão Done.
+     * O valor escolhido é o que está na FAIXA DO MEIO. Arrasta cada rodinha devagar, linha por linha, até bater; aí toca em Done.
+     * Devolve false se a tela não for essa (aí tenta os outros tipos de seletor).
+     */
+    private fun wheelSheet(all: List<AccessibilityNodeInfo>, now: Long, again: () -> Unit): Boolean {
+        fun t(n: AccessibilityNodeInfo) = (n.text ?: "").toString().trim()
+        val title = all.firstOrNull { Regex("^(schedule post|schedule thread|agendar post|agendar thread|agendar publicação|agendar publicacao|programar publicação)$", RegexOption.IGNORE_CASE).matches(t(it)) && !it.isClickable } ?: return false
+        val done = all.filter { Regex("^(done|concluir|concluído|concluido|ok|pronto)$", RegexOption.IGNORE_CASE).matches(t(it).ifEmpty { (it.contentDescription ?: "").toString().trim() }) }.maxByOrNull { rect(it).top } ?: return false
+        val top = rect(title).bottom; val bottom = rect(done).top
+        val z = java.time.Instant.ofEpochMilli(cTarget).atZone(java.time.ZoneId.systemDefault())
+        val tDate = z.toLocalDate(); val today = java.time.LocalDate.now()
+        // itens das rodinhas: textos entre o título e o Done, agrupados em colunas pela posição
+        val AMPM0 = Regex("^(am|pm|a\\.m\\.|p\\.m\\.|a\\. m\\.|p\\. m\\.)$", RegexOption.IGNORE_CASE)
+        fun wheelLike(x: String) = Regex("^\\d{1,2}$").matches(x) || AMPM0.matches(x) || Regex("(?i)^(today|hoje|tomorrow|amanhã|amanha)").containsMatchIn(x) ||
+            (x.length <= 24 && AgendaCore.findDate(listOf(x), today) != null && AgendaCore.findTime(listOf(x)) == null)
+        val items = all.filter { n -> val r = rect(n); wheelLike(t(n)) && r.centerY() in top..bottom && n !== title }.map { it to rect(it) }
+        val cols = ArrayList<MutableList<Pair<AccessibilityNodeInfo, android.graphics.Rect>>>()
+        for (it in items.sortedBy { it.second.centerX() }) {
+            val c = cols.firstOrNull { col -> Math.abs(col.first().second.centerX() - it.second.centerX()) < dpx(45) }
+            if (c != null) c += it else cols += mutableListOf(it)
+        }
+        if (cols.size < 2) return false
+        val AMPM = Regex("^(am|pm|a\\.m\\.|p\\.m\\.|a\\. m\\.|p\\. m\\.)$", RegexOption.IGNORE_CASE)
+        fun dateOf(s: String): java.time.LocalDate? = when {
+            Regex("(?i)^(today|hoje)").containsMatchIn(s) -> today
+            Regex("(?i)^(tomorrow|amanhã|amanha)").containsMatchIn(s) -> today.plusDays(1)
+            else -> AgendaCore.findDate(listOf(s), today)
+        }
+        val dateCol = cols.firstOrNull { c -> c.count { dateOf(t(it.first)) != null } >= maxOf(1, c.size / 2) }
+        val ampmCol = cols.firstOrNull { c -> c.all { AMPM.matches(t(it.first)) } }
+        val numCols = cols.filter { c -> c !== dateCol && c !== ampmCol && c.all { Regex("^\\d{1,2}$").matches(t(it.first)) } }
+        val hourCol = numCols.getOrNull(0); val minCol = numCols.getOrNull(1)
+        if (dateCol == null || hourCol == null || minCol == null) { if (cTries % 6 == 0) saveTree(all, "rodinhas: não reconheci as colunas (${cols.size})"); return false }
+        // altura de uma linha e a faixa do meio (onde fica o escolhido)
+        val ys = (dateCol.map { it.second.centerY() } + hourCol.map { it.second.centerY() }).distinct().sorted()
+        val rowH = ys.zipWithNext { a, b -> b - a }.filter { it > dpx(20) }.minOrNull() ?: dpx(36)
+        val scroll = all.firstOrNull { it.isScrollable && rect(it).centerY() in top..bottom }
+        val band = scroll?.let { rect(it).centerY() } ?: ((top + bottom) / 2)
+        fun sel(c: List<Pair<AccessibilityNodeInfo, android.graphics.Rect>>) = c.minByOrNull { Math.abs(it.second.centerY() - band) }?.takeIf { Math.abs(it.second.centerY() - band) < rowH * 0.6 }
+        val twelve = ampmCol != null
+        val wantH = if (twelve) (if (z.hour % 12 == 0) 12 else z.hour % 12) else z.hour
+        val curD = sel(dateCol)?.let { dateOf(t(it.first)) }
+        val curH = sel(hourCol)?.let { t(it.first).toIntOrNull() }
+        val curM = sel(minCol)?.let { t(it.first).toIntOrNull() }
+        val curPm = ampmCol?.let { sel(it) }?.let { t(it.first).lowercase().startsWith("p") }
+        val wantPm = z.hour >= 12
+        val sig = "rodinhas: dia $curD hora $curH min $curM ${if (curPm == null) "" else if (curPm) "PM" else "AM"} · alvo $tDate $wantH:%02d ${if (twelve) (if (wantPm) "PM" else "AM") else ""}".format(z.minute)
+        clog(sig, emptyList())
+        // quanto falta em cada rodinha (positivo = valor maior = arrastar pra cima)
+        val moves = listOf(
+            dateCol to (curD?.let { java.time.temporal.ChronoUnit.DAYS.between(it, tDate).toInt() }),
+            hourCol to (curH?.let { wantH - it }),
+            minCol to (curM?.let { z.minute - it }),
+        ) + (if (ampmCol != null) listOf(ampmCol to (curPm?.let { if (wantPm == it) 0 else if (wantPm) 1 else -1 })) else emptyList())
+        val todo = moves.firstOrNull { it.second == null || it.second != 0 }
+        if (todo == null) {
+            // tudo certo: Done
+            clog("rodinhas certas → Done (" + AgendaCore.fmt(cTarget) + ")", emptyList())
+            if (click(done) || tapCenter(done)) { cStep = 7; cTries = 0; cTapAt = now }
+            again(); return true
+        }
+        val (col, diff) = todo
+        val x = col.map { it.second.centerX() }.average().toFloat()
+        // valor escolhido ilegível (faixa vazia): dá um passo pra ajeitar
+        val k = (diff ?: 1).let { if (it > 0) minOf(it, 4) else maxOf(it, -4) }
+        val dy = -k * rowH.toFloat() // pra cima = valor maior
+        val dur = (Math.abs(k) * 650L).coerceAtLeast(500L)
+        val path = android.graphics.Path().apply { moveTo(x, band.toFloat()); lineTo(x, band + dy) }
+        try { dispatchGesture(android.accessibilityservice.GestureDescription.Builder().addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, dur)).build(), null, null) } catch (e: Exception) { }
+        cTapAt = now + dur + 400
+        if (cTries % 10 == 9) saveTree(all, sig)
+        again(); return true
+    }
+
     private fun textsOf(all: List<AccessibilityNodeInfo>) = all.mapNotNull { (it.text ?: it.contentDescription)?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() && s.length < 80 } }
 
     /**
@@ -885,6 +960,7 @@ class ScreenReader : AccessibilityService() {
         fun lab(n: AccessibilityNodeInfo) = norm(((n.contentDescription ?: n.text) ?: "").toString())
         fun act(n: AccessibilityNodeInfo, what: String): Boolean { clog(what, all); val ok = tap(n); if (ok) cTapAt = now; return ok }
         if (cTries == 0) saveTree(all, "tela de agendar")
+        if (wheelSheet(all, now, again)) return
         val texts = textsOf(all)
         val sel = all.filter { it.isSelected || it.isChecked || it.isEditable }.mapNotNull { (it.text ?: it.contentDescription)?.toString() }
         // ---- calendário aberto? (dias com data completa na descrição, ou grade de números 1..31 com "Mês Ano" em cima)

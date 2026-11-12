@@ -264,7 +264,7 @@ object Promo {
                 if (gain != null && gain.isFinite()) {
                     JsonFile.edit(File(c.filesDir, "envios.json")) { l -> l.firstOrNull { it.optLong("at") == e.optLong("at") }?.put("gain", gain) }
                     val rel = (if (fromPost != null) gain / maxOf(1.0, base / 3) else gain / maxOf(1.0, base)).takeIf { it.isFinite() } ?: 0.0
-                    JsonFile.edit(bank(c)) { b -> b.firstOrNull { norm(it.optString("t")) == norm(e.optString("tpl")) }?.let { it.put("fol", it.optDouble("fol") + rel); it.put("folN", it.optInt("folN") + 1); it.put("folRaw", it.optDouble("folRaw") + gain) } }
+                    JsonFile.edit(bank(c)) { b -> b.firstOrNull { norm(it.optString("t")) == norm(e.optString("tpl")) }?.let { it.put("fol", it.optDouble("fol", 0.0).takeIf { v -> v.isFinite() }.let { v -> (v ?: 0.0) + rel }); it.put("folN", it.optInt("folN") + 1); it.put("folRaw", (it.optDouble("folRaw", 0.0).takeIf { v -> v.isFinite() } ?: 0.0) + gain) } }
                 }
                 if (gain != null || now - e.optLong("at") > 4 * 86400_000L) SendLog.mark(c, e.optLong("at"), "pf")
             }
