@@ -28,7 +28,12 @@ import java.net.URLEncoder
  * pergunta ao Threads o status — se já está PUBLISHED, só marca como publicada.
  */
 object ThreadsPublish {
-    private const val BASE = "https://graph.threads.com/"
+    // endereços e esperas ficam em variáveis só pra os testes apontarem pra um servidor falso
+    @Volatile internal var BASE = "https://graph.threads.com/"
+    @Volatile internal var IMGBB = "https://api.imgbb.com/1/upload"
+    @Volatile internal var CLOUDINARY = "https://api.cloudinary.com/v1_1/"
+    @Volatile internal var firstWaitMs = 8000L
+    @Volatile internal var pollMs = 6000L
     private fun p(c: Context) = Store.prefs(c)
 
     fun ok(c: Context) = p(c).getBoolean("pub_ok", false)
@@ -135,9 +140,9 @@ object ThreadsPublish {
         val f = prepared(c, src)
         val b64 = Base64.encodeToString(f.readBytes(), Base64.NO_WRAP)
         return when (host(c)) {
-            "imgbb" -> call("POST", "https://api.imgbb.com/1/upload?expiration=3600&key=" + enc(imgbbKey(c)), mapOf("image" to b64))
+            "imgbb" -> call("POST", IMGBB + "?expiration=3600&key=" + enc(imgbbKey(c)), mapOf("image" to b64))
                 .optJSONObject("data")?.optString("url")?.takeIf { it.startsWith("http") } ?: throw Exception("ImgBB não devolveu o link")
-            "cloudinary" -> call("POST", "https://api.cloudinary.com/v1_1/${enc(cldCloud(c))}/image/upload", mapOf("file" to "data:image/jpeg;base64,$b64", "upload_preset" to cldPreset(c)))
+            "cloudinary" -> call("POST", CLOUDINARY + "${enc(cldCloud(c))}/image/upload", mapOf("file" to "data:image/jpeg;base64,$b64", "upload_preset" to cldPreset(c)))
                 .optString("secure_url").takeIf { it.startsWith("http") } ?: throw Exception("Cloudinary não devolveu o link")
             else -> throw ApiError("sem hospedagem de foto configurada", 0, true)
         }
@@ -216,7 +221,7 @@ object ThreadsPublish {
         // 3) espera o Threads processar (≈30 s recomendado)
         val t0 = System.currentTimeMillis(); var st = ""
         while (System.currentTimeMillis() - t0 < 120_000L) {
-            Thread.sleep(if (st.isEmpty()) 8000 else 6000)
+            Thread.sleep(if (st.isEmpty()) firstWaitMs else pollMs)
             val r = call("GET", BASE + "v1.0/$cid?fields=status,error_message&access_token=" + enc(tok))
             st = r.optString("status")
             if (st == "FINISHED") break

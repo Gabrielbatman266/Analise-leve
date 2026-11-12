@@ -43,6 +43,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    testOptions { unitTests { isIncludeAndroidResources = true } }
 }
 
 dependencies {
@@ -54,4 +55,7 @@ dependencies {
 
     // testes da agenda (rodam no GitHub a cada build; se falhar, não sai APK)
     testImplementation("junit:junit:4.13.2")
+    // Android simulado (alarmes, notificações, arquivos, telas) e um servidor falso do Threads pros testes de publicação
+    testImplementation("org.robolectric:robolectric:4.13")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }
