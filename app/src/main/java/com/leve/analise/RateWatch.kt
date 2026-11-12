@@ -587,7 +587,8 @@ class ScreenReader : AccessibilityService() {
     private val MORE = Regex("^(mais|mais opções|mais opcoes|more|more options|opções|options|menu)$")
 
     /** O próximo post do lote vai pro Threads: quando o editor abrir, toca em ⋯ › Agendar sozinho (não publica nada). */
-    fun armSchedule(label: String) { schedUntil = System.currentTimeMillis() + 150_000L; schedLabel = label; schedStep = 0; schedTries = 0 }
+    private val schedTried = HashSet<String>()
+    fun armSchedule(label: String) { schedUntil = System.currentTimeMillis() + 150_000L; schedLabel = label; schedStep = 0; schedTries = 0; schedTried.clear() }
 
     private fun trySchedule() {
         val now = System.currentTimeMillis(); if (now - schedLast < 700) return; schedLast = now
@@ -602,14 +603,26 @@ class ScreenReader : AccessibilityService() {
             }
             return
         }
-        // 2) só no editor do post novo (tem campo de texto): toca no ⋯ do canto de cima
+        // 2) só no editor do post novo (tem campo de texto)
         if (all.none { it.isEditable }) return
-        if (schedStep == 1 && now - schedTapAt < 2500) return // menu ainda abrindo: espera antes de tocar de novo
+        if (schedStep == 1 && now - schedTapAt < 2500) return // menu ainda abrindo: espera
         val dm = resources.displayMetrics
-        val more = all.filter { MORE.matches(lab(it)) || (it.contentDescription?.toString()?.let { d -> Regex("^(mais|more)\\b", RegexOption.IGNORE_CASE).containsMatchIn(d) } == true) }
-            .filter { rect(it).top < dm.heightPixels * 0.35 }.maxByOrNull { rect(it).left } ?: return
-        if (++schedTries > 4) { schedUntil = 0; show("🗓 Não achei o ⋯ do post: toque nos ⋯ › Agendar e escolha $schedLabel", 0xEEB45309.toInt()); return }
-        if (tapNode(more) || clickable(more)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) { schedStep = 1; schedTapAt = now }
+        // abriu um menu SEM "Agendar" (ex.: o ⋯ de cima só tem "Add AI label")? fecha e tenta o próximo ⋯
+        if (schedStep == 1 && all.any { Regex("ai label|rótulo de ia|rotulo de ia|marcar como ia|ia\\b.*rótulo").containsMatchIn(lab(it)) }) { performGlobalAction(GLOBAL_ACTION_BACK); schedStep = 0; schedTapAt = now; return }
+        schedStep = 0
+        // ⋯ candidatos: o da barra de ferramentas embaixo (onde fica o Agendar) primeiro, depois o de cima. Nunca o ⋯ de cima da FOTO.
+        val photos = all.filter { it.className?.toString()?.contains("Image") == true }.map { rect(it) }.filter { it.width() > dm.widthPixels * 0.35 && it.height() > dpx(150) }
+        val cands = all.filter { MORE.matches(lab(it)) || (it.contentDescription?.toString()?.let { d -> Regex("^(mais|more)\\b", RegexOption.IGNORE_CASE).containsMatchIn(d) } == true) }
+            .filter { n -> val r = rect(n); photos.none { p -> p.contains(r) } && r.width() > 0 }
+            .distinctBy { val r = rect(it); "${r.centerX() / dpx(20)}:${r.centerY() / dpx(20)}" }
+            .sortedWith(compareByDescending<AccessibilityNodeInfo> { rect(it).top > dm.heightPixels * 0.4 }.thenByDescending { rect(it).left })
+        val next = cands.firstOrNull { val r = rect(it); "${r.centerX() / dpx(20)}:${r.centerY() / dpx(20)}" !in schedTried }
+        if (next == null || ++schedTries > 6) {
+            schedUntil = 0; show("🗓 Não achei o Agendar: toque no ⋯ da barra de baixo (ao lado do ❤) › Agendar e escolha $schedLabel. Se puder, me manda um print desse menu.", 0xEEB45309.toInt())
+            h.postDelayed({ if (!running && !forcing) clearOverlay() }, 9000); return
+        }
+        val r = rect(next); schedTried += "${r.centerX() / dpx(20)}:${r.centerY() / dpx(20)}"
+        if (tapNode(next) || clickable(next)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) { schedStep = 1; schedTapAt = now }
     }
 
     /** Aviso por cima do app aberto (usado pelo agendamento em lote). */
