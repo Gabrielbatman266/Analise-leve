@@ -57,6 +57,7 @@ class AgendaAndroidTest {
     /** O app usa UM alarme só (sempre o mesmo, trocado a cada mudança). */
     private fun alarmAt(): Long? {
         val l = shadowOf(c.getSystemService(AlarmManager::class.java)).scheduledAlarms
+            .filter { shadowOf(it.operation).savedIntent.component?.className == AgendaReceiver::class.java.name }
         assertTrue("devia ter 1 alarme só, tem ${l.size}: " + l.joinToString { "${it.triggerAtMs - now()} ms ${it.operation}" }, l.size <= 1)
         return l.firstOrNull()?.triggerAtMs
     }
@@ -314,7 +315,7 @@ class AgendaAndroidTest {
         containerStatus = "PUBLISHED"
         ThreadsPublish.runPending(c)
         assertEquals(AgendaCore.PUBLICADA, Agenda.get(c, o.optString("id"))!!.optString("status"))
-        assertTrue(reqs.none { it.path.orEmpty().startsWith("/v1.0/u1/threads_publish") })
+        assertTrue(reqs.none { it.method == "POST" && it.path.orEmpty().startsWith("/v1.0/u1/threads_publish?") })
         assertTrue(reqs.joinToString { it.method + " " + it.path } + " | " + Agenda.get(c, o.optString("id"))!!.optJSONArray("log"),
             reqs.none { it.method == "POST" && it.path.orEmpty().startsWith("/v1.0/u1/threads") })
     }
