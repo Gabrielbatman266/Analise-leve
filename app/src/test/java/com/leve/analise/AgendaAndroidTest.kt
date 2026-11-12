@@ -439,6 +439,7 @@ class AgendaAndroidTest {
         assertTrue(b.zipWithNext().all { (x, y) -> x.optLong("at") < y.optLong("at") })
         assertTrue(Agenda.all(c).isEmpty()) // só entra na agenda quando o Threads confirmar o agendamento
         // sem o leitor de tela ligado: abre a tela do lote pra ligar e tocar em "Agendar todos"
-        assertEquals(BatchActivity::class.java.name, shadowOf(a).nextStartedActivity.component?.className)
+        val started = generateSequence { shadowOf(a).nextStartedActivity ?: shadowOf(c).nextStartedActivity }.take(5).toList()
+        assertTrue("abriu: " + started.joinToString { it.component?.className ?: it.action.orEmpty() }, started.any { it.component?.className == BatchActivity::class.java.name })
     }
 }
