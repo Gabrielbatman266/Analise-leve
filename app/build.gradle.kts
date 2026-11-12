@@ -51,4 +51,7 @@ dependencies {
     implementation("androidx.media3:media3-effect:1.4.1")
     implementation("androidx.media3:media3-common:1.4.1")
     implementation("androidx.media3:media3-muxer:1.4.1")
+
+    // testes da agenda (rodam no GitHub a cada build; se falhar, não sai APK)
+    testImplementation("junit:junit:4.13.2")
 }

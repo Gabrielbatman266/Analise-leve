@@ -48,6 +48,7 @@ object PostConfirm {
         l.lastOrNull()?.let { notifyAsk(c, it) }
         if (!yes) return
         SendLog.confirm(c, kind, id)
+        if (kind == "fila") try { Agenda.onConfirmed(c, id) } catch (e: Exception) { ErrLog.log(c, "agenda", e) }
         val cap = p.optString("cap")
         val now = System.currentTimeMillis()
         when (kind) {

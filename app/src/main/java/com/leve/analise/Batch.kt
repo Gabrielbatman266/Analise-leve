@@ -117,8 +117,11 @@ class BatchActivity : Activity() {
         val w = Store.prefs(this).getInt("lote_wait", -1); if (w < 0) return
         val l = Batch.load(this); val o = l.getOrNull(w) ?: return
         Store.prefs(this).edit().remove("lote_wait").apply()
+        if (o.optBoolean("done")) { // o leitor viu você agendar: já anotou
+            Toast.makeText(this, "✓ Detectei: agendado para " + AgendaCore.fmt(o.optLong("at")), Toast.LENGTH_LONG).show(); draw(); return
+        }
         AlertDialog.Builder(this).setTitle("Agendou o post das ${hm(o.optLong("at"))}?")
-            .setPositiveButton("✓ Agendei") { _, _ -> o.put("done", true); Batch.save(this, l); Batch.scheduled(this, o); draw()
+            .setPositiveButton("✓ Agendei") { _, _ -> o.put("done", true); Batch.save(this, l); Batch.scheduled(this, o); try { Agenda.fromBatch(this, o) } catch (e: Exception) { }; draw()
                 if (l.any { !it.optBoolean("done") }) next() else Toast.makeText(this, "🎉 Lote todo agendado", Toast.LENGTH_LONG).show() }
             .setNegativeButton("Não", null).show()
     }

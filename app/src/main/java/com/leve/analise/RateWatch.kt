@@ -179,7 +179,7 @@ class RateWatchReceiver : BroadcastReceiver() {
             val pr = goAsync(); Thread { try { RateWatch.run(c) } finally { pr.finish() } }.start() // já pergunta o próximo, se tiver
             return
         }
-        val pr = goAsync(); Thread { try { RateWatch.run(c) } finally { pr.finish() } }.start()
+        val pr = goAsync(); Thread { try { try { Agenda.tick(c) } catch (e: Exception) { ErrLog.log(c, "agenda", e) }; RateWatch.run(c) } finally { pr.finish() } }.start()
     }
 }
 
@@ -1122,8 +1122,86 @@ class ScreenReader : AccessibilityService() {
         try { dispatchGesture(android.accessibilityservice.GestureDescription.Builder().addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 650)).build(), null, null) } catch (e: Exception) { }
     }
 
+    // ================= 🗓 você agendou NA MÃO no Threads: detecta sozinho e anota a data/hora =================
+    private var swLast = 0L; private var swAt: java.time.ZonedDateTime? = null; private var swSeen = 0L; private var swCap = ""; private var swCapAt = 0L; private var swDone = ""; private var swPicked = false
+    private val SW_WORD = Regex("schedul|agend|program", RegexOption.IGNORE_CASE)
+    private val SW_CONFIRM = Regex("^(schedule|agendar|programar|done|concluir|concluído|ok|salvar|save|confirmar|confirm)$", RegexOption.IGNORE_CASE)
+    private val SW_TOAST = Regex("(scheduled|agendad[oa]|programad[oa])", RegexOption.IGNORE_CASE)
+
+    /** Lê a tela de agendar (data/hora escolhidas) e a legenda do post; confirma quando você toca em Agendar ou o Threads avisa. */
+    private fun schedWatch(e: AccessibilityEvent) {
+        val now = System.currentTimeMillis()
+        val type = e.eventType
+        // texto avisando que agendou (toast/snackbar do Threads)
+        if (type == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED || type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            val t = e.text.joinToString(" ")
+            if (SW_TOAST.containsMatchIn(t)) { AgendaCore.parseSchedule(listOf(t), java.time.ZonedDateTime.now())?.let { swAt = it; swSeen = now }; confirmDetected("aviso do Threads") ; return }
+        }
+        // a legenda que você está escrevendo
+        if (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) { e.text.joinToString(" ").trim().takeIf { it.length >= 3 }?.let { swCap = it; swCapAt = now }; return }
+        if (type == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+            val t = (e.text.joinToString(" ").ifBlank { e.contentDescription?.toString().orEmpty() }).trim()
+            if (SW_CONFIRM.matches(t)) {
+                // lê a tela uma última vez (o horário pode ter mudado) e confirma se for o botão final de agendar
+                val visible = readSchedScreen(now)
+                // botão "Agendar" com a data na tela (ou depois de você ter escolhido a data e tocado em Concluir) = agendou.
+                // O item "Agendar…" do menu (sem data na tela ainda) não conta.
+                if (Regex("^(schedule|agendar|programar)$", RegexOption.IGNORE_CASE).matches(t)) { if (visible || swPicked) confirmDetected("tocou em $t") }
+                else if (visible) swPicked = true
+            }
+            return
+        }
+        if (now - swLast < 700) return
+        swLast = now
+        readSchedScreen(now)
+    }
+
+    /** true = tem data/hora de agendamento na tela agora. */
+    private fun readSchedScreen(now: Long): Boolean {
+        val root = rootInActiveWindow ?: return false
+        if (root.packageName?.toString() != ThreadsNotif.THREADS) return false
+        val all = nodes(root)
+        all.firstOrNull { it.isEditable && (it.text?.length ?: 0) >= 3 && !(it.text ?: "").toString().startsWith("@") }?.let { n ->
+            val t = n.text.toString().trim(); val hintT = if (android.os.Build.VERSION.SDK_INT >= 26) n.hintText?.toString().orEmpty() else ""
+            if (t != hintT) { swCap = t; swCapAt = now }
+        }
+        val texts = all.mapNotNull { (it.text ?: it.contentDescription)?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() && s.length < 80 } }
+        if (texts.none { SW_WORD.containsMatchIn(it) }) return false
+        val joined = texts.joinToString(" ")
+        val z = AgendaCore.parseSchedule(texts + joined, java.time.ZonedDateTime.now()) ?: return false
+        if (z.toInstant().toEpochMilli() < now - 120_000L) return false
+        if (swAt != z) Store.prefs(this).edit().putString("ag_sw_seen", z.toString() + " · " + texts.filter { SW_WORD.containsMatchIn(it) || AgendaCore.findTime(listOf(it)) != null }.take(4).joinToString(" | ")).apply()
+        if (swAt != z) swPicked = false
+        swAt = z; swSeen = now
+        return true
+    }
+
+    private fun confirmDetected(why: String) {
+        val now = System.currentTimeMillis()
+        val z = swAt ?: return
+        if (now - swSeen > 15 * 60_000L) return
+        val at = z.toInstant().toEpochMilli()
+        if (at < now - 120_000L) return
+        val cap = if (now - swCapAt < 30 * 60_000L) swCap else ""
+        val key = "$at|$cap"
+        if (key == swDone) return
+        swDone = key; swAt = null; swPicked = false
+        Thread {
+            try {
+                val msg = Agenda.addDetected(this, at, cap)
+                Store.prefs(this).edit().putString("ag_sw_last", AgendaCore.fmt(at) + " ($why)").apply()
+                hint(msg, 6000)
+                Agenda.get(this, Agenda.all(this).filter { it.optString("mode") == "threads" }.minByOrNull { Math.abs(it.optLong("at") - at) }?.optString("id").orEmpty())
+                    ?.let { Agenda.notifySimple(this, it, msg, (if (cap.isNotBlank()) "“" + cap.take(80) + "”\n" else "") + "O Threads publica sozinho nessa hora. Quando ele avisar que publicou, a Agenda marca ✓.") }
+            } catch (x: Exception) { ErrLog.log(this, "agenda: detectar agendamento", x) }
+        }.start()
+    }
+
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
         val ep = e?.packageName?.toString()
+        if (ep == ThreadsNotif.THREADS && e != null) try { schedWatch(e) } catch (x: Exception) { ErrLog.log(this, "agenda: leitor", x) }
+        // eventos novos (toque, digitação, avisos) só servem pra agenda: o resto do leitor continua como antes
+        if (e != null && e.eventType in setOf(AccessibilityEvent.TYPE_VIEW_CLICKED, AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED, AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED)) return
         if (!running && Macro.on(this) && ep == Macro.app(this)) { appPkg = ep; doneCells.clear(); startMacro() }
         if (ep != null && !running) try { forceCaption(ep) } catch (x: Exception) { }
         if (ep == ThreadsNotif.THREADS && composeUntil > System.currentTimeMillis()) try { composeStep() } catch (x: Exception) { ErrLog.log(this, "agendar: passo $cStep", x) }

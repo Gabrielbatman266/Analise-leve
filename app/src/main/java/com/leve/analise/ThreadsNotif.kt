@@ -282,6 +282,12 @@ class ThreadsListener : NotificationListenerService() {
         val text = textOf(n)
         if (summary) { if (ThreadsNotif.on(this)) cleanSummary(sbn); return }
         if (text.isEmpty()) return
+        // 🗓 agenda: "Thread posted!/publicado" confirma; "scheduled/agendado para ..." anota o horário
+        if (ThreadsNotif.likes(text) == null) try {
+            if (Regex("(thread|post)\\w*\\s+(posted|publicad)|posted!|foi publicad", RegexOption.IGNORE_CASE).containsMatchIn(text)) Agenda.onThreadsPosted(this)
+            else if (Regex("scheduled|agendad|programad", RegexOption.IGNORE_CASE).containsMatchIn(text))
+                AgendaCore.parseSchedule(listOf(text), java.time.ZonedDateTime.now())?.let { z -> if (z.toInstant().toEpochMilli() > System.currentTimeMillis() - 120_000L) Agenda.addDetected(this, z.toInstant().toEpochMilli(), "") }
+        } catch (e: Exception) { ErrLog.log(this, "agenda: notificação", e) }
         val likes = ThreadsNotif.likes(text)
         if (likes != null) try { ThreadsNotif.track(this, text, likes) } catch (e: Exception) { ErrLog.log(this, "curtidas", e) }
         if (!ThreadsNotif.on(this)) { // só lê as curtidas (nota automática), sem silenciar nada

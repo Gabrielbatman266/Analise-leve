@@ -53,6 +53,9 @@ jobs:
           echo "LEVE_KEYSTORE_PATH=$HOME/.leve-key/leve.jks" >> "$GITHUB_ENV"
           echo "LEVE_KEYSTORE_PASS=$PASS" >> "$GITHUB_ENV"
 
+      - name: Testes (agenda)
+        run: gradle testReleaseUnitTest --no-daemon
+
       - name: Compilar
         run: gradle assembleRelease --no-daemon --stacktrace
 

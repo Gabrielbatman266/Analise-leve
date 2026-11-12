@@ -94,6 +94,8 @@ class MainActivity : Activity() {
 
     internal fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
+    private var agendaRedraw: (() -> Unit)? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = BG
@@ -205,6 +207,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         Auto.migrate(this)
+        Thread { try { Agenda.tick(this) } catch (e: Exception) { ErrLog.log(this, "agenda", e) }; ui.post { agendaRedraw?.invoke() } }.start()
         PostBar.update(this); keysRedraw?.invoke(); tnRedraw?.invoke(); healthRedraw?.invoke(); histRedraw?.invoke(); panelRedraw?.invoke(); setupRedraw?.invoke(); rankRedraw?.invoke()
         if (ThreadsNotif.on(this) && ThreadsNotif.hasAccess(this) && !ThreadsNotif.live(this)) ThreadsNotif.rebind(this)
         ui.postDelayed({ askPending() }, 600)
@@ -671,7 +674,10 @@ class MainActivity : Activity() {
             if (pk == null) toast("A fila está vazia")
             else startActivity(Intent(this, PostActivity::class.java).putExtra("id", pk.first).putExtra("caption", pk.second))
         }
-        button("🗓 Agendar vários de uma vez", cp) { startActivity(Intent(this, BatchActivity::class.java)) }
+        val agInfo = text(try { Agenda.summary(this) } catch (e: Exception) { "" }, 12f, MUTED, parent = cp)
+        agendaRedraw = { agInfo.text = try { Agenda.summary(this) } catch (e: Exception) { "" } }
+        button("🗓 Agenda (calendário, repetição, publicar sozinho)", cp, primary = true) { startActivity(Intent(this, AgendaActivity::class.java)) }
+        button("🗓 Agendar vários no Threads (um por um)", cp) { startActivity(Intent(this, BatchActivity::class.java)) }
         tvPostInfo = text("", 13f, OK, parent = cp)
         val cpR = sub(cp, "⏰ Lembretes, blocos e horários")
         text("Lembrete pra postar: a notificação já vem com foto e legenda sorteadas. Toque em Postar e depois em Publicar no Threads.", 12f, MUTED, parent = cpR)

@@ -54,7 +54,7 @@ object ThreadsApi {
     fun disconnect(c: Context) = p(c).edit().remove("th_token").remove("th_user").remove("th_uid").apply()
 
     /** Renova o token quando faltam menos de 15 dias (o Threads deixa a partir de 24 h de idade). */
-    private fun refreshIfNeeded(c: Context) {
+    fun refreshIfNeeded(c: Context) {
         if (expiresAt(c) - System.currentTimeMillis() > 15L * 86400_000L) return
         try {
             val r = get(BASE + "refresh_access_token?grant_type=th_refresh_token&access_token=${enc(token(c))}")
