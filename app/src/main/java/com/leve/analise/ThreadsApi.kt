@@ -256,6 +256,9 @@ object ThreadsApi {
         invalidate()
     }
 
+    /** O registro de um post feito fora do app (pela legenda). */
+    fun orphanOf(c: Context, text: String): JSONObject? { val k = "orf:" + norm(text).take(60).hashCode(); return posts(c).firstOrNull { it.optString("id") == k } }
+
     /** Seguidores lidos na tela do perfil (sem API). */
     fun addFollowers(c: Context, n: Int, src: String) {
         if (n <= 0) return

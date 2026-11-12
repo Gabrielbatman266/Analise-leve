@@ -376,6 +376,8 @@ class MainActivity : Activity() {
         val tvRules = text("🎓 Ensinado: " + ReaderRules.summary(this), 12f, OK, parent = crO)
         button("Apagar o que ensinei", crO) { ReaderRules.clear(this); tvRules.text = "🎓 Ensinado: " + ReaderRules.summary(this); toast("Regras apagadas") }
         text("✍ Legenda forçada: se ao mandar o post pro Threads/Instagram o campo da legenda vier vazio, o leitor de tela escreve a legenda lá (não publica nada, só preenche).", 12f, MUTED, parent = crO)
+        chips(crO, listOf("🏆 Salvar post de fora que bombou", "Não salvar"), { if (Harvest.on(this)) "🏆 Salvar post de fora que bombou" else "Não salvar" }) { Harvest.setOn(this, it.startsWith("🏆")) }
+        text("🏆 Quando o leitor vê um post seu feito FORA do app que bombou (pontuação alta ou 2x suas curtidas normais), ele salva a legenda no banco com voto bom e a foto na fila (procura o original na galeria; se não achar, recorta da tela). Já salvou: ${Harvest.total(this)}.", 12f, MUTED, parent = crO)
         chips(crO, listOf("✍ Forçar legenda", "Não forçar"), { if (CapForce.on(this)) "✍ Forçar legenda" else "Não forçar" }) { CapForce.setOn(this, it.startsWith("✍")) }
         val rpz = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; crO.addView(rpz, lpMatch())
         val bPz = button("", rpz, weight = true) { }

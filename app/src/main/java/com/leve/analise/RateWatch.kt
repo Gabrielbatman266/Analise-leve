@@ -1,6 +1,7 @@
 package com.leve.analise
 
 import android.accessibilityservice.AccessibilityService
+import android.graphics.Bitmap
 import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
@@ -540,7 +541,7 @@ class ScreenReader : AccessibilityService() {
         val fromApp = appHit
         val kindNow = if (pkg == ThreadsNotif.INSTA) "video" else "fila"
         val force = ThreadsApi.sane(taught).keys
-        if (!fromApp && core(cap).length >= 8) ThreadsApi.upsertOrphan(this, cap, clean, "forcado", kindNow, force)
+        if (!fromApp && core(cap).length >= 8) { ThreadsApi.upsertOrphan(this, cap, clean, "forcado", kindNow, force); if (kindNow == "fila") h.postDelayed({ harvest(cap) }, 1600) }
         else if (fromApp && force.isNotEmpty()) lastHit?.let { s -> ThreadsApi.upsertLocal(this, s.optLong("at"), s.optString("id"), s.optString("cap"), clean.filterKeys { it in force }, "ensinado", kindNow, force) }
         opened = 0; captured(clean, manual = true)
         pill?.text = (pill?.text ?: "").toString() + (if (force.isNotEmpty()) "\n🎓 usei o que você ensinou (" + force.size + ")" else "") + if (fromApp) "\n📌 post do app" else if (core(cap).length >= 8) "\n📌 post de fora: \"" + cap.replace('\n', ' ').take(30) + "…\"" else "\n⚠ não achei a legenda: abra o post"
@@ -912,6 +913,44 @@ class ScreenReader : AccessibilityService() {
         m["follows"]?.let { m["fol"] = it; m.remove("follows") }
         ThreadsApi.upsertOrphan(this, currentCap, m, if (insights) "insights" else "tela")
         captured(m)
+        if (!running) harvest(currentCap) // na coleta automática a tela troca rápido: guarda só a legenda depois
+        else if (Harvest.shouldSave(this, currentCap)) { Harvest.saveCaption(this, currentCap); Harvest.done(this, currentCap) }
+    }
+
+    /**
+     * 🏆 Post de fora que bombou: guarda a legenda e tira um "print" só da foto do post (sem os avisos do app por cima).
+     * Depois procura a foto original na galeria pela impressão digital da imagem.
+     */
+    private fun harvest(cap: String) {
+        if (!Harvest.shouldSave(this, cap)) return
+        Harvest.saveCaption(this, cap)
+        val root = try { rootInActiveWindow } catch (e: Exception) { null }
+        val dm = resources.displayMetrics
+        val img = root?.let { r -> nodes(r).filter { it.isVisibleToUser && it.className?.toString()?.contains("Image") == true }.map { rect(it) }
+            .filter { it.width() >= dpx(90) && it.height() >= dpx(90) && it.width() < dm.widthPixels * 1.01 }.maxByOrNull { it.width() * it.height() } }
+        fun finish(msg: String) { Harvest.done(this, cap); show("🏆 Post de fora que bombou: legenda salva no banco · $msg", 0xEE15803D.toInt()); h.postDelayed({ if (!running && !forcing) clearOverlay() }, 5000) }
+        if (img == null || android.os.Build.VERSION.SDK_INT < 30) { Thread { val m = Harvest.savePhoto(this, cap, null); h.post { finish(m) } }.start(); return }
+        // esconde os avisos e o botão do app pra não sair no recorte
+        pill?.visibility = android.view.View.GONE; readBtn?.visibility = android.view.View.GONE
+        h.postDelayed({
+            try {
+                takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+                    override fun onSuccess(s: ScreenshotResult) {
+                        val crop = try {
+                            val hb = s.hardwareBuffer
+                            val full = Bitmap.wrapHardwareBuffer(hb, s.colorSpace)?.copy(Bitmap.Config.ARGB_8888, false); hb.close()
+                            full?.let { f -> val r = android.graphics.Rect(img); r.intersect(0, 0, f.width, f.height); if (r.width() > 10 && r.height() > 10) Bitmap.createBitmap(f, r.left, r.top, r.width(), r.height()) else null }
+                        } catch (e: Exception) { null }
+                        pill?.visibility = android.view.View.VISIBLE; readBtn?.visibility = android.view.View.VISIBLE
+                        Thread { val m = try { Harvest.savePhoto(this@ScreenReader, cap, crop) } catch (e: Exception) { ErrLog.log(this@ScreenReader, "salvar post de fora", e); "a foto deu erro" }; h.post { finish(m) } }.start()
+                    }
+                    override fun onFailure(code: Int) {
+                        pill?.visibility = android.view.View.VISIBLE; readBtn?.visibility = android.view.View.VISIBLE
+                        finish("a foto não deu (desligue e ligue o Leitor de tela uma vez pra liberar o print)")
+                    }
+                })
+            } catch (e: Exception) { pill?.visibility = android.view.View.VISIBLE; readBtn?.visibility = android.view.View.VISIBLE; finish("a foto não deu") }
+        }, 250)
     }
 
     /** Guarda o que estava na tela quando não achou números (vai pro diagnóstico). */
