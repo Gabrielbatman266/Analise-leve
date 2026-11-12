@@ -722,7 +722,12 @@ class ScreenReader : AccessibilityService() {
                 val thumbs = all.filter { it.className?.toString()?.let { c -> c.contains("Image") || c.contains("View") } == true }
                     .map { it to rect(it) }.filter { (n, r) -> r.width() in dpx(60)..(dm.widthPixels / 2) && Math.abs(r.width() - r.height()) < dpx(30) && r.top > dm.heightPixels * 0.12 && !Regex("c[aâ]mera").containsMatchIn(lab(n)) }
                     .sortedWith(compareBy({ it.second.top / dpx(30) }, { it.second.left }))
-                val first = thumbs.firstOrNull()?.first
+                // só quadradinhos que o Threads chama de FOTO ("Photo thumbnail, Added on…"): nunca a câmera nem vídeo
+                val photoRe = Regex("^(photo thumbnail|miniatura de foto|miniatura da foto|foto|photo|imagem|image)\\b", RegexOption.IGNORE_CASE)
+                val named = all.filter { photoRe.containsMatchIn(lab(it)) && !Regex("(?i)video|vídeo|c[aâ]mera|camera").containsMatchIn(lab(it)) }
+                    .sortedWith(compareBy({ rect(it).top / dpx(30) }, { rect(it).left }))
+                if (cTries == 0) saveTree(all, "galeria do Threads")
+                val first = named.firstOrNull() ?: thumbs.map { it.first }.firstOrNull { n -> lab(n).isNotEmpty() && !Regex("(?i)c[aâ]mera|camera|video|vídeo|take|tirar").containsMatchIn(lab(n)) }
                 if (first == null) { clog("sem fotos na galeria", all); if (cTries >= 6) cFail("Não achei as fotos da galeria do Threads.", all) else again(); return }
                 clog("toquei na 1ª foto", all)
                 show("🗓 Escolhendo a foto…"); if (tap(first)) { cTapAt = now; cPicked = true; cTries = 0 } else cTries++; again()
