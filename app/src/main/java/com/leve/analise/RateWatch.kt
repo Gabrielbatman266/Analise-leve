@@ -629,6 +629,13 @@ class ScreenReader : AccessibilityService() {
     // Passos: 1) toca em novo post  2) toca em anexar foto  3) escolhe a foto mais recente (a que o app acabou de pôr na galeria)
     //         4) escreve a legenda  5) ⋯ › Agendar. Nunca toca em "Postar/Post".
     private var cPicked = false
+    private val cMenus = HashSet<String>(); private var cMenuOpen = ""
+    /** Guarda o que tinha em cada menu aberto (pro diagnóstico). */
+    private fun saveMenu(all: List<AccessibilityNodeInfo>, why: String) {
+        val t = all.mapNotNull { ((it.text ?: it.contentDescription)?.toString()?.trim())?.takeIf { s -> s.isNotEmpty() }?.take(30) }.distinct().take(30).joinToString(" | ")
+        val l = (Store.prefs(this).getString("agendar_menus", "") ?: "").split("\n").takeLast(6) + (android.text.format.DateFormat.format("HH:mm:ss", System.currentTimeMillis()).toString() + " $why: $t")
+        Store.prefs(this).edit().putString("agendar_menus", l.joinToString("\n")).apply()
+    }
     private var cTarget = 0L // 🤖 piloto automático: data/hora que tem que ficar escolhida no Agendar do Threads
     private val cWheel = HashMap<String, Int>()
     private var composeUntil = 0L; private var cStep = 0; private var cCap = ""; private var cLabel = ""; private var cLast = 0L; private var cTapAt = 0L; private var cTries = 0
@@ -734,35 +741,67 @@ class ScreenReader : AccessibilityService() {
             }
             4 -> { // legenda
                 val ed = all.firstOrNull { it.isEditable } ?: run { again(); return }
-                fun curText() = if (android.os.Build.VERSION.SDK_INT >= 26 && ed.isShowingHintText) "" else (ed.text ?: "").toString().trim().let { t -> if (Regex("^(what.s new\\??|o que há de novo\\??|o que ha de novo\\??|start a thread.*|comece um thread.*)$", RegexOption.IGNORE_CASE).matches(t)) "" else t }
-                if (curText().isEmpty()) {
-                    // sem texto o Threads esconde o Agendar. O Threads ignora "escrever direto" às vezes:
-                    // 1º toca no campo (abre o teclado) e escreve; depois cola (a legenda já está copiada); por último seleciona e cola.
+                val HINT = Regex("^(what.s new\\??|o que há de novo\\??|o que ha de novo\\??|start a thread.*|comece um thread.*|inicie um thread.*)$", RegexOption.IGNORE_CASE)
+                fun curText() = if (android.os.Build.VERSION.SDK_INT >= 26 && ed.isShowingHintText) "" else (ed.text ?: "").toString().trim().let { t -> if (HINT.matches(t)) "" else t }
+                // o "What's new?" é um texto à parte em cima do campo: se sumiu, a legenda entrou (mesmo que o campo não conte o texto)
+                val hintVisible = all.any { !it.isEditable && HINT.matches(lab(it)) }
+                if (curText().isEmpty() && (hintVisible || cTries == 0)) {
+                    // O Threads às vezes ignora os comandos de acessibilidade. 4 jeitos, um por tentativa:
+                    // escrever direto · colar · segurar o dedo no campo e tocar em "Colar" (igual pessoa) · selecionar e colar
                     val args = android.os.Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, cCap) }
-                    when (cTries % 3) {
-                        0 -> { tapCenter(ed); ed.performAction(AccessibilityNodeInfo.ACTION_FOCUS); h.postDelayed({ try { (rootInActiveWindow?.let { r -> nodes(r).firstOrNull { it.isEditable } } ?: ed).performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args) } catch (e: Exception) { } }, 500) }
-                        1 -> { ClipSync.copy(this, cCap); ed.performAction(AccessibilityNodeInfo.ACTION_CLICK); ed.performAction(AccessibilityNodeInfo.ACTION_FOCUS); h.postDelayed({ try { (rootInActiveWindow?.let { r -> nodes(r).firstOrNull { it.isEditable } } ?: ed).performAction(AccessibilityNodeInfo.ACTION_PASTE) } catch (e: Exception) { } }, 500) }
-                        else -> { ed.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, android.os.Bundle().apply { putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0); putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, 0) }); ed.performAction(AccessibilityNodeInfo.ACTION_PASTE); ed.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args) }
+                    fun fresh() = rootInActiveWindow?.let { r -> nodes(r).firstOrNull { it.isEditable } } ?: ed
+                    ClipSync.copy(this, cCap)
+                    when (cTries % 4) {
+                        0 -> { tapCenter(ed); h.postDelayed({ try { fresh().performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args) } catch (e: Exception) { } }, 600) }
+                        1 -> { ed.performAction(AccessibilityNodeInfo.ACTION_FOCUS); h.postDelayed({ try { fresh().performAction(AccessibilityNodeInfo.ACTION_PASTE) } catch (e: Exception) { } }, 500) }
+                        2 -> { // segura o dedo no campo → menu "Colar"
+                            val r = rect(ed); val path = android.graphics.Path().apply { moveTo(r.left + dpx(40).toFloat(), r.top + minOf(r.height() / 2f, dpx(16).toFloat())) }
+                            try { dispatchGesture(android.accessibilityservice.GestureDescription.Builder().addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 900)).build(), null, null) } catch (e: Exception) { }
+                            h.postDelayed({ try {
+                                val wins = windows.mapNotNull { it.root }.flatMap { nodes(it) } + (rootInActiveWindow?.let { nodes(it) } ?: emptyList())
+                                wins.firstOrNull { Regex("^(paste|colar)$", RegexOption.IGNORE_CASE).matches(((it.text ?: it.contentDescription) ?: "").toString().trim()) }?.let { p -> if (!click(p)) tapCenter(p) }
+                            } catch (e: Exception) { } }, 1300)
+                        }
+                        else -> { ed.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, android.os.Bundle().apply { putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0); putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, 0) }); ed.performAction(AccessibilityNodeInfo.ACTION_PASTE) }
                     }
-                    clog("legenda: tentativa ${cTries % 3}", all)
-                    show("🗓 Escrevendo a legenda…"); cTapAt = now
-                    if (cTries >= 8) { saveTree(all, "legenda não entrou"); cFail("A legenda não entrou no post (sem texto o Threads esconde o Agendar).", all); return }
+                    clog("legenda: jeito ${cTries % 4} (texto no campo: '${curText().take(15)}', dica visível: $hintVisible)", all)
+                    show("🗓 Escrevendo a legenda…"); cTapAt = now + (if (cTries % 4 == 2) 1200 else 0)
+                    if (cTries >= 9) { saveTree(all, "legenda não entrou"); cFail("A legenda não entrou no post.", all); return }
                     again(); return
                 }
-                cStep = 5; cTries = 0; cTapAt = now; again()
+                clog("legenda ok: '${curText().take(20)}'", all)
+                cStep = 5; cTries = 0; cTapAt = now; cMenus.clear(); cMenuOpen = ""; again()
             }
-            5 -> { // ⋯ de cima › Agendar
-                all.firstOrNull { SCHED.matches(lab(it)) || SCHED.matches(norm((it.text ?: "").toString())) }?.let { b ->
-                    if (cTarget > 0) { clog("toquei em Agendar (menu)", all); if (tap(b)) { cStep = 6; cTries = 0; cTapAt = now; show("🗓 Escolhendo $cLabel…") }; again(); return }
-                    if (tap(b)) { composeUntil = 0; show("🗓 Agora escolha a data e a hora: $cLabel\ne toque em Agendar", 0xEE15803D.toInt()); h.postDelayed({ if (!running && !forcing) clearOverlay() }, 10000) }
+            5 -> { // Agendar: está num dos ⋯ do post. Tenta cada um: o da fileira de ícones ("See more options"), o de cima ("More options") e o de baixo ("Post options")
+                // menus podem abrir numa janela separada: procura em todas as janelas do Threads
+                val every = try { windows.filter { it.root?.packageName?.toString() == ThreadsNotif.THREADS }.flatMap { w -> w.root?.let { nodes(it) } ?: emptyList() }.filter { it.isVisibleToUser } } catch (e: Exception) { emptyList() }
+                val schedNode = (all + every).firstOrNull { val l = lab(it); l.length < 40 && (SCHED.matches(l) || Regex("^(schedul|agendar|programar)").containsMatchIn(l)) && !Regex("(?i)scheduled|agendad").containsMatchIn(l) }
+                if (schedNode != null) {
+                    saveMenu(all, "menu com Agendar: $cMenuOpen")
+                    if (cTarget > 0) { clog("toquei em Agendar: " + lab(schedNode), all); if (tap(schedNode)) { cStep = 6; cTries = 0; cTapAt = now; show("🗓 Escolhendo $cLabel…") }; again(); return }
+                    if (tap(schedNode)) { composeUntil = 0; show("🗓 Agora escolha a data e a hora: $cLabel\ne toque em Agendar", 0xEE15803D.toInt()); h.postDelayed({ if (!running && !forcing) clearOverlay() }, 10000) }
                     return
                 }
-                val more = all.filter { val r = rect(it); r.top < dm.heightPixels * 0.2 && r.left > dm.widthPixels * 0.6 && (MORE.matches(lab(it)) || it.isClickable && r.width() in dpx(24)..dpx(72)) }
-                    .filter { !POSTBTN.matches(lab(it)) }.maxByOrNull { rect(it).left }
-                if (all.any { Regex("ai label|rótulo de ia|rotulo de ia").containsMatchIn(lab(it)) }) { performGlobalAction(GLOBAL_ACTION_BACK); cStep = 4; cTapAt = now; cTries++; again(); return } // menu sem Agendar = sem texto ainda
-                if (more == null || cTries >= 5) { clog("sem ⋯/Agendar", all); saveTree(all, "sem agendar"); cFail("Não achei o ⋯ › Agendar.", all); return }
-                clog("toquei no ⋯: " + lab(more), all)
-                show("🗓 Abrindo o ⋯ › Agendar…"); if (tap(more)) cTapAt = now; cTries++; again()
+                val inEditor = all.any { it.isEditable }
+                if (cMenuOpen.isNotEmpty()) {
+                    // abriu um menu e não tem Agendar: anota o que tinha (pro diagnóstico) e fecha
+                    saveMenu((every - all.toSet()).ifEmpty { all }, "menu sem Agendar: $cMenuOpen")
+                    cMenus += cMenuOpen; cMenuOpen = ""
+                    if (!inEditor || all.size < 25) { performGlobalAction(GLOBAL_ACTION_BACK); cTapAt = now; again(); return }
+                }
+                if (!inEditor) {
+                    // saiu do editor? (ex.: perguntou se quer descartar) → cancela e volta pro post
+                    all.firstOrNull { Regex("^(cancel|cancelar|keep editing|continuar editando|voltar)$", RegexOption.IGNORE_CASE).matches(lab(it)) }?.let { tap(it) }
+                    again(); return
+                }
+                val order = listOf("see more options", "mais opções", "more options", "post options", "opções do post", "opções da publicação")
+                val cands = all.filter { val l = lab(it); (l in order || MORE.matches(l)) && !POSTBTN.matches(l) }
+                    .sortedBy { order.indexOf(lab(it)).let { k -> if (k < 0) 99 else k } }
+                val next = cands.firstOrNull { lab(it) + "@" + rect(it).top / dpx(40) !in cMenus }
+                if (next == null || cTries >= 9) { clog("sem Agendar em nenhum ⋯", all); saveTree(all, "sem agendar"); cFail("Não achei o Agendar em nenhum ⋯ do post.", all); return }
+                cMenuOpen = lab(next) + "@" + rect(next).top / dpx(40)
+                clog("toquei no ⋯: " + cMenuOpen, all)
+                show("🗓 Procurando o Agendar…"); if (tap(next)) cTapAt = now; cTries++; again()
             }
             6 -> pickerStep(all, now) { again() }
             7 -> { // depois de confirmar a data: o botão do post vira "Agendar" (toca) ou o editor já fechou (agendou)

@@ -146,6 +146,7 @@ object SelfTest {
             try { Growth.report(c).let { r -> appendLine("Crescimento: " + r.lines.joinToString(" | ")); if (r.recs.isNotEmpty()) appendLine("Falta: " + r.recs.joinToString(" | ")) } } catch (e: Exception) { }
             try { appendLine("Threads → Refs: " + ThreadsRefs.diag(c)) } catch (e: Exception) { }
             try { appendLine("Agenda: " + Agenda.diag(c) + " · detectado no Threads: " + (Store.prefs(c).getString("ag_sw_last", "") ?: "") + " · tela lida: " + (Store.prefs(c).getString("ag_sw_seen", "") ?: "").take(160)) } catch (e: Exception) { }
+            Store.prefs(c).getString("agendar_menus", null)?.takeIf { it.isNotBlank() }?.let { appendLine("Menus ⋯ do post:\n$it") }
             Store.prefs(c).getString("agendar_tela", null)?.takeIf { it.isNotBlank() }?.let { appendLine("Tela de agendar do Threads:\n" + it.take(4000)) }
             Store.prefs(c).getString("agendar_log", null)?.takeIf { it.isNotBlank() }?.let { appendLine("Agendar (passos):\n" + it.takeLast(2500)) }
             try { appendLine(Predictor.accuracyText(c)) } catch (e: Exception) { }

@@ -3,7 +3,7 @@
     android:packageNames="com.instagram.barcelona,com.instagram.android"
     android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged|typeViewScrolled|typeViewClicked|typeNotificationStateChanged|typeViewTextChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagReportViewIds|flagIncludeNotImportantViews"
+    android:accessibilityFlags="flagReportViewIds|flagIncludeNotImportantViews|flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="true"
     android:canPerformGestures="true"
     android:canTakeScreenshot="true"
