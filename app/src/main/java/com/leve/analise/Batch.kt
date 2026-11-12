@@ -169,12 +169,13 @@ class BatchActivity : Activity() {
         try {
             // O Agendar só existe no editor COMPLETO do Threads (o do "Compartilhar" não tem). Então: a foto vira a mais recente
             // da galeria, a legenda fica copiada, o Threads abre normal e o leitor faz: novo post › anexar › foto › legenda › ⋯ › Agendar.
+            // O Threads só mostra o "Agendar" no ⋯ quando o post já tem TEXTO. Então: manda foto+legenda, o leitor confere se a
+            // legenda entrou (escreve se não entrou) e só depois abre ⋯ › Agendar.
             ClipSync.copy(this, o.optString("cap"))
             PostQueue.putInGallery(this, o.optString("id"), force = true)
             Store.prefs(this).edit().putInt("lote_wait", i).apply()
             val r = ScreenReader.instance
-            val launch = packageManager.getLaunchIntentForPackage(PostQueue.THREADS)?.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) ?: throw Exception("sem Threads")
-            startActivity(launch)
+            startActivity(VideoExport.shareTo(this, PostQueue.uri(o.optString("id")), "image/jpeg", PostQueue.THREADS, listOf("share", "compose", "post"), o.optString("cap")))
             if (r != null) { r.armCompose("$day às $t", o.optString("cap")); r.hint("🗓 Montando o post ${i + 1} de ${l.size} pra agendar ($day às $t)…", 3000) }
             else Toast.makeText(this, "Ligue o Leitor de tela pra eu montar o post sozinho. Na mão: + › foto mais recente › colar legenda › ⋯ › Agendar ($day às $t)", Toast.LENGTH_LONG).show()
         } catch (e: Exception) { Toast.makeText(this, "Não achei o Threads", Toast.LENGTH_LONG).show() }

@@ -634,8 +634,9 @@ class ScreenReader : AccessibilityService() {
     private val PICK_DONE = Regex("^(add|adicionar|next|avançar|avancar|done|concluir|ok|choose|escolher|select|selecionar)$")
     private val POSTBTN = Regex("^(post|postar|publicar|publish|share|compartilhar)$")
 
-    fun armCompose(label: String, cap: String) {
-        composeUntil = System.currentTimeMillis() + 180_000L; cStep = 1; cCap = cap; cLabel = label; cTries = 0; cTapAt = 0
+    /** [fromShare]: o post já abriu com a foto (Compartilhar); senão começa do "novo post". */
+    fun armCompose(label: String, cap: String, fromShare: Boolean = true) {
+        composeUntil = System.currentTimeMillis() + 180_000L; cStep = if (fromShare) 0 else 1; cCap = cap; cLabel = label; cTries = 0; cTapAt = 0
         h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, 1800)
     }
 
@@ -660,6 +661,9 @@ class ScreenReader : AccessibilityService() {
         val photosInEditor = all.filter { it.className?.toString()?.contains("Image") == true }.map { rect(it) }.filter { it.width() > dm.widthPixels * 0.35 && it.height() > dpx(150) }
         fun again() { if (++cTries > 8) return; h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, 1500) }
         when (cStep) {
+            0 -> { // veio pelo Compartilhar: o editor já tem a foto → vai direto pra legenda
+                if (editor) { cStep = if (photosInEditor.isNotEmpty()) 4 else 2; cTries = 0; composeStep() } else again()
+            }
             1 -> { // novo post
                 if (editor) { cStep = 2; cTries = 0; composeStep(); return }
                 val b = all.firstOrNull { CREATE.matches(lab(it)) } ?: all.firstOrNull { lab(it) == "+" }
@@ -689,8 +693,16 @@ class ScreenReader : AccessibilityService() {
             }
             4 -> { // legenda
                 val ed = all.firstOrNull { it.isEditable } ?: run { again(); return }
-                val cur = if (android.os.Build.VERSION.SDK_INT >= 26 && ed.isShowingHintText) "" else (ed.text ?: "").toString().trim()
-                if (cur.isEmpty()) ed.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, android.os.Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, cCap) })
+                fun curText() = if (android.os.Build.VERSION.SDK_INT >= 26 && ed.isShowingHintText) "" else (ed.text ?: "").toString().trim().let { t -> if (Regex("^(what.s new\\??|o que há de novo\\??|o que ha de novo\\??|start a thread.*|comece um thread.*)$", RegexOption.IGNORE_CASE).matches(t)) "" else t }
+                if (curText().isEmpty()) {
+                    // sem texto o Threads esconde o Agendar: escreve a legenda (ou cola, que já está copiada)
+                    if (!ed.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, android.os.Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, cCap) })) {
+                        ed.performAction(AccessibilityNodeInfo.ACTION_FOCUS); ed.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                    }
+                    show("🗓 Escrevendo a legenda…"); cTapAt = now
+                    if (++cTries >= 4) { cFail("A legenda não entrou no post (sem texto o Threads esconde o Agendar).", all); return }
+                    again(); return
+                }
                 cStep = 5; cTries = 0; cTapAt = now; again()
             }
             5 -> { // ⋯ de cima › Agendar
@@ -700,6 +712,7 @@ class ScreenReader : AccessibilityService() {
                 }
                 val more = all.filter { val r = rect(it); r.top < dm.heightPixels * 0.2 && r.left > dm.widthPixels * 0.6 && (MORE.matches(lab(it)) || it.isClickable && r.width() in dpx(24)..dpx(72)) }
                     .filter { !POSTBTN.matches(lab(it)) }.maxByOrNull { rect(it).left }
+                if (all.any { Regex("ai label|rótulo de ia|rotulo de ia").containsMatchIn(lab(it)) }) { performGlobalAction(GLOBAL_ACTION_BACK); cStep = 4; cTapAt = now; cTries++; again(); return } // menu sem Agendar = sem texto ainda
                 if (more == null || cTries >= 5) { cFail("Não achei o ⋯ › Agendar.", all); return }
                 show("🗓 Abrindo o ⋯ › Agendar…"); if (tap(more)) cTapAt = now; cTries++; again()
             }
