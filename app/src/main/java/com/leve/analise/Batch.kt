@@ -58,6 +58,20 @@ object Batch {
         save(c, l); return l.size
     }
 
+    /** Horário que já passou (ou está em cima): refaz os horários dos que faltam, a partir de daqui a 20 min. */
+    fun refreshTimes(c: Context) {
+        val l = load(c); val left = l.filter { !it.optBoolean("done") }
+        if (left.none { it.optLong("at") < System.currentTimeMillis() + 15 * 60_000L }) return
+        val cal = Calendar.getInstance()
+        val from = System.currentTimeMillis() + 20 * 60_000L
+        cal.set(Calendar.HOUR_OF_DAY, 23); cal.set(Calendar.MINUTE, 30)
+        var to = cal.timeInMillis
+        if (to - from < left.size * 25 * 60_000L) { cal.add(Calendar.DAY_OF_YEAR, 1); to = cal.timeInMillis } // não cabe hoje: vai até amanhã
+        val t = slots(c, left.size, from, to)
+        left.forEachIndexed { k, o -> t.getOrNull(k)?.let { o.put("at", it) } }
+        save(c, l.sortedBy { it.optBoolean("done").not().let { nd -> if (nd) 1 else 0 } * 0 + it.optLong("at") })
+    }
+
     /** Você confirmou que agendou: entra no histórico com o HORÁRIO AGENDADO (é dele que contam idade, números e nota). */
     fun scheduled(c: Context, o: JSONObject) {
         val id = o.optString("id"); val cap = o.optString("cap"); val at = o.optLong("at")
@@ -94,6 +108,7 @@ class BatchActivity : Activity() {
         window.statusBarColor = BG
         root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(18), dp(16), dp(28)) }
         setContentView(ScrollView(this).apply { setBackgroundColor(BG); addView(root) })
+        Batch.refreshTimes(this)
         draw()
     }
 
@@ -163,6 +178,7 @@ class BatchActivity : Activity() {
 
     /** Abre o Threads com foto+legenda do próximo e avisa o horário por cima do Threads. */
     private fun next() {
+        Batch.refreshTimes(this)
         val l = Batch.load(this); val i = l.indexOfFirst { !it.optBoolean("done") }; if (i < 0) return
         val o = l[i]; val t = hm(o.optLong("at"))
         val day = if (android.text.format.DateUtils.isToday(o.optLong("at"))) "hoje" else "amanhã"
