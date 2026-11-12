@@ -545,7 +545,11 @@ class AgendaActivity : Activity() {
             val busy = Agenda.all(this).filter { it.optString("status") in AgendaCore.ACTIVE }.map { it.optLong("at") } + out.map { it.first }
             val slots = Batch.slots(this, perDay + busy.size, from, to).filter { t -> busy.none { Math.abs(it - t) < gap } }.take(perDay)
             for (t in slots) {
-                val pk = Captions.randomPick(this, promo = false) ?: break
+                // mesma foto não aparece duas vezes no mesmo lote (tenta outro sorteio)
+                var pk = Captions.randomPick(this, promo = false) ?: break
+                var k = 0
+                while (out.any { it.second.first == pk.first } && k++ < 12) pk = Captions.randomPick(this, promo = false) ?: break
+                if (out.any { it.second.first == pk.first }) continue
                 Captions.remember(this, pk.first, pk.second) // reservada: o próximo sorteio pega outra
                 out += t to pk
             }
