@@ -549,7 +549,11 @@ class AgendaActivity : Activity() {
                 var pk = Captions.randomPick(this, promo = false) ?: break
                 var k = 0
                 while (out.any { it.second.first == pk.first } && k++ < 12) pk = Captions.randomPick(this, promo = false) ?: break
-                if (out.any { it.second.first == pk.first }) continue
+                if (out.any { it.second.first == pk.first }) {
+                    // o sorteio insiste nas mesmas: pega outra foto da fila que ainda não está no lote
+                    val alt = PostQueue.load(this).filter { o -> o.optString("status") != "postada" && out.none { it.second.first == o.optString("id") } && PostQueue.imageFile(this, o.optString("id")).exists() }.randomOrNull() ?: continue
+                    pk = alt.optString("id") to PostQueue.captionOf(alt).ifBlank { Captions.randomCaption(this) }
+                }
                 Captions.remember(this, pk.first, pk.second) // reservada: o próximo sorteio pega outra
                 out += t to pk
             }
