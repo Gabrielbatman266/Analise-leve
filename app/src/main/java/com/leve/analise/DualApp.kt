@@ -49,7 +49,7 @@ object DualApp {
     fun status(c: Context): String {
         val prof = dualProfile(c, PostQueue.THREADS)
         return (if (on(c)) "ligado" else "desligado") + " · Threads duplo " + (if (prof != null) "encontrado (perfil $prof)" else "não encontrado") +
-            " · última abertura: " + (p(c).getString("dual_last", "-") ?: "-") + " · no 'qual dos dois' o duplo é o ${p(c).getInt("dual_idx", 1) + 1}º" +
+            " · última abertura: " + (p(c).getString("dual_last", "-") ?: "-") + " · 🧠📱 cérebro de análise: " + DualBrain.Memory.load(p(c).getString("dual_brain", null)).let { m -> "toque ${m.tapOk}✓/${m.tapFail}✗ · clique ${m.clickOk}✓/${m.clickFail}✗ · começa pelo " + (if (m.realTapFirst()) "toque" else "clique") + (if (m.byScreen.isNotEmpty()) " · aprendeu ${m.byScreen}" else "") } +
             (p(c).getString("dual_chooser", null)?.let { " · opções vistas: $it" } ?: "") +
             (p(c).getString("ag_fora", null)?.let { " · ⚠ o robô parou fora do Threads em $it" } ?: "")
     }

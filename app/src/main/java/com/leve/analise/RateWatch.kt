@@ -1031,32 +1031,63 @@ class ScreenReader : AccessibilityService() {
         if (r == "normal" && DualApp.on(this)) pickChooser(0)
         return true
     }
+    /** A tela inteira (todas as janelas) no formato do 🧠📱 cérebro de análise. */
+    private fun dualScreen(): List<DualBrain.N> = windows.mapNotNull { it.root }.flatMap { r ->
+        val pkg = r.packageName?.toString() ?: ""
+        nodes(r).filter { it.isVisibleToUser }.mapNotNull { x ->
+            val l = ((x.contentDescription ?: x.text) ?: "").toString().trim(); if (l.isEmpty()) return@mapNotNull null
+            val c = clickable(x); val rr = rect(x)
+            DualBrain.N(l, c?.let { rect(it) }?.let { intArrayOf(it.left, it.top, it.right, it.bottom) }, pkg, rr.top, rr.left)
+        }
+    }
+    private fun dualMem() = DualBrain.Memory.load(Store.prefs(this).getString("dual_brain", null))
+    private val dualOwn get() = setOf(ThreadsNotif.THREADS, ThreadsNotif.INSTA, packageName)
+
+    /**
+     * 🧠📱 Cérebro de análise do "Abrir com": olha a tela, acha o botão do app DUPLO, toca (do jeito que aprendeu),
+     * confere se a janela sumiu e aprende. Se não sumiu, tenta de novo pelo outro jeito (até [n] = 8).
+     */
     private fun pickChooser(n: Int) {
         if (n > 8) return
         h.postDelayed({
             try {
-                val ws = windows.mapNotNull { it.root }.filter { it.packageName?.toString() != packageName }
-                val all = ws.flatMap { nodes(it) }.filter { it.isVisibleToUser }
-                fun lab(x: AccessibilityNodeInfo) = norm(((x.contentDescription ?: x.text) ?: "").toString())
-                val opts = all.filter { Regex("threads|instagram").containsMatchIn(lab(it)) && clickable(it) != null && it.packageName?.toString() != ThreadsNotif.THREADS && it.packageName?.toString() != ThreadsNotif.INSTA }
-                    .distinctBy { clickable(it)?.let { c -> rect(c).toShortString() } }.sortedWith(compareBy({ rect(it).top / dpx(40) }, { rect(it).left }))
-                if (opts.size >= 2) {
-                    Store.prefs(this).edit().putString("dual_chooser", opts.joinToString(" | ") { lab(it) + " @" + rect(it).toShortString() } + " · pacote " + opts.first().packageName).apply()
-                    val dualIdx = Store.prefs(this).getInt("dual_idx", 1)
-                    val pick = opts.firstOrNull { Regex("dual|duplo|clone|segund|\\(2\\)|xspace").containsMatchIn(lab(it)) }
-                        ?: opts.getOrNull(if (DualApp.on(this)) dualIdx else 1 - dualIdx) ?: opts.last()
-                    clog("escolhi no 'qual dos dois': " + lab(pick), all)
-                    // como no Done: o "clique" de acessibilidade pode voltar true e não fazer nada → 1º toque de verdade, depois o clique
-                    clickable(pick)?.let { c -> if (n % 2 == 0) { if (!tapCenter(c)) c.performAction(AccessibilityNodeInfo.ACTION_CLICK) } else { if (!c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) tapCenter(c) } }
-                    // confere: se a janela de escolha continua aberta, tenta de novo pelo outro jeito
-                    h.postDelayed({ try { val still = windows.mapNotNull { it.root }.any { r -> r.packageName?.toString() == opts.first().packageName?.toString() && nodes(r).any { Regex("threads|instagram").containsMatchIn(lab(it)) } }; if (still) pickChooser(n + 1) } catch (e: Exception) { } }, 900)
-                    Store.prefs(this).edit().putString("dual_last", "escolhi no 'qual dos dois': ${lab(pick)} (${opts.indexOf(pick) + 1}º)").apply()
+                val mem = dualMem()
+                val p = DualBrain.analyze(dualScreen(), ownPkgs = dualOwn, mem = mem, wantDual = DualApp.on(this))
+                if (p != null) {
+                    Store.prefs(this).edit().putString("dual_chooser", p.options.joinToString(" | ") + " → ${p.index + 1}º (${p.why})").apply()
+                    val real = if (n % 2 == 0) p.useRealTap else !p.useRealTap   // alterna a cada tentativa, começando pelo que aprendeu
+                    val cx = (p.tap[0] + p.tap[2]) / 2f; val cy = (p.tap[1] + p.tap[3]) / 2f
+                    markDot(cx, cy, 0xFF34D399.toInt())
+                    var done = false
+                    if (real) done = tapAt(cx, cy)
+                    if (!done) {
+                        // clique de acessibilidade no botão que contém esse ponto
+                        val node = windows.mapNotNull { it.root }.flatMap { nodes(it) }.filter { it.isClickable && it.isVisibleToUser && rect(it).contains(cx.toInt(), cy.toInt()) }.minByOrNull { rect(it).width() * rect(it).height() }
+                        done = node?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true || (!real && tapAt(cx, cy))
+                    }
+                    clog("🧠📱 'Abrir com': ${p.options} → toquei no ${p.index + 1}º (${p.why}) por " + (if (real) "toque" else "clique"), emptyList())
+                    Store.prefs(this).edit().putString("dual_last", "escolhi no 'qual dos dois': ${p.options.getOrNull(p.index)} (${p.index + 1}º, ${p.why})").apply()
+                    // confere: a janela sumiu? aprende; senão tenta de novo do outro jeito
+                    h.postDelayed({
+                        try {
+                            val still = DualBrain.analyze(dualScreen(), ownPkgs = dualOwn, mem = mem) != null
+                            DualBrain.learn(mem, p, real, !still)
+                            Store.prefs(this).edit().putString("dual_brain", mem.save()).apply()
+                            if (still) pickChooser(n + 1)
+                        } catch (e: Exception) { }
+                    }, 900)
                     return@postDelayed
                 }
             } catch (e: Exception) { ErrLog.log(this, "app duplo", e) }
             pickChooser(n + 1)
         }, 600)
     }
+
+    /** Toque de verdade num ponto da tela. */
+    private fun tapAt(x: Float, y: Float): Boolean = try {
+        val path = android.graphics.Path().apply { moveTo(x, y) }
+        dispatchGesture(android.accessibilityservice.GestureDescription.Builder().addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 60)).build(), null, null)
+    } catch (e: Exception) { false }
 
     // ================= 🎛 painel flutuante do piloto: ⏸ Corrigir · ✓ Certo · ✗ Errado =================
     @Volatile private var cPaused = false
