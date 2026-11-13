@@ -603,6 +603,10 @@ class AgendaActivity : Activity() {
             ho.text = "Subindo uma imagem de teste…"; bg({ ThreadsPublish.testHost(this) }) { ho.text = it; ho.setTextColor(if (it.startsWith("✓")) OK else BAD) }
         }
 
+        c = card(); tv("📱 Threads duplo (Apps duplos do Xiaomi)", 14f, FG, c, true)
+        tv(DualApp.status(this), 11.5f, MUTED, c)
+        btn(if (DualApp.on(this)) "✓ Ligado: o robô abre o Threads DUPLO" else "Desligado: abre o Threads normal", c, small = true, on = DualApp.on(this)) { DualApp.set(this, !DualApp.on(this)); settings() }
+
         c = card(); tv("🔔 Avisos", 14f, FG, c, true)
         tv("Avisar antes da hora", 12.5f, FG, c)
         val r1 = row(c); listOf(0, 5, 10, 30, 60).forEach { m -> btn(if (m == 0) "não" else "$m min", r1, weight = true, small = true, on = Agenda.remindMin(this) == m) { Agenda.setRemindMin(this, m); Agenda.reschedule(this); settings() } }

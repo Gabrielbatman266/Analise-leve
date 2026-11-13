@@ -165,6 +165,8 @@ class BatchActivity : Activity() {
         }
         if (left > 0) btn("🤖 Agendar todos sozinho no Threads ($left)", root, primary = true) { auto() }
         if (left > 0) btn("▶ Só o próximo · ${hm(l.first { !it.optBoolean("done") }.optLong("at"))}", root) { next() }
+        btn("📱 Threads duplo: " + (if (DualApp.on(this)) "LIGADO (abre o app duplo)" else "desligado (abre o normal)"), root) { DualApp.set(this, !DualApp.on(this)); draw()
+            Toast.makeText(this, DualApp.status(this), Toast.LENGTH_LONG).show() }
         btn("🎓 Ensinar o Agendar (faça 1 na mão, eu gravo)", root) {
             val r = ScreenReader.instance
             if (r == null) { Toast.makeText(this, "Ligue o Leitor de tela do Post Leve primeiro", Toast.LENGTH_LONG).show(); try { startActivity(android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (e: Exception) { } }
@@ -217,8 +219,7 @@ class BatchActivity : Activity() {
             val r = ScreenReader.instance
             // O editor que abre pelo "Compartilhar" NÃO tem Agendar. Só o do botão de novo post (dentro do Threads) tem.
             // Galeria leve: a pasta PostLeve fica só com a foto deste post, a mais nova do celular → é a 1ª na galeria do Threads.
-            val launch = packageManager.getLaunchIntentForPackage(PostQueue.THREADS)?.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) ?: throw Exception("sem Threads")
-            startActivity(launch)
+            if (DualApp.launch(this) == "") throw Exception("sem Threads")
             if (r != null) { r.armCompose("$day às $t", o.optString("cap"), fromShare = false); r.hint("🗓 Montando o post ${i + 1} de ${l.size} pra agendar ($day às $t)…", 3000) }
             else Toast.makeText(this, "Ligue o Leitor de tela pra eu montar o post sozinho. Na mão: + › foto mais recente › colar legenda › ⋯ › Agendar ($day às $t)", Toast.LENGTH_LONG).show()
         } catch (e: Exception) { Toast.makeText(this, "Não achei o Threads", Toast.LENGTH_LONG).show() }

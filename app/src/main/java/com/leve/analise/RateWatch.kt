@@ -770,6 +770,13 @@ class ScreenReader : AccessibilityService() {
             }
             4 -> { // legenda
                 val ed = all.firstOrNull { it.isEditable } ?: run { again(); return }
+                // conta certa? o editor mostra "<conta> profile photo" / "foto do perfil de <conta>"
+                if (cTries == 0) {
+                    val want = Macro.handle(this).lowercase()
+                    val acc = all.firstNotNullOfOrNull { n -> Regex("^([a-z0-9._]{2,30}) profile (photo|picture)$|^foto (do|de) perfil de ([a-z0-9._]{2,30})$").find(lab(n))?.let { m -> m.groupValues[1].ifEmpty { m.groupValues[4] } } }
+                    if (acc != null) clog("conta no post: $acc (esperada: ${want.ifEmpty { "?" }})", all)
+                    if (want.isNotEmpty() && acc != null && acc != want) { cFail("Abriu a conta @$acc, não a @$want (confira o Threads duplo em ⚙).", all); return }
+                }
                 val HINT = Regex("^(what.s new\\??|o que há de novo\\??|o que ha de novo\\??|start a thread.*|comece um thread.*|inicie um thread.*)$", RegexOption.IGNORE_CASE)
                 fun curText() = if (android.os.Build.VERSION.SDK_INT >= 26 && ed.isShowingHintText) "" else (ed.text ?: "").toString().trim().let { t -> if (HINT.matches(t)) "" else t }
                 // o "What's new?" é um texto à parte em cima do campo: se sumiu, a legenda entrou (mesmo que o campo não conte o texto)
@@ -874,7 +881,7 @@ class ScreenReader : AccessibilityService() {
     private var vStep = 0; private var vTries = 0; private var vUntil = 0L; private val vSeen = LinkedHashSet<String>()
     private fun verifyStart() {
         vStep = 1; vTries = 0; vSeen.clear(); vUntil = System.currentTimeMillis() + 90_000L
-        try { startActivity(packageManager.getLaunchIntentForPackage(PostQueue.THREADS)!!.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) { }
+        try { if (DualApp.launch(this) == "") throw Exception("sem Threads") } catch (e: Exception) { }
         h.postDelayed({ verifyStep() }, 2500)
     }
     private fun verifyStep() {
@@ -971,7 +978,7 @@ class ScreenReader : AccessibilityService() {
         try {
             ClipSync.copy(this, o.optString("cap"))
             PostQueue.putInGallery(this, o.optString("id"), force = true)
-            startActivity(packageManager.getLaunchIntentForPackage(PostQueue.THREADS)!!.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            if (DualApp.launch(this) == "") throw Exception("sem Threads")
         } catch (e: Exception) { stopBatchAuto("Não consegui abrir o Threads"); return }
         autoItemAt = at
         show("🤖 Agendando ${autoDone + 1}/${autoDone + left}: " + AgendaCore.fmt(at))
@@ -1657,7 +1664,7 @@ class ScreenReader : AccessibilityService() {
         Store.prefs(this).edit().putLong("ensinar_ate", System.currentTimeMillis() + 15 * 60_000L).putString("ensino_novo", "[]").apply()
         tLastRead = null
         show("🎓 Gravando: agende 1 post na mão no Threads (foto, legenda, ⋯ › Schedule…, rodinhas, Done, Schedule). Eu aprendo cada passo.", 0xEE7C3AED.toInt())
-        try { startActivity(packageManager.getLaunchIntentForPackage(PostQueue.THREADS)!!.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (x: Exception) { }
+        try { if (DualApp.launch(this) == "") throw Exception("sem Threads") } catch (x: Exception) { }
     }
     private fun teachOn() = Store.prefs(this).getLong("ensinar_ate", 0) > System.currentTimeMillis()
     private fun teachAdd(o: org.json.JSONObject) {
