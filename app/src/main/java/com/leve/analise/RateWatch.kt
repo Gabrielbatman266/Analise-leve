@@ -1006,7 +1006,11 @@ class ScreenReader : AccessibilityService() {
         if (r == null) { if (cTries % 6 == 0) saveTree(all, "rodinhas: não reconheci as colunas"); return false }
         val sig = r.toString()
         // mandou mexer e não mudou nada? aquela rodinha chegou no fim (ou não dá a volta): anota pra ir pelo outro lado / outro jeito
-        wLast?.let { (col, before, how) -> if (before == sig) { wStuck[col] = (wStuck[col] ?: 0) + 1; if (how == "acao") wGesture += col; if (col == 1) wNoWrap += 1 } else wStuck.remove(col) }
+        val last = wLast
+        if (last != null) {
+            val (col, before, how) = last
+            if (before == sig) { wStuck[col] = (wStuck[col] ?: 0) + 1; if (how == "acao") wGesture.add(col); if (col == 1) wNoWrap.add(1) } else wStuck.remove(col)
+        }
         val next = AgendaCore.wheelNext(r, z, wNoWrap)
         clog("rodinhas: $sig · alvo " + AgendaCore.fmt(cTarget) + (next?.let { " → coluna ${it.first} ${if (it.second > 0) "+" else ""}${it.second}" } ?: " → certo"), emptyList())
         if (next == null) {
