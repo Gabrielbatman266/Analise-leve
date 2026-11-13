@@ -707,7 +707,10 @@ class ScreenReader : AccessibilityService() {
         fun lab(n: AccessibilityNodeInfo) = norm(((n.contentDescription ?: n.text) ?: "").toString())
         val dm = resources.displayMetrics
         val editor = all.any { it.isEditable }
+        // foto já anexada? O Threads novo mostra a foto como View (não ImageView), então vale também o botão "Remove attachment"/"Edit" do anexo
+        val attachBtn = all.any { Regex("^(remove attachment|remover anexo|remove media|remover mídia|remover midia|remove photo|remover foto)$").matches(lab(it)) }
         val photosInEditor = all.filter { it.className?.toString()?.contains("Image") == true }.map { rect(it) }.filter { it.width() > dm.widthPixels * 0.35 && it.height() > dpx(150) }
+            .ifEmpty { if (attachBtn) listOf(android.graphics.Rect()) else emptyList() }
         fun again() { if (++cTries > (if (cStep == 6) 250 else if (cStep >= 7) 60 else 10)) { saveTree(all, "travou no passo $cStep"); cFail(when (cStep) { 1 -> "Toquei no + mas o post novo não abriu."; 2 -> "Não consegui anexar a foto."; 3 -> "Não consegui escolher a foto."; 4 -> "A legenda não entrou."; 5 -> "Não achei o ⋯ › Agendar."; 6 -> "Não consegui acertar a data/hora no Agendar."; else -> "O post não foi agendado." }, all); return }; h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, if (cStep == 6) AgendarTreino.stepMs(this) + 30 else if (cStep >= 7) 700 else 1500) }
         when (cStep) {
             0 -> { // veio pelo Compartilhar: a foto JÁ está no post (nunca anexa outra) → vai direto pra legenda
@@ -766,6 +769,7 @@ class ScreenReader : AccessibilityService() {
                     again(); return
                 }
                 val first = named.firstOrNull() ?: thumbs.map { it.first }.firstOrNull { n -> lab(n).isNotEmpty() && !Regex("(?i)c[aâ]mera|camera|video|vídeo|take|tirar").containsMatchIn(lab(n)) }
+                if (first == null && editor && cTries >= 3 && cWheel["regal"] == null) { cWheel["regal"] = 1; cWheel.remove("album"); clog("galeria fechou sem foto: volto e toco em anexar de novo", all); cStep = 2; cTries = 0; again(); return }
                 if (first == null) { clog("sem fotos na galeria", all); if (cTries >= 6) cFail("Não achei as fotos da galeria do Threads.", all) else again(); return }
                 clog("toquei na 1ª foto", all)
                 show("🗓 Escolhendo a foto…"); if (tap(first)) { cTapAt = now; cPicked = true; cTries = 0 } else cTries++; again()
