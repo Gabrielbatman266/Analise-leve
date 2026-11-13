@@ -157,8 +157,9 @@ class AgendaCoreTest {
             for (k in -2..2) {
                 val y = band + k * rowH
                 (day + k).takeIf { it in 0..75 }?.let { out += AgendaCore.WItem(fmtDay(today.plusDays(it.toLong())), 375, y) }
-                val h = hour + k
-                (if (hourWraps) ((h - 1) % 12 + 12) % 12 + 1 else h.takeIf { it in 1..12 })?.let { out += AgendaCore.WItem(it.toString(), 600, y) }
+                // hora como no Threads: 12, 1, 2 … 11 (posição 0..11; o 12 em cima)
+                val pos = (hour % 12) + k
+                (if (hourWraps) ((pos % 12) + 12) % 12 else pos.takeIf { it in 0..11 })?.let { out += AgendaCore.WItem((if (it == 0) 12 else it).toString(), 600, y) }
                 (min + k).takeIf { it in 0..59 }?.let { out += AgendaCore.WItem("%02d".format(it), 724, y) }
             }
             out += AgendaCore.WItem(if (pm) "PM" else "AM", 867, band)
@@ -170,7 +171,7 @@ class AgendaCoreTest {
         /** Um comando de rolar: true se andou. */
         fun step(col: Int, dir: Int): Boolean = when (col) {
             0 -> (day + dir in 0..75).also { if (it) day += dir }
-            1 -> if (hourWraps) { hour = ((hour - 1 + dir) % 12 + 12) % 12 + 1; true } else (hour + dir in 1..12).also { if (it) hour += dir }
+            1 -> { val p = hour % 12 + dir; if (hourWraps) { val q = ((p % 12) + 12) % 12; hour = if (q == 0) 12 else q; true } else (p in 0..11).also { if (it) hour = if (p == 0) 12 else p } }
             2 -> (min + dir in 0..59).also { if (it) min += dir }
             else -> (if (dir > 0) !pm else pm).also { if (it) pm = !pm }
         }
@@ -220,6 +221,16 @@ class AgendaCoreTest {
             assertEquals("caso $n", alvo.toLocalDate(), hoje.plusDays(sim.day.toLong()))
             assertEquals("caso $n", alvo.hour, h24); assertEquals("caso $n", alvo.minute, sim.min)
         }
+    }
+
+    @Test fun rodinhasCasoDoPrintDas23h() {
+        // tela do 2º print: Fri, Nov 13 · 12 · 00 · AM (tudo no topo), alvo sex 13/11 09:40 — antes travava no 12
+        val hoje = LocalDate.of(2026, 11, 12)
+        val sim = Sim(hoje, day = 1, hour = 12, min = 0, pm = false)
+        val r = AgendaCore.wheelRead(sim.screen(), sim.band, 124, hoje)!!
+        assertEquals(12, r.hour); assertEquals(false, r.pm); assertEquals(LocalDate.of(2026, 11, 13), r.date)
+        drive(sim, ZonedDateTime.of(2026, 11, 13, 9, 40, 0, 0, ZoneId.of(sp)))
+        assertEquals(9, sim.hour); assertEquals(40, sim.min); assertEquals(false, sim.pm); assertEquals(1, sim.day)
     }
 
     @Test fun rodinhasMeiaNoiteEMeioDia() {

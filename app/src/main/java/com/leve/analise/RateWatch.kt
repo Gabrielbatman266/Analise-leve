@@ -749,6 +749,19 @@ class ScreenReader : AccessibilityService() {
                 val named = all.filter { photoRe.containsMatchIn(lab(it)) && !Regex("(?i)video|vídeo|c[aâ]mera|camera").containsMatchIn(lab(it)) }
                     .sortedWith(compareBy({ rect(it).top / dpx(30) }, { rect(it).left }))
                 if (cTries == 0) saveTree(all, "galeria do Threads")
+                // 1º: troca o álbum pra "PostLeve" (pasta do app: só tem a foto deste post). Assim print/screenshot nunca entra.
+                val album = cWheel["album"] ?: 0
+                if (album == 0) {
+                    val sel = all.firstOrNull { Regex("^(recents|recentes|recent|gallery|galeria|all photos|todas as fotos|camera roll|rolo da câmera)( ▾| ⌄)?$").matches(lab(it)) && clickable(it) != null }
+                    if (sel != null) { cWheel["album"] = 1; clog("galeria: abrindo álbuns (" + lab(sel) + ")", all); if (tap(sel)) cTapAt = now; again(); return }
+                    cWheel["album"] = 9
+                } else if (album in 1..3) {
+                    val pl = all.firstOrNull { Regex("^postleve").containsMatchIn(lab(it).replace(" ", "")) }
+                    if (pl != null) { cWheel["album"] = 5; clog("galeria: álbum PostLeve", all); if (tap(pl)) cTapAt = now; again(); return }
+                    cWheel["album"] = album + 1
+                    if (album == 3) { saveTree(all, "lista de álbuns sem PostLeve"); performGlobalAction(GLOBAL_ACTION_BACK); cWheel["album"] = 9 }
+                    again(); return
+                }
                 val first = named.firstOrNull() ?: thumbs.map { it.first }.firstOrNull { n -> lab(n).isNotEmpty() && !Regex("(?i)c[aâ]mera|camera|video|vídeo|take|tirar").containsMatchIn(lab(n)) }
                 if (first == null) { clog("sem fotos na galeria", all); if (cTries >= 6) cFail("Não achei as fotos da galeria do Threads.", all) else again(); return }
                 clog("toquei na 1ª foto", all)
@@ -809,7 +822,7 @@ class ScreenReader : AccessibilityService() {
                     all.firstOrNull { Regex("^(cancel|cancelar|keep editing|continuar editando|voltar)$", RegexOption.IGNORE_CASE).matches(lab(it)) }?.let { tap(it) }
                     again(); return
                 }
-                val order = listOf("see more options", "mais opções", "more options", "post options", "opções do post", "opções da publicação")
+                val order = listOfNotNull(learnedMenuLabel()) + listOf("more options", "see more options", "mais opções", "post options", "opções do post", "opções da publicação")
                 val cands = all.filter { val l = lab(it); (l in order || MORE.matches(l)) && !POSTBTN.matches(l) }
                     .sortedBy { order.indexOf(lab(it)).let { k -> if (k < 0) 99 else k } }
                 val next = cands.firstOrNull { lab(it) + "@" + rect(it).top / dpx(40) !in cMenus }
@@ -1031,10 +1044,15 @@ class ScreenReader : AccessibilityService() {
             var ok = true
             repeat(n) { if (ok) ok = wheel.performAction(if (dir > 0) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) }
             if (ok) how = "acao"
+            else { // não dá pra rolar pra esse lado: é o fim da rodinha (ex.: 12 no topo). Não arrasta; vai pelo outro lado.
+                wNoWrap.add(col); clog("rodinha $col: fim pra ${if (dir > 0) "baixo" else "cima"}", emptyList())
+                wLast = Triple(col, sig, "fim"); cTapAt = now - 600; again(); return true
+            }
         }
         if (how == "gesto") {
             // arrasto lento, de linha em linha (pra cima = valor maior), começando na faixa do meio da coluna
-            val dy = -dir * n * r.rowH.toFloat(); val dur = (n * 700L).coerceAtLeast(600L)
+            val up = Store.prefs(this).getInt("ensino_sobe_$col", Store.prefs(this).getInt("ensino_sobe", 1)) // 1 = dedo pra cima aumenta
+            val dy = -dir * up * n * r.rowH.toFloat(); val dur = (n * 700L).coerceAtLeast(600L)
             val path = android.graphics.Path().apply { moveTo(x.toFloat(), band.toFloat()); lineTo(x.toFloat(), band + dy) }
             try { dispatchGesture(android.accessibilityservice.GestureDescription.Builder().addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, dur)).build(), null, null) } catch (e: Exception) { }
             cTapAt = now + dur
@@ -1627,8 +1645,88 @@ class ScreenReader : AccessibilityService() {
         }.start()
     }
 
+    // ================= 🎓 ENSINAR: você agenda 1 post na mão e eu gravo onde tocou e como mexeu as rodinhas =================
+    private var tLastRead: AgendaCore.WRead? = null
+    fun teachStart() {
+        Store.prefs(this).edit().putLong("ensinar_ate", System.currentTimeMillis() + 15 * 60_000L).putString("ensino", "[]").apply()
+        tLastRead = null
+        show("🎓 Gravando: agende 1 post na mão no Threads (foto, legenda, ⋯ › Schedule…, rodinhas, Done, Schedule). Eu aprendo cada passo.", 0xEE7C3AED.toInt())
+        try { startActivity(packageManager.getLaunchIntentForPackage(PostQueue.THREADS)!!.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (x: Exception) { }
+    }
+    private fun teachOn() = Store.prefs(this).getLong("ensinar_ate", 0) > System.currentTimeMillis()
+    private fun teachAdd(o: org.json.JSONObject) {
+        val a = try { org.json.JSONArray(Store.prefs(this).getString("ensino", "[]")) } catch (x: Exception) { org.json.JSONArray() }
+        a.put(o.put("at", System.currentTimeMillis())); while (a.length() > 120) a.remove(0)
+        Store.prefs(this).edit().putString("ensino", a.toString()).apply()
+    }
+    private fun teachCtx(all: List<AccessibilityNodeInfo>): String {
+        fun l(n: AccessibilityNodeInfo) = norm(((n.contentDescription ?: n.text) ?: "").toString())
+        return when {
+            all.any { Regex("^(schedule post|agendar post|agendar publicação)$").matches(l(it)) } -> "folha"
+            all.any { Regex("photo thumbnail|miniatura").containsMatchIn(l(it)) } -> "galeria"
+            all.any { it.isEditable } -> "post"
+            else -> "outro"
+        }
+    }
+    private fun teachRead(all: List<AccessibilityNodeInfo>): AgendaCore.WRead? {
+        fun l(n: AccessibilityNodeInfo) = ((n.text ?: n.contentDescription) ?: "").toString().trim()
+        val title = all.firstOrNull { Regex("^(schedule post|agendar post|agendar publicação)$", RegexOption.IGNORE_CASE).matches(l(it)) } ?: return null
+        val done = all.filter { Regex("^(done|concluir|ok|pronto)$", RegexOption.IGNORE_CASE).matches(l(it)) }.maxByOrNull { rect(it).top } ?: return null
+        val top = rect(title).bottom; val bottom = rect(done).top
+        val wheels = all.filter { it.isScrollable && rect(it).centerY() in top..bottom }
+        val band = wheels.map { rect(it).centerY() }.sorted().let { if (it.isEmpty()) (top + bottom) / 2 else it[it.size / 2] }
+        return AgendaCore.wheelRead(all.filter { rect(it).centerY() in top..bottom }.map { AgendaCore.WItem(l(it), rect(it).centerX(), rect(it).centerY()) }, band, dpx(45), java.time.LocalDate.now())
+    }
+    private fun teachEvent(e: AccessibilityEvent) {
+        val root = rootInActiveWindow ?: return
+        if (root.packageName?.toString() != ThreadsNotif.THREADS) return
+        val all = nodes(root).filter { it.isVisibleToUser }
+        val dm = resources.displayMetrics
+        when (e.eventType) {
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> {
+                val src = e.source
+                val label = (e.text.joinToString(" ").ifBlank { e.contentDescription?.toString().orEmpty() }).trim().ifEmpty { src?.let { n -> ((n.contentDescription ?: n.text) ?: "").toString() }.orEmpty() }
+                val r = src?.let { rect(it) }
+                teachAdd(org.json.JSONObject().put("t", "toque").put("l", label.take(40)).put("id", src?.viewIdResourceName.orEmpty()).put("c", src?.className?.toString()?.substringAfterLast('.').orEmpty())
+                    .put("x", r?.let { it.centerX().toDouble() / dm.widthPixels } ?: -1.0).put("y", r?.let { it.centerY().toDouble() / dm.heightPixels } ?: -1.0).put("ctx", teachCtx(all)))
+                // tocou no Schedule final (no post, depois da folha): acabou a aula
+                if (Regex("^(schedule|agendar|programar)$", RegexOption.IGNORE_CASE).matches(label) && teachCtx(all) == "post" && Store.prefs(this).getString("ensino", "").orEmpty().contains("\"folha\"")) {
+                    Store.prefs(this).edit().putLong("ensinar_ate", 0).apply()
+                    val n = try { org.json.JSONArray(Store.prefs(this).getString("ensino", "[]")).length() } catch (x: Exception) { 0 }
+                    show("🎓 Aprendi! Gravei $n passos. Agora o 'Agendar todos' usa o que você fez.", 0xEE15803D.toInt()); h.postDelayed({ if (!running && !forcing) clearOverlay() }, 8000)
+                }
+            }
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+                val now = teachRead(all) ?: return
+                val before = tLastRead; tLastRead = now
+                if (before == null) return
+                // qual coluna mudou e pra que lado o valor foi
+                val d = listOf(
+                    0 to (if (before.date != null && now.date != null) java.time.temporal.ChronoUnit.DAYS.between(before.date, now.date).toInt() else 0),
+                    1 to ((now.hour ?: 0) % 12 - (before.hour ?: 0) % 12), 2 to ((now.minute ?: 0) - (before.minute ?: 0)),
+                    3 to (if (before.pm != null && now.pm != null && before.pm != now.pm) (if (now.pm == true) 1 else -1) else 0))
+                val ch = d.firstOrNull { it.second != 0 } ?: return
+                val dy = if (android.os.Build.VERSION.SDK_INT >= 28) e.scrollDeltaY else 0
+                teachAdd(org.json.JSONObject().put("t", "rodinha").put("col", ch.first).put("mudou", ch.second).put("dy", dy).put("de", before.toString()).put("para", now.toString()))
+                // dedo pra cima faz o conteúdo rolar pra frente (dy > 0): se o valor aumentou, "pra cima aumenta"
+                if (dy != 0) {
+                    val sobe = if ((dy > 0) == (ch.second > 0)) 1 else -1
+                    Store.prefs(this).edit().putInt("ensino_sobe_${ch.first}", sobe).putInt("ensino_sobe", sobe).apply()
+                }
+            }
+        }
+    }
+
+    /** O que você ensinou: o rótulo do ⋯ que abriu o menu com o Schedule (o toque antes do toque em "Schedule…"). */
+    private fun learnedMenuLabel(): String? = try {
+        val a = org.json.JSONArray(Store.prefs(this).getString("ensino", "[]"))
+        (1 until a.length()).firstOrNull { i -> a.getJSONObject(i).optString("t") == "toque" && Regex("^(schedule|agendar|programar)").containsMatchIn(norm(a.getJSONObject(i).optString("l"))) && a.getJSONObject(i).optString("ctx") != "folha" }
+            ?.let { i -> norm(a.getJSONObject(i - 1).optString("l")).takeIf { it.isNotEmpty() } }
+    } catch (x: Exception) { null }
+
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
         val ep = e?.packageName?.toString()
+        if (ep == ThreadsNotif.THREADS && e != null && teachOn()) try { teachEvent(e) } catch (x: Exception) { ErrLog.log(this, "ensinar", x) }
         if (ep == ThreadsNotif.THREADS && e != null) try { schedWatch(e) } catch (x: Exception) { ErrLog.log(this, "agenda: leitor", x) }
         // eventos novos (toque, digitação, avisos) só servem pra agenda: o resto do leitor continua como antes
         if (e != null && e.eventType in setOf(AccessibilityEvent.TYPE_VIEW_CLICKED, AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED, AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED)) return

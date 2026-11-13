@@ -165,6 +165,15 @@ class BatchActivity : Activity() {
         }
         if (left > 0) btn("🤖 Agendar todos sozinho no Threads ($left)", root, primary = true) { auto() }
         if (left > 0) btn("▶ Só o próximo · ${hm(l.first { !it.optBoolean("done") }.optLong("at"))}", root) { next() }
+        btn("🎓 Ensinar o Agendar (faça 1 na mão, eu gravo)", root) {
+            val r = ScreenReader.instance
+            if (r == null) { Toast.makeText(this, "Ligue o Leitor de tela do Post Leve primeiro", Toast.LENGTH_LONG).show(); try { startActivity(android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (e: Exception) { } }
+            else {
+                // deixa a foto do próximo na galeria e a legenda copiada, igual o robô faz
+                Batch.load(this).firstOrNull { !it.optBoolean("done") }?.let { o -> ClipSync.copy(this, o.optString("cap")); PostQueue.putInGallery(this, o.optString("id"), force = true) }
+                r.teachStart()
+            }
+        }
         btn("🗑 Recomeçar o lote", root) {
             AlertDialog.Builder(this).setMessage("Apagar este lote e montar outro? (o que você já agendou continua no Threads)").setPositiveButton("Recomeçar") { _, _ -> Batch.clear(this); draw() }.setNegativeButton("Cancelar", null).show()
         }

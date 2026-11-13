@@ -250,7 +250,8 @@ object AgendaCore {
         val h = r.hour ?: return 1 to 1
         if (h != wantH) {
             // rodinha de 1 a 12 costuma dar a volta: vai pelo lado mais curto
-            var dh = wantH - h
+            // na rodinha de 12 h a ordem é 12, 1, 2 … 11 (o 12 fica no TOPO): conta posição, não valor
+            var dh = if (r.twelve) (wantH % 12) - (h % 12) else wantH - h
             // (se a rodinha não andou quando tentou dar a volta, [noWrap] avisa: aí vai pelo caminho direto)
             if (r.twelve && 1 !in noWrap) { if (dh > 6) dh -= 12; if (dh < -6) dh += 12 }
             return 1 to dh
