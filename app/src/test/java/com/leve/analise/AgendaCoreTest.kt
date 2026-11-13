@@ -248,5 +248,10 @@ class AgendaCoreTest {
         assertEquals(ZonedDateTime.of(2026, 11, 22, 9, 5, 0, 0, ZoneId.of(sp)), AgendaCore.parsePostingRow("Sun, Nov 22 9:05 AM", now))
         assertEquals(ZonedDateTime.of(2026, 11, 13, 0, 0, 0, 0, ZoneId.of(sp)), AgendaCore.parsePostingRow("Tomorrow 12 AM", now))
         assertEquals(null, AgendaCore.parsePostingRow("Posting", now))
+        // dentro da semana o Threads mostra só o dia da semana (antes a conferência pulava esses)
+        assertEquals(ZonedDateTime.of(2026, 11, 13, 9, 40, 0, 0, ZoneId.of(sp)), AgendaCore.parsePostingRow("Fri 9:40 AM", now))
+        assertEquals(ZonedDateTime.of(2026, 11, 16, 21, 0, 0, 0, ZoneId.of(sp)), AgendaCore.parsePostingRow("Mon 9 PM", now))
+        assertEquals(ZonedDateTime.of(2026, 11, 14, 20, 15, 0, 0, ZoneId.of(sp)), AgendaCore.parsePostingRow("sáb 20:15", now))
+        assertEquals(null, AgendaCore.parsePostingRow("Edit 9 PM", now))
     }
 }

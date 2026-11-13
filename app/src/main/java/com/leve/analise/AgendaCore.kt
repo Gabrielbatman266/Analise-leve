@@ -262,8 +262,21 @@ object AgendaCore {
     }
 
     /** Linha do post que mostra o agendamento ("Today 7 PM", "Nov 22 6:47 PM", "Hoje 18:47"): devolve a data/hora ou null. */
+    private val WEEK = mapOf("mon" to 1, "monday" to 1, "seg" to 1, "segunda" to 1, "tue" to 2, "tues" to 2, "tuesday" to 2, "ter" to 2, "terça" to 2, "terca" to 2,
+        "wed" to 3, "wednesday" to 3, "qua" to 3, "quarta" to 3, "thu" to 4, "thur" to 4, "thurs" to 4, "thursday" to 4, "qui" to 4, "quinta" to 4,
+        "fri" to 5, "friday" to 5, "sex" to 5, "sexta" to 5, "sat" to 6, "saturday" to 6, "sáb" to 6, "sab" to 6, "sábado" to 6, "sabado" to 6,
+        "sun" to 7, "sunday" to 7, "dom" to 7, "domingo" to 7)
+
+    /** "Fri 9:40 AM" / "sex 09:40": o próximo dia com esse nome (hoje inclusive), dentro de 7 dias. */
+    fun weekdayDate(text: String, today: LocalDate): LocalDate? {
+        val m = Regex("^\\s*([a-záç]{3,9})\\.?(?:-feira)?,?(?=\\s|$)", RegexOption.IGNORE_CASE).find(text.lowercase()) ?: return null
+        val wd = WEEK[m.groupValues[1]] ?: return null
+        var d = today; repeat(7) { if (d.dayOfWeek.value == wd) return d; d = d.plusDays(1) }
+        return null
+    }
+
     fun parsePostingRow(text: String, now: ZonedDateTime): ZonedDateTime? {
-        val date = wheelDate(text, now.toLocalDate()) ?: findDate(listOf(text), now.toLocalDate()) ?: return null
+        val date = wheelDate(text, now.toLocalDate()) ?: findDate(listOf(text), now.toLocalDate()) ?: weekdayDate(text, now.toLocalDate()) ?: return null
         val time = findTime(listOf(text)) ?: Regex("(?<![\\d:])(\\d{1,2})\\s*([ap])\\.?\\s?m\\.?", RegexOption.IGNORE_CASE).find(text)?.let { m ->
             var h = m.groupValues[1].toInt(); val ap = m.groupValues[2].lowercase()
             if (ap == "p" && h < 12) h += 12; if (ap == "a" && h == 12) h = 0

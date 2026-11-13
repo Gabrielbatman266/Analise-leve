@@ -647,7 +647,7 @@ class ScreenReader : AccessibilityService() {
 
     /** [fromShare]: o post já abriu com a foto (Compartilhar); senão começa do "novo post". */
     fun armCompose(label: String, cap: String, fromShare: Boolean = true, target: Long = 0L) {
-        cPicked = false; cTarget = target; cWheel.clear(); wLast = null; wStuck.clear(); wGesture.clear(); wNoWrap.clear(); cVerifyTries = 0
+        cPicked = false; cTarget = target; cWheel.clear(); wLast = null; wOkSig = ""; cDoneProblems = 0; wStuck.clear(); wGesture.clear(); wNoWrap.clear(); cVerifyTries = 0
         composeUntil = System.currentTimeMillis() + 180_000L; cStep = if (fromShare) 0 else 1; cCap = cap; cLabel = label; cTries = 0; cTapAt = 0
         h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, 1800)
         // passou do tempo e não terminou: tira o aviso (não fica preso na tela)
@@ -660,6 +660,7 @@ class ScreenReader : AccessibilityService() {
         if (autoRunning) {
             saveTree(all, "falhou: $msg")
             clog("✗ falhou: $msg", all)
+            AgendarTreino.add(this, false, "passo $cStep", cTarget, msg)
             // anota a falha no item; descarta o post aberto (sem salvar rascunho) e segue: tenta de novo 1x, depois pula pro próximo
             val id = autoItemId
             val l = Batch.load(this); l.firstOrNull { it.optString("id") == id && !it.optBoolean("done") }?.let { it.put("fails", it.optInt("fails") + 1).put("err", "passo $cStep: $msg"); Batch.save(this, l) }
@@ -841,12 +842,23 @@ class ScreenReader : AccessibilityService() {
             }
             6 -> pickerStep(all, now) { again() }
             7 -> { // depois do Done: confere a data/hora que o post mostra e toca no Schedule final
+                val sheetOpen = all.any { Regex("^(schedule post|agendar post|agendar publicação)$").matches(lab(it)) }
+                if (sheetOpen) {
+                    if (now - cDoneAt < 1500) { again(); return }
+                    // o Done não fechou a folha: relê. Se as rodinhas mudaram, volta a acertar; se estão certas, o horário não vale
+                    val r2 = teachRead(all)
+                    val ok2 = r2 != null && AgendaCore.wheelNext(r2, java.time.Instant.ofEpochMilli(cTarget).atZone(java.time.ZoneId.systemDefault()), wNoWrap) == null
+                    AgendarTreino.add(this, false, "rodinhas", cTarget, "folha não fechou: leu ${r2 ?: "?"}" + (if (ok2) " (certo: horário recusado)" else " (rodinha mexeu depois do Done)"))
+                    if (ok2) doneProblem(r2.toString()) else { clog("folha aberta e rodinha errada (${r2 ?: "?"}): acertando de novo", all); cStep = 6; cTries = 0; wOkSig = "" }
+                    again(); return
+                }
                 if (!editor || all.none { it.isEditable }) { autoOk(); return }
                 val nowZ = java.time.ZonedDateTime.now()
                 val rowNode = all.firstOrNull { n -> AgendaCore.parsePostingRow(((n.text ?: n.contentDescription) ?: "").toString(), nowZ) != null }
                 val shown = rowNode?.let { AgendaCore.parsePostingRow(((it.text ?: it.contentDescription) ?: "").toString(), nowZ) }
                 if (shown != null && Math.abs(shown.toInstant().toEpochMilli() - cTarget) >= 60_000L) {
                     clog("o post mostra ${AgendaCore.fmt(shown.toInstant().toEpochMilli())}, alvo ${AgendaCore.fmt(cTarget)}: abrindo de novo", all)
+                    AgendarTreino.add(this, false, "post", cTarget, "post mostrou ${AgendaCore.fmt(shown.toInstant().toEpochMilli())} depois do Done ($cDoneSig)")
                     if (cVerifyTries++ >= 2) { cFail("O post ficou com outra data/hora.", all); return }
                     if (tap(rowNode)) { cStep = 6; cTries = 0; cTapAt = now; wLast = null }
                     again(); return
@@ -856,6 +868,7 @@ class ScreenReader : AccessibilityService() {
                     // anota ANTES de tocar: se cair aqui, o post não é agendado de novo (confere na lista no fim)
                     if (autoRunning) { val l = Batch.load(this); l.firstOrNull { it.optString("id") == autoItemId && !it.optBoolean("done") }?.let { it.put("sent", System.currentTimeMillis()); Batch.save(this, l) } }
                     clog("toquei no Schedule final (post mostra ${shown?.let { AgendaCore.fmt(it.toInstant().toEpochMilli()) } ?: "?"})", all)
+                    if (cTries == 0) AgendarTreino.add(this, shown != null, "post", cTarget, if (shown != null) "post mostrou o horário certo (${rowNode?.let { ((it.text ?: it.contentDescription) ?: "").toString() }})" else "não consegui ler o horário no post: ${all.filter { r -> rect(r).top < resources.displayMetrics.heightPixels / 4 }.mapNotNull { (it.text ?: it.contentDescription)?.toString() }.take(8)}")
                     if (tap(fin)) cTapAt = now; cTries++; again(); return
                 }
                 if (cTries >= 8) { saveTree(all, "não fechou"); cFail("Escolhi a data, mas o post não foi agendado.", all); return }
@@ -919,6 +932,7 @@ class ScreenReader : AccessibilityService() {
             val k = Agenda.ck(o.optString("cap")).take(24)
             val found = k.isNotEmpty() && seen.any { it.contains(k) || (it.length >= 12 && k.startsWith(it.take(24))) }
             if (found) { o.put("verified", true); o.put("done", true); ok++ } else if (seen.isNotEmpty()) { o.put("verified", false); miss++ }
+            if (seen.isNotEmpty()) AgendarTreino.add(this, found, "lista", o.optLong("at"), (if (found) "apareceu na lista de agendados: " else "NÃO apareceu na lista: ") + o.optString("cap").take(40))
         }
         Batch.save(this, l)
         // os que foram enviados e apareceram na lista entram na Agenda (se ainda não entraram)
@@ -1039,10 +1053,19 @@ class ScreenReader : AccessibilityService() {
         clog("rodinhas: $sig · alvo " + AgendaCore.fmt(cTarget) + (next?.let { " → coluna ${it.first} ${if (it.second > 0) "+" else ""}${it.second}" } ?: " → certo"), emptyList())
         if (next == null) {
             wLast = null
-            clog("rodinhas certas → Done", emptyList())
-            if (click(done) || tapCenter(done)) { cStep = 7; cTries = 0; cTapAt = now }
+            val settle = AgendarTreino.settleMs(this)
+            if (wOkSig != sig || now - wOkAt < settle) {
+                if (wOkSig != sig) { wOkSig = sig; wOkAt = now }
+                clog("rodinhas certas: esperando parar (${settle} ms)", emptyList())
+                cTapAt = now; h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, settle - (now - wOkAt) + 60); return true
+            }
+            // Done desligado (o Threads apaga o botão quando o horário não vale): analisa em vez de tocar
+            if (!done.isEnabled || (clickable(done)?.isEnabled == false)) { doneProblem(r.toString()); again(); return true }
+            clog("rodinhas paradas e certas ($sig) → Done", emptyList())
+            if (click(done) || tapCenter(done)) { cStep = 7; cTries = 0; cTapAt = now; cDoneAt = now; cDoneSig = sig }
             again(); return true
         }
+        wOkSig = ""
         val (col, diff) = next
         if ((wStuck[col] ?: 0) >= 4) { saveTree(all, "rodinha $col não anda: $sig"); cFail("A rodinha ${listOf("do dia", "da hora", "do minuto", "AM/PM")[col]} não anda.", all); return true }
         val dir = if (diff > 0) 1 else -1
@@ -1075,6 +1098,22 @@ class ScreenReader : AccessibilityService() {
         again(); return true
     }
     private var wLast: Triple<Int, String, String>? = null
+    private var wOkSig = ""; private var wOkAt = 0L; private var cDoneAt = 0L; private var cDoneSig = ""; private var cDoneProblems = 0
+
+    /**
+     * O Done não aceitou (apagado, ou a folha não fechou com as rodinhas certas): quase sempre é horário que o Threads não aceita
+     * (já passou ou está perto demais). Empurra o horário 10 min pra frente (até 3x), anota no lote e no treino, e acerta de novo.
+     */
+    private fun doneProblem(read: String) {
+        cDoneProblems++
+        AgendarTreino.add(this, false, "done", cTarget, "Done não aceitou com $read (alvo ${AgendaCore.fmt(cTarget)})")
+        if (cDoneProblems > 3) { cFail("O Threads não aceita esse horário (${AgendaCore.fmt(cTarget)}).", emptyList()); return }
+        val novo = maxOf(cTarget, System.currentTimeMillis() + 15 * 60_000L) + 10 * 60_000L * (cDoneProblems - 1)
+        clog("Done não aceitou ($read): horário ${AgendaCore.fmt(cTarget)} → ${AgendaCore.fmt(novo)}", emptyList())
+        if (autoRunning) { val l = Batch.load(this); l.firstOrNull { it.optString("id") == autoItemId && !it.optBoolean("done") }?.let { it.put("at", novo).put("movido", true); Batch.save(this, l) } }
+        cTarget = novo; cLabel = AgendaCore.fmt(novo); wOkSig = ""; cStep = 6; cTries = 0
+        show("🗓 O Threads não aceitou esse horário: ajustando pra $cLabel…")
+    }
     private val wStuck = HashMap<Int, Int>(); private val wGesture = HashSet<Int>(); private val wNoWrap = HashSet<Int>()
 
     private fun textsOf(all: List<AccessibilityNodeInfo>) = all.mapNotNull { (it.text ?: it.contentDescription)?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() && s.length < 80 } }
