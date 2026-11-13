@@ -58,6 +58,36 @@ object Batch {
         save(c, l); return l.size
     }
 
+    /**
+     * 🖼 Fotos que VOCÊ escolheu: entram no lote, cada uma com legenda, nos horários bons depois do último post do lote
+     * (a partir de daqui a 40 min). Não coube hoje até 23h30 → vai pro dia seguinte (8h–23h30), e assim por diante.
+     */
+    fun addChosen(c: Context, ids: List<String>): Int {
+        if (ids.isEmpty()) return 0
+        val l = load(c)
+        val gap = 25 * 60_000L
+        var from = maxOf(System.currentTimeMillis() + 40 * 60_000L, (l.maxOfOrNull { it.optLong("at") } ?: 0L) + gap)
+        val left = ids.toMutableList(); var guard = 0
+        while (left.isNotEmpty() && guard++ < 30) {
+            val cal = Calendar.getInstance().apply { timeInMillis = from }
+            val end = (cal.clone() as Calendar).apply { set(Calendar.HOUR_OF_DAY, 23); set(Calendar.MINUTE, 30); set(Calendar.SECOND, 0) }.timeInMillis
+            if (cal.get(Calendar.HOUR_OF_DAY) < 8) { cal.set(Calendar.HOUR_OF_DAY, 8); cal.set(Calendar.MINUTE, 0); from = cal.timeInMillis }
+            val room = ((end - from) / gap + 1).toInt().coerceAtLeast(0)
+            if (room > 0) {
+                val n = minOf(left.size, room, 12)
+                val busy = l.map { it.optLong("at") }
+                slots(c, n + busy.count { it in from..end }, from, end).filter { t -> busy.none { Math.abs(it - t) < gap } }.take(n).forEach { t ->
+                    val id = left.removeAt(0)
+                    l += JSONObject().put("id", id).put("cap", Captions.captionFor(c, id)).put("at", t).put("done", false).put("escolhida", true)
+                }
+            }
+            // próximo dia, 8h
+            from = Calendar.getInstance().apply { timeInMillis = end; add(Calendar.DAY_OF_YEAR, 1); set(Calendar.HOUR_OF_DAY, 8); set(Calendar.MINUTE, 0) }.timeInMillis
+        }
+        save(c, l.sortedBy { it.optLong("at") })
+        return ids.size - left.size
+    }
+
     /** Lote pronto (vários dias): troca o lote pelos itens dados. */
     fun setItems(c: Context, l: List<JSONObject>) { save(c, l.sortedBy { it.optLong("at") }); p(c).edit().remove("lote_wait").apply() }
 
@@ -98,6 +128,28 @@ object Batch {
         if (cap.isNotBlank()) CaptionDB.used(c, cap)
         Lab.sent(c, cap)
     }
+}
+
+/** 🖼 Importa as fotos escolhidas, põe no lote e oferece agendar já. */
+fun addChosen(a: Activity, uris: List<android.net.Uri>, after: (() -> Unit)? = null) {
+    if (uris.isEmpty()) return
+    Toast.makeText(a, "Preparando ${uris.size} foto(s) (sem metadados) e as legendas…", Toast.LENGTH_SHORT).show()
+    Thread {
+        val ids = uris.mapNotNull { PostQueue.importUri(a, it) }
+        val n = Batch.addChosen(a, ids)
+        a.runOnUiThread {
+            after?.invoke()
+            AlertDialog.Builder(a).setTitle("🖼 $n foto(s) no lote")
+                .setMessage("Cada uma ganhou legenda e horário bom. Quer que eu já agende tudo sozinho no Threads?")
+                .setPositiveButton("🤖 Agendar agora") { _, _ ->
+                    val r = ScreenReader.instance
+                    if (r == null) Toast.makeText(a, "Ligue o Leitor de tela do Post Leve (Acessibilidade) primeiro", Toast.LENGTH_LONG).show()
+                    else { r.runBatchAuto() }
+                }
+                .setNegativeButton("Depois", null).show()
+            LeveService.send(a, LeveService.ACT_ANALYZE) // a IA escreve legendas próprias pras fotos novas
+        }
+    }.start()
 }
 
 class BatchActivity : Activity() {
@@ -177,6 +229,7 @@ class BatchActivity : Activity() {
             tv(o.optString("cap").replace('\n', ' ').take(70), 12f, MUTED, col)
             if (!o.optBoolean("done")) card.setOnClickListener { itemMenu(i) }
         }
+        btn("🖼 Escolher as fotos pra postar (da galeria)", root) { pickChosen() }
         if (left > 0) btn("🤖 Agendar todos sozinho no Threads ($left)", root, primary = true) { auto() }
         if (left > 0) btn("▶ Só o próximo · ${hm(l.first { !it.optBoolean("done") }.optLong("at"))}", root) { next() }
         // ⚡ velocidade das rodinhas + voto (vai pro treino e pro diagnóstico)
@@ -208,6 +261,22 @@ class BatchActivity : Activity() {
         btn("🗑 Recomeçar o lote", root) {
             AlertDialog.Builder(this).setMessage("Apagar este lote e montar outro? (o que você já agendou continua no Threads)").setPositiveButton("Recomeçar") { _, _ -> Batch.clear(this); draw() }.setNegativeButton("Cancelar", null).show()
         }
+    }
+
+    private val REQ_CHOSEN = 7301
+    /** 🖼 Você escolhe as fotos na galeria: elas entram no lote com legenda e horário, prontas pro 🤖. */
+    private fun pickChosen() {
+        val i = if (android.os.Build.VERSION.SDK_INT >= 33) android.content.Intent(android.provider.MediaStore.ACTION_PICK_IMAGES).putExtra(android.provider.MediaStore.EXTRA_PICK_IMAGES_MAX, 50)
+                else android.content.Intent(android.content.Intent.ACTION_GET_CONTENT).setType("image/*").putExtra(android.content.Intent.EXTRA_ALLOW_MULTIPLE, true)
+        try { startActivityForResult(i, REQ_CHOSEN) } catch (e: Exception) { startActivityForResult(android.content.Intent(android.content.Intent.ACTION_GET_CONTENT).setType("image/*").putExtra(android.content.Intent.EXTRA_ALLOW_MULTIPLE, true), REQ_CHOSEN) }
+    }
+    @Deprecated("startActivityForResult")
+    override fun onActivityResult(req: Int, res: Int, data: android.content.Intent?) {
+        super.onActivityResult(req, res, data)
+        if (req != REQ_CHOSEN || res != RESULT_OK || data == null) return
+        val uris = ArrayList<android.net.Uri>()
+        data.clipData?.let { cd -> for (k in 0 until cd.itemCount) uris += cd.getItemAt(k).uri } ?: data.data?.let { uris += it }
+        addChosen(this, uris) { draw() }
     }
 
     private fun itemMenu(i: Int) {

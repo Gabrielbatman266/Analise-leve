@@ -2000,7 +2000,9 @@ class MainActivity : Activity() {
         }
         if (uris.isEmpty()) return
         AlertDialog.Builder(this).setTitle("Guardar ${uris.size} foto(s) onde?")
-            .setItems(arrayOf("🖼  Estoque de referência", "📮  Fila de posts (Threads)", "📊  Números de um post (print dos insights/perfil)")) { _, w ->
+            .setItems(arrayOf("🗓  Agendar no Threads (entram no lote)", "🖼  Estoque de referência", "📮  Fila de posts (Threads)", "📊  Números de um post (print dos insights/perfil)")) { _, w0 ->
+                if (w0 == 0) { addChosen(this, uris); return@setItems }
+                val w = w0 - 1
                 when (w) {
                     0 -> { showTab("Refs"); refs.addPhotos(uris) }
                     1 -> { showTab("Postar"); importPosts(uris) }

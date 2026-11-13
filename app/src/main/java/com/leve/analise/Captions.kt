@@ -257,6 +257,16 @@ Responda só com JSON: {"legendas":["...","...","...","...","..."]}"""
      * - peso da foto: bombou ≈ 3x a 8x; nova = 2x; 👎 bem menos;
      * - legenda: vencedoras entram no sorteio de qualquer foto e têm peso alto.
      */
+    /** Legenda pra uma foto que VOCÊ escolheu: as dela, o banco, as suas e as que deram certo (mesmo sorteio da fila). */
+    fun captionFor(c: Context, id: String): String {
+        val o = PostQueue.load(c).firstOrNull { it.optString("id") == id }
+        val own = o?.optJSONArray("legendas")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
+        val pool = Banks.pool(c, own) ?: (own + mine(c) + CaptionDB.winners(c, 20).map { it.optString("t") }).filter { it.isNotBlank() }.distinct()
+        val cap = (if (pool.isNotEmpty()) CaptionDB.pick(c, pool, capAvoid(c), capBonus(c, id)) else null) ?: randomCaption(c, capAvoid(c))
+        remember(c, id, cap)
+        return cap
+    }
+
     fun randomPick(c: Context, promo: Boolean = true): Pair<String, String>? {
         if (promo) Promo.maybe(c)?.let { return it } // 📣 é a vez da divulgação do Instagram
         if (promo) TextPosts.maybe(c)?.let { return it } // ✍ é a vez de um post só de texto

@@ -47,6 +47,18 @@ object PostQueue {
     }
 
     /** Salva a foto limpa (JPEG novo, sem EXIF/GPS) e coloca na fila esperando legendas. */
+    /** Importa uma foto da galeria pra fila (gira pela orientação e descarta os metadados). Devolve o id. */
+    fun importUri(c: Context, u: android.net.Uri): String? = try {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        c.contentResolver.openInputStream(u)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+        var smp = 1; while (bounds.outWidth / (smp * 2) >= 1440) smp *= 2
+        val raw = c.contentResolver.openInputStream(u)?.use { android.graphics.BitmapFactory.decodeStream(it, null, android.graphics.BitmapFactory.Options().apply { inSampleSize = smp }) }
+        raw?.let { b ->
+            val deg = try { c.contentResolver.openInputStream(u)?.use { when (android.media.ExifInterface(it).getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1)) { 6 -> 90f; 3 -> 180f; 8 -> 270f; else -> 0f } } ?: 0f } catch (e: Exception) { 0f }
+            add(c, if (deg == 0f) b else Bitmap.createBitmap(b, 0, 0, b.width, b.height, android.graphics.Matrix().apply { postRotate(deg) }, true))
+        }
+    } catch (e: Exception) { ErrLog.log(c, "importar foto", e); null }
+
     fun add(c: Context, src: Bitmap): String {
         val id = "f" + System.currentTimeMillis().toString(36) + (100..999).random()
         val max = 2560 // mantém a qualidade 2K do upscale
