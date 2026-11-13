@@ -56,7 +56,9 @@ class SheetPilotTrainingTest {
             else { // no meio da animação a tela mostra valores INTERMEDIÁRIOS (ou ainda o antigo, no começo)
                 val f = ((now - animStart).toDouble() / maxOf(1L, animUntil - animStart)).coerceIn(0.0, 1.0)
                 fun mid(a: Int, b: Int) = Math.round(a + (b - a) * f).toInt()
-                shown = Triple(mid(from.first, day), mid(from.second, hPos), mid(from.third, min))
+                // a rodinha da hora que dá a volta anima pelo caminho curto (11 → 12 passa direto, não volta pelo 6)
+                fun midH(a: Int, b: Int): Int { if (!hourWraps || Math.abs(b - a) <= 6) return mid(a, b); val bb = if (b < a) b + 12 else b - 12; return ((mid(a, bb) % 12) + 12) % 12 }
+                shown = Triple(mid(from.first, day), midH(from.second, hPos), mid(from.third, min))
             }
             val (d0, h0, m0) = shown
             val out = ArrayList<AgendaCore.WItem>()
@@ -116,6 +118,8 @@ class SheetPilotTrainingTest {
             else -> (if (dir > 0) !pm else pm).also { if (it) pm = !pm }
         }
         fun doneEnabled(clock: ZonedDateTime) = at().isAfter(clock.plusMinutes(5))
+        /** a rodinha ainda está girando (é aí que o Android manda eventos de acessibilidade) */
+        fun animating() = now < animUntil
     }
 
     data class Result(val ok: Boolean, val ms: Long, val why: String)

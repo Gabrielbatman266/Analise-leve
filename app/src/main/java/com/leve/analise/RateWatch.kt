@@ -647,7 +647,7 @@ class ScreenReader : AccessibilityService() {
 
     /** [fromShare]: o post já abriu com a foto (Compartilhar); senão começa do "novo post". */
     fun armCompose(label: String, cap: String, fromShare: Boolean = true, target: Long = 0L) {
-        cPicked = false; cTarget = target; cWheel.clear(); wLast = null; wOkSig = ""; cDoneProblems = 0; wPend = null; cPilot = null; wLastSig = ""; cDoneArm = -1; cDoneJudge = -1; cDoneSeen = ""; cVision = false; cGray = 0; wScore = 0.0; cPaused = false; wStuck.clear(); wGesture.clear(); wNoWrap.clear(); cVerifyTries = 0
+        cPicked = false; cTarget = target; cWheel.clear(); wLast = null; wSettle = ""; wOkSig = ""; cDoneProblems = 0; wPend = null; cPilot = null; wLastSig = ""; cDoneArm = -1; cDoneJudge = -1; cDoneSeen = ""; cVision = false; cGray = 0; wScore = 0.0; cPaused = false; wStuck.clear(); wGesture.clear(); wNoWrap.clear(); cVerifyTries = 0
         composeUntil = System.currentTimeMillis() + 180_000L; cStep = if (fromShare) 0 else 1; cCap = cap; cLabel = label; cTries = 0; cTapAt = 0
         h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, 1800)
         // passou do tempo e não terminou: tira o aviso (não fica preso na tela)
@@ -862,10 +862,12 @@ class ScreenReader : AccessibilityService() {
                     judgeDone(false, "folha não fechou")
                     AgendarTreino.add(this, false, "rodinhas", cTarget, "folha não fechou: leu ${r2 ?: "?"}" + (if (ok2) " (certo: horário recusado)" else " (rodinha mexeu depois do Done)"))
                     val retry = cWheel["doneRetry"] ?: 0
-                    if (ok2 && retry < 3) { cWheel["doneRetry"] = retry + 1; clog("folha não fechou com as rodinhas certas: toco no Done de novo (outro jeito)", all); cStep = 6; cTries = 0; wOkSig = r2.toString(); wLast = null }
+                    if (ok2 && retry < 10) { cWheel["doneRetry"] = retry + 1; clog("folha não fechou com as rodinhas certas: toco no Done de novo (outro jeito)", all); cStep = 6; cTries = 0; wOkSig = r2.toString(); wLast = null }
                     else if (ok2) doneProblem(r2.toString()) else { clog("folha aberta e rodinha errada (${r2 ?: "?"}): acertando de novo", all); cStep = 6; cTries = 0; wOkSig = "" }
                     again(); return
                 }
+                // a folha fechou: guarda o jeito do Done que funcionou (toque ou clique) pros próximos posts
+                cWheel.remove("doneLastHow")?.let { Store.prefs(this).edit().putInt("ag_done_how", it).apply() }
                 if (!editor || all.none { it.isEditable }) { autoOk(); return }
                 val nowZ = java.time.ZonedDateTime.now()
                 val rowNode = all.firstOrNull { n -> AgendaCore.parsePostingRow(((n.text ?: n.contentDescription) ?: "").toString(), nowZ) != null }
@@ -1317,6 +1319,9 @@ class ScreenReader : AccessibilityService() {
         lastSheet = Triple(r, band, wheels.size)
         if (r == null) { if (cTries % 6 == 0) saveTree(all, "rodinhas: não reconheci as colunas"); return false }
         val sig = r.toString()
+        // mexeu: só decide o próximo passo quando a leitura REPETIR (rodinha parada). Sem isso, numa rodinha lenta ele lia um
+        // número no meio do giro, corrigia em cima dele e ficava indo e voltando (no simulador: 11 ↔ 1 na hora, minuto 19 ↔ 49)
+        if (wLast != null && wSettle != sig) { wSettle = sig; cTapAt = now; again(); return true }
         val last = wLast
         if (last != null) {
             val (col, before, how) = last
@@ -1331,9 +1336,10 @@ class ScreenReader : AccessibilityService() {
             clog("🧠antigo: certo e parado ($sig) → Done", emptyList())
             val k = cWheel["doneTaps"] ?: 0; cWheel["doneTaps"] = k + 1
             rect(done).let { markDot(it.exactCenterX(), it.exactCenterY(), 0xFFFFD166.toInt()) }
-            // 1º toque de VERDADE no meio do botão; se a folha não fechar, alterna com o clique de acessibilidade
-            val ok = if (k % 2 == 0) (tapCenter(done) || click(done)) else (click(done) || tapCenter(done))
-            clog("🧠antigo: Done por " + (if (k % 2 == 0) "toque" else "clique") + " (${k + 1}ª vez)", emptyList())
+            // começa pelo jeito que fechou a folha da última vez (padrão: toque de VERDADE no meio do botão); se não fechar, alterna
+            val how = (k + Store.prefs(this).getInt("ag_done_how", 0)) % 2; cWheel["doneLastHow"] = how
+            val ok = if (how == 0) (tapCenter(done) || click(done)) else (click(done) || tapCenter(done))
+            clog("🧠antigo: Done por " + (if (how == 0) "toque" else "clique") + " (${k + 1}ª vez)", emptyList())
             if (ok) { cStep = 7; cTries = 0; cTapAt = now; cDoneAt = now; cDoneSig = sig }
             again(); return true
         }
@@ -1351,7 +1357,7 @@ class ScreenReader : AccessibilityService() {
             if (ok) { how = "acao"; markDot(x.toFloat(), band.toFloat(), 0xFF5B9DFF.toInt()) }
             else {
                 wNoWrap.add(col); clog("rodinha $col: fim pra ${if (dir > 0) "baixo" else "cima"}", emptyList())
-                wLast = Triple(col, sig, "fim"); cTapAt = now - 600; again(); return true
+                wLast = Triple(col, sig, "fim"); wSettle = ""; cTapAt = now - 600; again(); return true
             }
         }
         if (how == "gesto") {
@@ -1363,11 +1369,11 @@ class ScreenReader : AccessibilityService() {
             markLine(x.toFloat(), band.toFloat(), band + dy)
             cTapAt = now + dur
         } else cTapAt = now
-        wLast = Triple(col, sig, how)
+        wLast = Triple(col, sig, how); wSettle = ""
         if (cTries % 15 == 14) saveTree(all, "rodinhas: $sig")
         again(); return true
     }
-    private var wLast: Triple<Int, String, String>? = null
+    private var wLast: Triple<Int, String, String>? = null; private var wSettle = ""
     // 🎯 aprendizado: rodinhas (quantas linhas por vez) e Done (quanto esperar), salvos no celular
     private data class Quad(val col: Int, val before: Int, val arm: Int, val key: String)
     private var wPend: Quad? = null; private val wRnd = java.util.Random(); private var wScore = 0.0
