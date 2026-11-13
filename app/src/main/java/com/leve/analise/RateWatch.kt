@@ -689,8 +689,14 @@ class ScreenReader : AccessibilityService() {
         Store.prefs(this).edit().putString("agendar_log", l.joinToString("\n")).apply()
     }
 
+    @Volatile private var cRetry = false
     private fun composeStep() {
-        val now = System.currentTimeMillis(); if (now - cLast < 600) return; cLast = now
+        val now = System.currentTimeMillis()
+        if (now - cLast < 600) {
+            if (!cRetry) { cRetry = true; h.postDelayed({ cRetry = false; if (composeUntil > System.currentTimeMillis()) composeStep() }, 620 - (now - cLast)) }
+            return
+        }
+        cLast = now
         if (cPaused) { composeUntil = maxOf(composeUntil, now + 120_000L); h.postDelayed({ composeStep() }, 1000); return }
         val wait = if (cStep == 6) (if (AgendarTreino.oldBrain(this)) 350L else AgendarTreino.stepMs(this)) else 1500L // nas rodinhas o comando é instantâneo: relê logo
         if (now - cTapAt < wait) { h.postDelayed({ composeStep() }, wait + 50); return } // espera a tela reagir ao último toque
@@ -855,7 +861,9 @@ class ScreenReader : AccessibilityService() {
                     val ok2 = r2 != null && AgendaCore.wheelNext(r2, java.time.Instant.ofEpochMilli(cTarget).atZone(java.time.ZoneId.systemDefault()), wNoWrap) == null
                     judgeDone(false, "folha não fechou")
                     AgendarTreino.add(this, false, "rodinhas", cTarget, "folha não fechou: leu ${r2 ?: "?"}" + (if (ok2) " (certo: horário recusado)" else " (rodinha mexeu depois do Done)"))
-                    if (ok2) doneProblem(r2.toString()) else { clog("folha aberta e rodinha errada (${r2 ?: "?"}): acertando de novo", all); cStep = 6; cTries = 0; wOkSig = "" }
+                    val retry = cWheel["doneRetry"] ?: 0
+                    if (ok2 && retry < 3) { cWheel["doneRetry"] = retry + 1; clog("folha não fechou com as rodinhas certas: toco no Done de novo (outro jeito)", all); cStep = 6; cTries = 0; wOkSig = r2.toString(); wLast = null }
+                    else if (ok2) doneProblem(r2.toString()) else { clog("folha aberta e rodinha errada (${r2 ?: "?"}): acertando de novo", all); cStep = 6; cTries = 0; wOkSig = "" }
                     again(); return
                 }
                 if (!editor || all.none { it.isEditable }) { autoOk(); return }
@@ -1321,8 +1329,12 @@ class ScreenReader : AccessibilityService() {
             wLast = null
             if (wOkSig != sig) { wOkSig = sig; cTapAt = now; again(); return true } // confere de novo (rodinha parada)
             clog("🧠antigo: certo e parado ($sig) → Done", emptyList())
-            rect(clickable(done) ?: done).let { markDot(it.exactCenterX(), it.exactCenterY(), 0xFFFFD166.toInt()) }
-            if (click(done) || tapCenter(done)) { cStep = 7; cTries = 0; cTapAt = now; cDoneAt = now; cDoneSig = sig }
+            val k = cWheel["doneTaps"] ?: 0; cWheel["doneTaps"] = k + 1
+            rect(done).let { markDot(it.exactCenterX(), it.exactCenterY(), 0xFFFFD166.toInt()) }
+            // 1º toque de VERDADE no meio do botão; se a folha não fechar, alterna com o clique de acessibilidade
+            val ok = if (k % 2 == 0) (tapCenter(done) || click(done)) else (click(done) || tapCenter(done))
+            clog("🧠antigo: Done por " + (if (k % 2 == 0) "toque" else "clique") + " (${k + 1}ª vez)", emptyList())
+            if (ok) { cStep = 7; cTries = 0; cTapAt = now; cDoneAt = now; cDoneSig = sig }
             again(); return true
         }
         wOkSig = ""
