@@ -690,7 +690,8 @@ class ScreenReader : AccessibilityService() {
 
     private fun composeStep() {
         val now = System.currentTimeMillis(); if (now - cLast < 600) return; cLast = now
-        if (now - cTapAt < 1500) { h.postDelayed({ composeStep() }, 1600); return } // espera a tela reagir ao último toque
+        val wait = if (cStep == 6) 350L else 1500L // nas rodinhas o comando é instantâneo: relê logo
+        if (now - cTapAt < wait) { h.postDelayed({ composeStep() }, wait + 50); return } // espera a tela reagir ao último toque
         val root = rootInActiveWindow
         if (root == null || root.packageName?.toString() != ThreadsNotif.THREADS) {
             // saiu do Threads: espera um pouco (pode ser a galeria/teclado); depois de 15 s para e tira o aviso
@@ -705,7 +706,7 @@ class ScreenReader : AccessibilityService() {
         val dm = resources.displayMetrics
         val editor = all.any { it.isEditable }
         val photosInEditor = all.filter { it.className?.toString()?.contains("Image") == true }.map { rect(it) }.filter { it.width() > dm.widthPixels * 0.35 && it.height() > dpx(150) }
-        fun again() { if (++cTries > (if (cStep >= 6) 60 else 10)) { saveTree(all, "travou no passo $cStep"); cFail(when (cStep) { 1 -> "Toquei no + mas o post novo não abriu."; 2 -> "Não consegui anexar a foto."; 3 -> "Não consegui escolher a foto."; 4 -> "A legenda não entrou."; 5 -> "Não achei o ⋯ › Agendar."; 6 -> "Não consegui acertar a data/hora no Agendar."; else -> "O post não foi agendado." }, all); return }; h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, if (cStep >= 6) 700 else 1500) }
+        fun again() { if (++cTries > (if (cStep == 6) 250 else if (cStep >= 7) 60 else 10)) { saveTree(all, "travou no passo $cStep"); cFail(when (cStep) { 1 -> "Toquei no + mas o post novo não abriu."; 2 -> "Não consegui anexar a foto."; 3 -> "Não consegui escolher a foto."; 4 -> "A legenda não entrou."; 5 -> "Não achei o ⋯ › Agendar."; 6 -> "Não consegui acertar a data/hora no Agendar."; else -> "O post não foi agendado." }, all); return }; h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, if (cStep == 6) 380 else if (cStep >= 7) 700 else 1500) }
         when (cStep) {
             0 -> { // veio pelo Compartilhar: a foto JÁ está no post (nunca anexa outra) → vai direto pra legenda
                 if (editor) { cStep = 4; cTries = 0; composeStep() } else again()
@@ -984,6 +985,8 @@ class ScreenReader : AccessibilityService() {
         Thread { try { Agenda.addDetected(this, at, cap) } catch (e: Exception) { ErrLog.log(this, "agenda", e) } }.start()
         if (autoRunning) { val l = Batch.load(this); l.firstOrNull { it.optString("id") == autoItemId }?.let { it.put("done", true).put("at", at); Batch.save(this, l) } }
         clog("✓ agendado " + AgendaCore.fmt(at), emptyList())
+        Store.prefs(this).edit().putLong("auto_ok_at", System.currentTimeMillis()).putInt("auto_ok_n", Store.prefs(this).getInt("auto_ok_n", 0) + 1).apply()
+        saveTeach()
         autoDone++
         if (autoRunning) { show("🤖 ✓ Agendado " + AgendaCore.fmt(at)); h.postDelayed({ nextAuto() }, 3500) }
         else { show("🗓 ✓ Agendado no Threads: " + AgendaCore.fmt(at), 0xEE15803D.toInt()); h.postDelayed({ if (!running && !forcing) clearOverlay() }, 6000) }
@@ -1024,6 +1027,7 @@ class ScreenReader : AccessibilityService() {
             val (col, before, how) = last
             if (before == sig) { wStuck[col] = (wStuck[col] ?: 0) + 1; if (how == "acao") wGesture.add(col); if (col == 1) wNoWrap.add(1) } else wStuck.remove(col)
         }
+        if (wLast?.second != sig) composeUntil = maxOf(composeUntil, System.currentTimeMillis() + 90_000L)
         val next = AgendaCore.wheelNext(r, z, wNoWrap)
         clog("rodinhas: $sig · alvo " + AgendaCore.fmt(cTarget) + (next?.let { " → coluna ${it.first} ${if (it.second > 0) "+" else ""}${it.second}" } ?: " → certo"), emptyList())
         if (next == null) {
@@ -1038,7 +1042,8 @@ class ScreenReader : AccessibilityService() {
         val x = r.colX.getOrNull(col) ?: return false
         val wheel = wheels.filter { rect(it).left <= x && rect(it).right >= x }.minByOrNull { rect(it).width() }
         // 1º jeito: o comando "rolar" da acessibilidade (no seu celular ele anda exatamente 1 linha); se não andar, arrasta com o dedo
-        val n = minOf(Math.abs(diff), if (col == 2 || col == 0) 3 else 1) // longe: até 3 linhas de uma vez (relê e corrige)
+        // longe do alvo: vários comandos de 1 linha de uma vez (no seu celular cada um anda exatamente 1 linha); relê e corrige
+        val n = minOf(Math.abs(diff), when (col) { 3 -> 1; 1 -> 6; else -> 12 })
         var how = "gesto"
         if (wheel != null && col !in wGesture) {
             var ok = true
@@ -1052,11 +1057,12 @@ class ScreenReader : AccessibilityService() {
         if (how == "gesto") {
             // arrasto lento, de linha em linha (pra cima = valor maior), começando na faixa do meio da coluna
             val up = Store.prefs(this).getInt("ensino_sobe_$col", Store.prefs(this).getInt("ensino_sobe", 1)) // 1 = dedo pra cima aumenta
-            val dy = -dir * up * n * r.rowH.toFloat(); val dur = (n * 700L).coerceAtLeast(600L)
+            val g = minOf(n, 3)
+            val dy = -dir * up * g * r.rowH.toFloat(); val dur = (g * 600L).coerceAtLeast(500L)
             val path = android.graphics.Path().apply { moveTo(x.toFloat(), band.toFloat()); lineTo(x.toFloat(), band + dy) }
             try { dispatchGesture(android.accessibilityservice.GestureDescription.Builder().addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, dur)).build(), null, null) } catch (e: Exception) { }
             cTapAt = now + dur
-        } else cTapAt = now - 600 // o comando é rápido: relê logo
+        } else cTapAt = now // o comando é rápido: relê em ~0,35 s
         wLast = Triple(col, sig, how)
         if (cTries % 15 == 14) saveTree(all, "rodinhas: $sig")
         again(); return true
@@ -1648,16 +1654,16 @@ class ScreenReader : AccessibilityService() {
     // ================= 🎓 ENSINAR: você agenda 1 post na mão e eu gravo onde tocou e como mexeu as rodinhas =================
     private var tLastRead: AgendaCore.WRead? = null
     fun teachStart() {
-        Store.prefs(this).edit().putLong("ensinar_ate", System.currentTimeMillis() + 15 * 60_000L).putString("ensino", "[]").apply()
+        Store.prefs(this).edit().putLong("ensinar_ate", System.currentTimeMillis() + 15 * 60_000L).putString("ensino_novo", "[]").apply()
         tLastRead = null
         show("🎓 Gravando: agende 1 post na mão no Threads (foto, legenda, ⋯ › Schedule…, rodinhas, Done, Schedule). Eu aprendo cada passo.", 0xEE7C3AED.toInt())
         try { startActivity(packageManager.getLaunchIntentForPackage(PostQueue.THREADS)!!.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (x: Exception) { }
     }
     private fun teachOn() = Store.prefs(this).getLong("ensinar_ate", 0) > System.currentTimeMillis()
     private fun teachAdd(o: org.json.JSONObject) {
-        val a = try { org.json.JSONArray(Store.prefs(this).getString("ensino", "[]")) } catch (x: Exception) { org.json.JSONArray() }
+        val a = try { org.json.JSONArray(Store.prefs(this).getString("ensino_novo", "[]")) } catch (x: Exception) { org.json.JSONArray() }
         a.put(o.put("at", System.currentTimeMillis())); while (a.length() > 120) a.remove(0)
-        Store.prefs(this).edit().putString("ensino", a.toString()).apply()
+        Store.prefs(this).edit().putString("ensino_novo", a.toString()).apply()
     }
     private fun teachCtx(all: List<AccessibilityNodeInfo>): String {
         fun l(n: AccessibilityNodeInfo) = norm(((n.contentDescription ?: n.text) ?: "").toString())
@@ -1690,9 +1696,11 @@ class ScreenReader : AccessibilityService() {
                 teachAdd(org.json.JSONObject().put("t", "toque").put("l", label.take(40)).put("id", src?.viewIdResourceName.orEmpty()).put("c", src?.className?.toString()?.substringAfterLast('.').orEmpty())
                     .put("x", r?.let { it.centerX().toDouble() / dm.widthPixels } ?: -1.0).put("y", r?.let { it.centerY().toDouble() / dm.heightPixels } ?: -1.0).put("ctx", teachCtx(all)))
                 // tocou no Schedule final (no post, depois da folha): acabou a aula
-                if (Regex("^(schedule|agendar|programar)$", RegexOption.IGNORE_CASE).matches(label) && teachCtx(all) == "post" && Store.prefs(this).getString("ensino", "").orEmpty().contains("\"folha\"")) {
-                    Store.prefs(this).edit().putLong("ensinar_ate", 0).apply()
-                    val n = try { org.json.JSONArray(Store.prefs(this).getString("ensino", "[]")).length() } catch (x: Exception) { 0 }
+                if (Regex("^(schedule|agendar|programar)$", RegexOption.IGNORE_CASE).matches(label) && teachCtx(all) == "post" && Store.prefs(this).getString("ensino_novo", "").orEmpty().contains("\"folha\"")) {
+                    val novo = Store.prefs(this).getString("ensino_novo", "[]") ?: "[]"
+                    Store.prefs(this).edit().putLong("ensinar_ate", 0).putString("ensino", novo).apply()
+                    saveTeach()
+                    val n = try { org.json.JSONArray(novo).length() } catch (x: Exception) { 0 }
                     show("🎓 Aprendi! Gravei $n passos. Agora o 'Agendar todos' usa o que você fez.", 0xEE15803D.toInt()); h.postDelayed({ if (!running && !forcing) clearOverlay() }, 8000)
                 }
             }
@@ -1717,8 +1725,29 @@ class ScreenReader : AccessibilityService() {
         }
     }
 
+    /** 💾 Guarda a configuração que deu certo (aula + sentido das rodinhas) num arquivo: sobrevive a atualização e a limpar a aula. */
+    fun saveTeach() {
+        val p = Store.prefs(this)
+        val o = org.json.JSONObject().put("ensino", p.getString("ensino", "[]")).put("salvo", System.currentTimeMillis())
+        for (k in listOf("ensino_sobe", "ensino_sobe_0", "ensino_sobe_1", "ensino_sobe_2", "ensino_sobe_3")) if (p.contains(k)) o.put(k, p.getInt(k, 1))
+        try { java.io.File(filesDir, "ensino_agendar.json").writeText(o.toString()) } catch (x: Exception) { }
+        p.edit().putLong("ensino_salvo", System.currentTimeMillis()).apply()
+    }
+    /** Volta a configuração salva se a atual sumiu. */
+    private fun loadTeach() {
+        val p = Store.prefs(this)
+        if ((p.getString("ensino", "") ?: "").length > 2) return
+        try {
+            val o = org.json.JSONObject(java.io.File(filesDir, "ensino_agendar.json").readText())
+            val e = p.edit().putString("ensino", o.optString("ensino", "[]"))
+            o.keys().forEach { k -> if (k.startsWith("ensino_sobe")) e.putInt(k, o.optInt(k, 1)) }
+            e.apply()
+        } catch (x: Exception) { }
+    }
+
     /** O que você ensinou: o rótulo do ⋯ que abriu o menu com o Schedule (o toque antes do toque em "Schedule…"). */
     private fun learnedMenuLabel(): String? = try {
+        loadTeach()
         val a = org.json.JSONArray(Store.prefs(this).getString("ensino", "[]"))
         (1 until a.length()).firstOrNull { i -> a.getJSONObject(i).optString("t") == "toque" && Regex("^(schedule|agendar|programar)").containsMatchIn(norm(a.getJSONObject(i).optString("l"))) && a.getJSONObject(i).optString("ctx") != "folha" }
             ?.let { i -> norm(a.getJSONObject(i - 1).optString("l")).takeIf { it.isNotEmpty() } }
