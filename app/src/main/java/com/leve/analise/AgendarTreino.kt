@@ -48,6 +48,6 @@ object AgendarTreino {
         val ok = l.count { it.optBoolean("ok") }; val bad = l.size - ok
         val last = l.takeLast(6).joinToString(" | ") { (if (it.optBoolean("ok")) "✓" else "✗") + " " + it.optString("etapa") + ": " + it.optString("info").take(70) }
         val bd = Store.prefs(c).getString("ag_bandit_done", "") ?: ""
-        return "aprendido: ${Store.prefs(c).getString("ag_bandit", "")?.take(400)} · Done: ${bd.take(120)} · velocidade ${SPEEDS[speed(c)]} · votos: ${votes(c)} · ✓ $ok certo(s) · ✗ $bad errado(s) · espera a rodinha parar ${settleMs(c)} ms · últimos: $last"
+        return "jeito por coluna (0 comando,1 tocar,2 arrastar): ${Store.prefs(c).getString("ag_bandit_how", "-")} · aprendido: ${Store.prefs(c).getString("ag_bandit", "")?.take(400)} · Done: ${bd.take(120)} · velocidade ${SPEEDS[speed(c)]} · votos: ${votes(c)} · ✓ $ok certo(s) · ✗ $bad errado(s) · espera a rodinha parar ${settleMs(c)} ms · últimos: $last"
     }
 }

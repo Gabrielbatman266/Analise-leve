@@ -21,7 +21,9 @@ class SheetPilotTrainingTest {
     private val sp = "America/Sao_Paulo"; private val zone = ZoneId.of(sp)
 
     class Sim(val today: LocalDate, var day: Int, var hPos: Int, var min: Int, var pm: Boolean, val hourWraps: Boolean,
-              val slip: Double, val lagMs: Long, val rnd: java.util.Random) {
+              val slip: Double, val lagMs: Long, val rnd: java.util.Random,
+              /** works[col][how]: o comando / tocar no número / arrastar funcionam nessa coluna? (falso = ignora e não mexe) */
+              val works: Array<BooleanArray> = Array(4) { BooleanArray(3) { true } }) {
         val band = 1940; val rowH = 103
         var now = 0L
         // o que a tela mostra (fica pra trás enquanto anima)
@@ -53,6 +55,11 @@ class SheetPilotTrainingTest {
             return out
         }
         /** Comando de rolar: true se andou. Muitas linhas de uma vez podem escorregar 1–2 a mais. */
+        /** true = andou ou "aceitou" (comando ignorado também devolve true, como no celular); false = fim da rodinha. */
+        fun act(col: Int, dir: Int, rows: Int, how: Int): Boolean {
+            if (!works[col][how]) { now += 60; return true }       // ignorou: não mexe nada (o pior caso: nem avisa)
+            return scroll(col, dir, if (how == 1) minOf(rows, 2) else rows)
+        }
         fun scroll(col: Int, dir: Int, rows: Int): Boolean {
             if (now >= animUntil) shown = Triple(day, hPos, min)
             var moved = 0
@@ -74,13 +81,14 @@ class SheetPilotTrainingTest {
     data class Result(val ok: Boolean, val ms: Long, val why: String)
 
     /** Um post: abre a folha (com o horário anterior), o piloto acerta, toca no Done, confere; corrige se o post mostrar errado. */
-    private fun episode(sim: Sim, target: ZonedDateTime, clock: ZonedDateTime, wb: AgendaCore.Bandit, db: AgendaCore.Bandit, rnd: java.util.Random, explore: Double): Result {
-        val pilot = SheetPilot(target, wb, db, { c -> when (c) { 3 -> 1; 1 -> 11; else -> 20 } }, rnd, explore)
+    private fun episode(sim: Sim, target: ZonedDateTime, clock: ZonedDateTime, wb: AgendaCore.Bandit, db: AgendaCore.Bandit, rnd: java.util.Random, explore: Double,
+                        hb: AgendaCore.Bandit = AgendaCore.Bandit(intArrayOf(0, 1, 2))): Result {
+        val pilot = SheetPilot(target, wb, db, { c -> when (c) { 3 -> 1; 1 -> 11; else -> 20 } }, rnd, explore, hb)
         var reopen = 0
         while (true) {
             val r = AgendaCore.wheelRead(sim.screen(), sim.band, 124, sim.today)
             when (val a = pilot.step(r, sim.now, sim.doneEnabled(clock), canLook = true)) {
-                is SheetPilot.Act.Scroll -> { if (!sim.scroll(a.col, a.dir, a.rows)) pilot.scrollRefused(a.col); sim.now += 120 }
+                is SheetPilot.Act.Scroll -> { if (!sim.act(a.col, a.dir, a.rows, a.how)) pilot.scrollRefused(a.col); sim.now += 120 }
                 is SheetPilot.Act.Wait -> sim.now += a.ms
                 SheetPilot.Act.Look -> { pilot.setLum(r.toString(), if (sim.doneEnabled(clock)) 238 else 150); sim.now += 150 }
                 SheetPilot.Act.TapDone -> {
@@ -95,8 +103,13 @@ class SheetPilotTrainingTest {
         }
     }
 
+    private fun randomWorks(rnd: java.util.Random) = Array(4) {
+        val w = BooleanArray(3) { h -> rnd.nextDouble() > (if (h == 0) 0.35 else 0.25) }
+        if (w.none { it }) w[rnd.nextInt(3)] = true    // pelo menos um jeito funciona em cada coluna
+        w
+    }
     private fun randomSim(rnd: java.util.Random, today: LocalDate) = Sim(today, rnd.nextInt(8), rnd.nextInt(12), rnd.nextInt(60), rnd.nextBoolean(),
-        hourWraps = rnd.nextBoolean(), slip = 0.1 + rnd.nextDouble() * 0.4, lagMs = 150L + rnd.nextInt(900), rnd = rnd)
+        hourWraps = rnd.nextBoolean(), slip = 0.1 + rnd.nextDouble() * 0.4, lagMs = 150L + rnd.nextInt(900), rnd = rnd, works = randomWorks(rnd))
 
     @Test fun treinaEMedeTaxaDeAcerto() {
         val rnd = java.util.Random(2026)
@@ -105,20 +118,20 @@ class SheetPilotTrainingTest {
         val clock = ZonedDateTime.of(today, LocalTime.of(0, 30), zone)
         // treino: lotes de 5 posts seguidos (a folha abre com o horário do post anterior)
         repeat(1200) {
-            val sim = randomSim(rnd, today)
+            val sim = randomSim(rnd, today); val hb = AgendaCore.Bandit(intArrayOf(0, 1, 2))
             repeat(5) {
                 val t = clock.plusMinutes(20L + rnd.nextInt(60 * 24 * 10)).withSecond(0).withNano(0)
-                episode(sim, t, clock, wb, db, rnd, 0.1)
+                episode(sim, t, clock, wb, db, rnd, 0.1, hb)
             }
         }
         // prova: sem explorar, 3000 posts novos em celulares simulados novos
         var ok = 0; var n = 0; var ms = 0L; val fails = HashMap<String, Int>()
         repeat(600) {
-            val sim = randomSim(rnd, today)
+            val sim = randomSim(rnd, today); val hb = AgendaCore.Bandit(intArrayOf(0, 1, 2))
             repeat(5) {
                 val t = clock.plusMinutes(20L + rnd.nextInt(60 * 24 * 10)).withSecond(0).withNano(0)
                 val t0 = sim.now
-                val r = episode(sim, t, clock, wb, db, rnd, 0.0)
+                val r = episode(sim, t, clock, wb, db, rnd, 0.0, hb)
                 n++; ms += sim.now - t0; if (r.ok) ok++ else fails.merge(r.why, 1, Int::plus)
             }
         }
@@ -136,10 +149,11 @@ class SheetPilotTrainingTest {
         val today = LocalDate.of(2026, 11, 13); val clock = ZonedDateTime.of(today, LocalTime.of(0, 30), zone)
         var ok = 0; var n = 0; val fails = HashMap<String, Int>()
         repeat(800) { ep ->
-            val sim = Sim(today, rnd.nextInt(8), rnd.nextInt(12), rnd.nextInt(60), rnd.nextBoolean(), rnd.nextBoolean(), slip = 0.7, lagMs = 600L + rnd.nextInt(1000), rnd = rnd)
+            val sim = Sim(today, rnd.nextInt(8), rnd.nextInt(12), rnd.nextInt(60), rnd.nextBoolean(), rnd.nextBoolean(), slip = 0.7, lagMs = 600L + rnd.nextInt(1000), rnd = rnd, works = randomWorks(rnd))
+            val hb = AgendaCore.Bandit(intArrayOf(0, 1, 2))
             repeat(5) {
                 val t = clock.plusMinutes(20L + rnd.nextInt(60 * 24 * 30)).withSecond(0).withNano(0)
-                val r = episode(sim, t, clock, wb, db, rnd, if (ep < 400) 0.1 else 0.0)
+                val r = episode(sim, t, clock, wb, db, rnd, if (ep < 400) 0.1 else 0.0, hb)
                 if (ep >= 400) { n++; if (r.ok) ok++ else fails.merge(r.why, 1, Int::plus) }
             }
         }
@@ -157,5 +171,18 @@ class SheetPilotTrainingTest {
         val sim = Sim(today, 0, 3, 0, true, false, 0.0, 300, rnd)
         val r = episode(sim, clock.minusMinutes(30), clock, wb, db, rnd, 0.0)
         assertTrue(r.why, !r.ok && r.why.contains("não aceita"))
+    }
+
+    /** O caso do print: Sat, Nov 14 · 9 · 39 · AM, alvo 09:40, e o MINUTO ignora o comando de rolar. */
+    @Test fun minutoTravadoNo39() {
+        val rnd = java.util.Random(9)
+        val wb = AgendaCore.Bandit(intArrayOf(1, 2, 4, 8, 12)); val db = AgendaCore.Bandit(intArrayOf(300, 600, 1000, 1600))
+        val today = LocalDate.of(2026, 11, 13); val clock = ZonedDateTime.of(today, LocalTime.of(0, 59), zone)
+        val works = Array(4) { BooleanArray(3) { true } }; works[2][0] = false   // minuto: comando ignorado
+        val sim = Sim(today, 1, 9, 39, false, false, 0.2, 500, rnd, works)
+        val hb = AgendaCore.Bandit(intArrayOf(0, 1, 2))
+        val r = episode(sim, ZonedDateTime.of(2026, 11, 14, 9, 40, 0, 0, zone), clock, wb, db, rnd, 0.0, hb)
+        assertTrue(r.why, r.ok)
+        assertTrue("aprendeu a não usar o comando no minuto", hb.value("c2", 0) < hb.value("c2", 1) || hb.value("c2", 0) < hb.value("c2", 2))
     }
 }

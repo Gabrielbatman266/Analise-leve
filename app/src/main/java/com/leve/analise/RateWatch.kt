@@ -1053,13 +1053,13 @@ class ScreenReader : AccessibilityService() {
             val lp = android.view.WindowManager.LayoutParams(-2, -2, android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, android.graphics.PixelFormat.TRANSLUCENT)
                 .apply { gravity = android.view.Gravity.TOP or android.view.Gravity.START
-                    x = Store.prefs(this@ScreenReader).getInt("panel_x", resources.displayMetrics.widthPixels - dpx(190)); y = Store.prefs(this@ScreenReader).getInt("panel_y", dpx(560)) }
+                    x = Store.prefs(this@ScreenReader).getInt("panel_x", resources.displayMetrics.widthPixels - dpx(190)); y = Store.prefs(this@ScreenReader).getInt("panel_y2", dpx(96)) }
             var sx = 0f; var sy = 0f; var ox = 0; var oy = 0
             grip.setOnTouchListener { _, ev ->
                 when (ev.action) {
                     android.view.MotionEvent.ACTION_DOWN -> { sx = ev.rawX; sy = ev.rawY; ox = lp.x; oy = lp.y }
                     android.view.MotionEvent.ACTION_MOVE -> { lp.x = ox + (ev.rawX - sx).toInt(); lp.y = oy + (ev.rawY - sy).toInt(); try { wm.updateViewLayout(p, lp) } catch (e: Exception) { } }
-                    android.view.MotionEvent.ACTION_UP -> Store.prefs(this@ScreenReader).edit().putInt("panel_x", lp.x).putInt("panel_y", lp.y).apply()
+                    android.view.MotionEvent.ACTION_UP -> Store.prefs(this@ScreenReader).edit().putInt("panel_x", lp.x).putInt("panel_y2", lp.y).apply()
                 }
                 true
             }
@@ -1136,7 +1136,7 @@ class ScreenReader : AccessibilityService() {
         val band = wheels.map { rect(it).centerY() }.sorted().let { if (it.isEmpty()) (top + bottom) / 2 else it[it.size / 2] }
         val r = AgendaCore.wheelRead(all.filter { n -> rect(n).centerY() in top..bottom && n !== title }.map { AgendaCore.WItem(t(it), rect(it).centerX(), rect(it).centerY()) }, band, dpx(45), java.time.LocalDate.now())
         // 🧠 o mesmo cérebro treinado no simulador (SheetPilot)
-        val pilot = cPilot ?: SheetPilot(z, wb(), db(), { c -> AgendarTreino.rowsAtOnce(this, c) }).also { cPilot = it }
+        val pilot = cPilot ?: SheetPilot(z, wb(), db(), { c -> AgendarTreino.rowsAtOnce(this, c) }, hb = hb()).also { cPilot = it }
         val doneOn = done.isEnabled && clickable(done)?.isEnabled != false
         val act = pilot.step(r, now, doneOn, canLook = android.os.Build.VERSION.SDK_INT >= 30)
         val sig = r?.toString() ?: "?"
@@ -1146,19 +1146,31 @@ class ScreenReader : AccessibilityService() {
             is SheetPilot.Act.Scroll -> {
                 composeUntil = maxOf(composeUntil, System.currentTimeMillis() + 90_000L)
                 val x = r?.colX?.getOrNull(act.col) ?: return false
-                val wheel = wheels.filter { rect(it).left <= x && rect(it).right >= x }.minByOrNull { rect(it).width() }
-                var ok = false
-                if (wheel != null && !act.gesture) {
-                    ok = true
-                    repeat(act.rows) { if (ok) ok = wheel.performAction(if (act.dir > 0) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) }
-                    if (!ok) { pilot.scrollRefused(act.col); clog("rodinha ${act.col}: fim pra ${if (act.dir > 0) "baixo" else "cima"}", emptyList()) }
-                } else {
-                    // arrasto lento, de linha em linha (o sentido que aumenta o valor vem do 🎓 Ensinar; padrão: dedo pra cima)
-                    val up = Store.prefs(this).getInt("ensino_sobe_${act.col}", Store.prefs(this).getInt("ensino_sobe", 1))
-                    val g = minOf(act.rows, 3); val rowH = r.rowH.toFloat()
-                    val path = android.graphics.Path().apply { moveTo(x.toFloat(), band.toFloat()); lineTo(x.toFloat(), band - act.dir * up * g * rowH) }
-                    try { dispatchGesture(android.accessibilityservice.GestureDescription.Builder().addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, (g * 600L).coerceAtLeast(500L))).build(), null, null) } catch (e: Exception) { }
+                val rowH = r.rowH.toFloat()
+                when (act.how) {
+                    0 -> { // comando de rolar da acessibilidade
+                        val wheel = wheels.filter { rect(it).left <= x && rect(it).right >= x }.minByOrNull { rect(it).width() }
+                        var ok = wheel != null
+                        if (wheel != null) repeat(act.rows) { if (ok) ok = wheel.performAction(if (act.dir > 0) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) }
+                        if (wheel != null) markDot(x.toFloat(), band.toFloat(), 0xFF5B9DFF.toInt())
+                        if (!ok) { if (wheel == null) { /* sem rodinha que rola nessa coluna: conta como "não mexeu" */ } else { pilot.scrollRefused(act.col); clog("rodinha ${act.col}: fim pra ${if (act.dir > 0) "baixo" else "cima"}", emptyList()) } }
+                    }
+                    1 -> { // TOCA no número que quer (1–2 linhas pra lá: valor maior fica embaixo)
+                        val y = band + act.dir * act.rows * rowH
+                        val path = android.graphics.Path().apply { moveTo(x.toFloat(), y) }
+                        try { dispatchGesture(android.accessibilityservice.GestureDescription.Builder().addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 60)).build(), null, null) } catch (e: Exception) { }
+                        markDot(x.toFloat(), y, 0xFF36D399.toInt())
+                    }
+                    else -> { // arrasta devagar, de linha em linha (o sentido que aumenta vem do 🎓 Ensinar; padrão: dedo pra cima)
+                        val up = Store.prefs(this).getInt("ensino_sobe_${act.col}", Store.prefs(this).getInt("ensino_sobe", 1))
+                        val y2 = band - act.dir * up * act.rows * rowH
+                        val path = android.graphics.Path().apply { moveTo(x.toFloat(), band.toFloat()); lineTo(x.toFloat(), y2) }
+                        try { dispatchGesture(android.accessibilityservice.GestureDescription.Builder().addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, (act.rows * 600L).coerceAtLeast(500L))).build(), null, null) } catch (e: Exception) { }
+                        markLine(x.toFloat(), band.toFloat(), y2)
+                    }
                 }
+                clog("rodinha ${act.col}: ${SheetPilot.HOW[act.how]} ${if (act.dir > 0) "+" else "−"}${act.rows}", emptyList())
+                hbSave()
                 cTapAt = now; again(); return true
             }
             SheetPilot.Act.Look -> {
@@ -1173,6 +1185,7 @@ class ScreenReader : AccessibilityService() {
             }
             SheetPilot.Act.TapDone -> {
                 clog("certo e parado ($sig) → Done", emptyList())
+                rect(clickable(done) ?: done).let { markDot(it.exactCenterX(), it.exactCenterY(), 0xFFFFD166.toInt()) }
                 if (click(done) || tapCenter(done)) { cStep = 7; cTries = 0; cTapAt = now; cDoneAt = now; cDoneSig = sig }
                 again(); return true
             }
@@ -1194,6 +1207,30 @@ class ScreenReader : AccessibilityService() {
     private var _wb: AgendaCore.Bandit? = null; private var _db: AgendaCore.Bandit? = null
     private fun wb() = _wb ?: AgendaCore.Bandit.load(intArrayOf(1, 2, 4, 8, 12), Store.prefs(this).getString("ag_bandit", null) ?: TreinoPronto.RODINHAS).also { _wb = it }
     private fun db() = _db ?: AgendaCore.Bandit.load(intArrayOf(300, 600, 1000, 1600), Store.prefs(this).getString("ag_bandit_done", null) ?: TreinoPronto.DONE).also { _db = it }
+    private var _hb: AgendaCore.Bandit? = null
+    /** Jeito que funciona em cada coluna NESTE celular (comando / tocar no número / arrastar). */
+    private fun hb() = _hb ?: AgendaCore.Bandit.load(intArrayOf(0, 1, 2), Store.prefs(this).getString("ag_bandit_how", null)).also { _hb = it }
+    private fun hbSave() = Store.prefs(this).edit().putString("ag_bandit_how", hb().save()).apply()
+
+    /** 🎯 Marca na tela onde o robô tocou (bolinha) ou arrastou (traço), por 0,7 s. */
+    private fun markDot(x: Float, y: Float, color: Int) {
+        try {
+            val sz = dpx(26)
+            val v = android.view.View(this).apply { background = android.graphics.drawable.GradientDrawable().apply { shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(color and 0x55FFFFFF); setStroke(dpx(3), color) } }
+            wm.addView(v, lp(sz, sz).apply { gravity = android.view.Gravity.TOP or android.view.Gravity.START; this.x = (x - sz / 2).toInt(); this.y = (y - sz / 2).toInt() - statusBarH() })
+            h.postDelayed({ try { wm.removeView(v) } catch (e: Exception) { } }, 700)
+        } catch (e: Exception) { }
+    }
+    private fun markLine(x: Float, y1: Float, y2: Float) {
+        try {
+            val w = dpx(8); val top = minOf(y1, y2); val hgt = Math.abs(y2 - y1).toInt().coerceAtLeast(dpx(12))
+            val v = android.view.View(this).apply { background = android.graphics.drawable.GradientDrawable().apply { setColor(0xAAFF5C82.toInt()); cornerRadius = dpx(4).toFloat() } }
+            wm.addView(v, lp(w, hgt).apply { gravity = android.view.Gravity.TOP or android.view.Gravity.START; this.x = (x - w / 2).toInt(); this.y = top.toInt() - statusBarH() })
+            h.postDelayed({ try { wm.removeView(v) } catch (e: Exception) { } }, 900)
+        } catch (e: Exception) { }
+    }
+    private fun statusBarH(): Int = 0 // a janela de acessibilidade usa a tela inteira (FLAG_LAYOUT_NO_LIMITS)
+
     private fun wbSave() = Store.prefs(this).edit().putString("ag_bandit", wb().save()).putString("ag_bandit_done", db().save()).apply()
     /** Nota do Done que acabou de ser tocado (certo/errado), uma vez só. */
     private fun judgeDone(ok: Boolean, why: String) {
