@@ -141,4 +141,101 @@ class AgendaCoreTest {
         assertEquals(null, AgendaCore.findDate(listOf("7"), hoje)) // número da rodinha não é data
         assertEquals(null, AgendaCore.findDate(listOf("00"), hoje))
     }
+
+    // ---------------------------------------------------------------- simulador da tela "Schedule post" do Threads
+    /**
+     * Rodinhas como no Threads (medidas do print): 5 linhas visíveis, o escolhido na faixa do meio (y=1940),
+     * dia começa em HOJE (nada acima do primeiro), minuto 00–59 sem dar a volta, hora 1–12, AM/PM.
+     * Cada comando anda 1 linha; no fim da rodinha o comando falha (como aconteceu no celular).
+     */
+    private class Sim(val today: LocalDate, var day: Int, var hour: Int, var min: Int, var pm: Boolean, val hourWraps: Boolean = false) {
+        val band = 1940; val rowH = 103
+        private fun fmtDay(d: LocalDate) = d.dayOfWeek.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.ENGLISH) + ", " +
+            d.month.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.ENGLISH) + " " + d.dayOfMonth
+        fun screen(): List<AgendaCore.WItem> {
+            val out = ArrayList<AgendaCore.WItem>()
+            for (k in -2..2) {
+                val y = band + k * rowH
+                (day + k).takeIf { it in 0..75 }?.let { out += AgendaCore.WItem(fmtDay(today.plusDays(it.toLong())), 375, y) }
+                val h = hour + k
+                (if (hourWraps) ((h - 1) % 12 + 12) % 12 + 1 else h.takeIf { it in 1..12 })?.let { out += AgendaCore.WItem(it.toString(), 600, y) }
+                (min + k).takeIf { it in 0..59 }?.let { out += AgendaCore.WItem("%02d".format(it), 724, y) }
+            }
+            out += AgendaCore.WItem(if (pm) "PM" else "AM", 867, band)
+            out += AgendaCore.WItem(if (pm) "AM" else "PM", 867, if (pm) band - rowH else band + rowH)
+            // coisas do post que ficam atrás da folha, na mesma altura (não podem confundir)
+            out += AgendaCore.WItem("Edit", 280, 1919); out += AgendaCore.WItem("Add to thread", 300, 2219)
+            return out
+        }
+        /** Um comando de rolar: true se andou. */
+        fun step(col: Int, dir: Int): Boolean = when (col) {
+            0 -> (day + dir in 0..75).also { if (it) day += dir }
+            1 -> if (hourWraps) { hour = ((hour - 1 + dir) % 12 + 12) % 12 + 1; true } else (hour + dir in 1..12).also { if (it) hour += dir }
+            2 -> (min + dir in 0..59).also { if (it) min += dir }
+            else -> (if (dir > 0) !pm else pm).also { if (it) pm = !pm }
+        }
+    }
+
+    private fun drive(sim: Sim, target: ZonedDateTime): Int {
+        var steps = 0; val noWrap = HashSet<Int>()
+        while (steps < 400) {
+            val r = AgendaCore.wheelRead(sim.screen(), sim.band, 124, sim.today) ?: throw AssertionError("não reconheceu as rodinhas")
+            val next = AgendaCore.wheelNext(r, target, noWrap) ?: return steps
+            // igual o robô: mandou andar e nada mudou → aquela rodinha não dá a volta
+            if (!sim.step(next.first, if (next.second > 0) 1 else -1)) noWrap += next.first
+            steps++
+        }
+        throw AssertionError("não chegou no alvo: " + AgendaCore.wheelRead(sim.screen(), sim.band, 124, sim.today))
+    }
+
+    @Test fun rodinhasLeituraDaFaixaDoMeio() {
+        // exatamente a tela do print: Sun, Nov 22 · 7 · 00 · PM
+        val hoje = LocalDate.of(2026, 11, 12)
+        val sim = Sim(hoje, day = 10, hour = 7, min = 0, pm = true)
+        val r = AgendaCore.wheelRead(sim.screen(), sim.band, 124, hoje)!!
+        assertEquals(LocalDate.of(2026, 11, 22), r.date); assertEquals(7, r.hour); assertEquals(0, r.minute); assertEquals(true, r.pm)
+        assertEquals(103, r.rowH); assertEquals(listOf(375, 600, 724, 867), r.colX)
+    }
+
+    @Test fun rodinhasCasoQueTravouNoCelular() {
+        // rodinha em HOJE (nada acima), alvo hoje 18:47: antes ele tentava voltar, falhava e girava o dia pra frente sem parar
+        val hoje = LocalDate.of(2026, 11, 12)
+        val sim = Sim(hoje, day = 0, hour = 7, min = 0, pm = true)
+        val alvo = ZonedDateTime.of(2026, 11, 12, 18, 47, 0, 0, ZoneId.of(sp))
+        drive(sim, alvo)
+        assertEquals(0, sim.day); assertEquals(6, sim.hour); assertEquals(47, sim.min); assertEquals(true, sim.pm)
+        // e saindo de onde ele tinha parado (Sun, Nov 22): volta 10 dias
+        val sim2 = Sim(hoje, day = 10, hour = 7, min = 0, pm = true)
+        drive(sim2, alvo)
+        assertEquals(0, sim2.day); assertEquals(6, sim2.hour); assertEquals(47, sim2.min)
+    }
+
+    @Test fun rodinhasChegamEmQualquerHorario() {
+        val hoje = LocalDate.of(2026, 11, 12); val rnd = java.util.Random(7)
+        repeat(400) { n ->
+            val sim = Sim(hoje, rnd.nextInt(20), 1 + rnd.nextInt(12), rnd.nextInt(60), rnd.nextBoolean(), hourWraps = n % 2 == 0)
+            val alvo = ZonedDateTime.of(hoje.plusDays(rnd.nextInt(30).toLong()), LocalTime.of(rnd.nextInt(24), rnd.nextInt(60)), ZoneId.of(sp))
+            drive(sim, alvo)
+            val h24 = (sim.hour % 12) + (if (sim.pm) 12 else 0)
+            assertEquals("caso $n", alvo.toLocalDate(), hoje.plusDays(sim.day.toLong()))
+            assertEquals("caso $n", alvo.hour, h24); assertEquals("caso $n", alvo.minute, sim.min)
+        }
+    }
+
+    @Test fun rodinhasMeiaNoiteEMeioDia() {
+        val hoje = LocalDate.of(2026, 11, 12)
+        for ((h, wantH, wantPm) in listOf(Triple(0, 12, false), Triple(12, 12, true), Triple(23, 11, true), Triple(1, 1, false))) {
+            val sim = Sim(hoje, 3, 7, 30, true)
+            drive(sim, ZonedDateTime.of(hoje.plusDays(1), LocalTime.of(h, 5), ZoneId.of(sp)))
+            assertEquals(wantH, sim.hour); assertEquals(wantPm, sim.pm); assertEquals(5, sim.min); assertEquals(1, sim.day)
+        }
+    }
+
+    @Test fun linhaDoPostAgendado() {
+        assertEquals(ZonedDateTime.of(2026, 11, 12, 19, 0, 0, 0, ZoneId.of(sp)), AgendaCore.parsePostingRow("Today 7 PM", now))
+        assertEquals(ZonedDateTime.of(2026, 11, 12, 18, 47, 0, 0, ZoneId.of(sp)), AgendaCore.parsePostingRow("Today 6:47 PM", now))
+        assertEquals(ZonedDateTime.of(2026, 11, 22, 9, 5, 0, 0, ZoneId.of(sp)), AgendaCore.parsePostingRow("Sun, Nov 22 9:05 AM", now))
+        assertEquals(ZonedDateTime.of(2026, 11, 13, 0, 0, 0, 0, ZoneId.of(sp)), AgendaCore.parsePostingRow("Tomorrow 12 AM", now))
+        assertEquals(null, AgendaCore.parsePostingRow("Posting", now))
+    }
 }

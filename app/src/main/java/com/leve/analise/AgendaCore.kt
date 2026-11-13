@@ -190,4 +190,84 @@ object AgendaCore {
         val dias = listOf("seg", "ter", "qua", "qui", "sex", "sáb", "dom")
         return dias[z.dayOfWeek.value - 1] + " " + "%02d/%02d às %02d:%02d".format(z.dayOfMonth, z.monthValue, z.hour, z.minute)
     }
+
+    // ---------------------------------------------------------------- rodinhas do "Schedule post" do Threads
+    /** Um texto da tela e onde ele está (centro). */
+    data class WItem(val text: String, val cx: Int, val cy: Int)
+
+    /** O que está escolhido (faixa do meio) em cada rodinha, e onde fica cada coluna. col: 0=dia 1=hora 2=minuto 3=AM/PM. */
+    data class WRead(val date: LocalDate?, val hour: Int?, val minute: Int?, val pm: Boolean?, val twelve: Boolean, val colX: List<Int>, val rowH: Int, val band: Int) {
+        override fun toString() = "dia $date hora $hour min $minute" + (if (twelve) (if (pm == true) " PM" else if (pm == false) " AM" else " ?") else "")
+    }
+
+    private val W_AMPM = Regex("^(am|pm|a\\.\\s?m\\.|p\\.\\s?m\\.)$", RegexOption.IGNORE_CASE)
+    private val W_NUM = Regex("^\\d{1,2}$")
+
+    fun wheelDate(s: String, today: LocalDate): LocalDate? = when {
+        Regex("(?i)^(today|hoje)").containsMatchIn(s.trim()) -> today
+        Regex("(?i)^(tomorrow|amanhã|amanha)").containsMatchIn(s.trim()) -> today.plusDays(1)
+        s.length <= 26 && findTime(listOf(s)) == null -> findDate(listOf(s), today)
+        else -> null
+    }
+
+    /** Só textos com cara de item de rodinha (dia, número, AM/PM). */
+    fun wheelLike(s: String, today: LocalDate) = W_NUM.matches(s) || W_AMPM.matches(s) || wheelDate(s, today) != null
+
+    /**
+     * Lê as rodinhas: agrupa os textos em colunas pela posição e pega, em cada uma, o item que está na faixa [band].
+     * null = a tela não tem as colunas de dia + hora + minuto.
+     */
+    fun wheelRead(items0: List<WItem>, band: Int, colGap: Int, today: LocalDate): WRead? {
+        val items = items0.filter { wheelLike(it.text.trim(), today) }
+        val cols = ArrayList<MutableList<WItem>>()
+        for (it in items.sortedBy { it.cx }) { val c = cols.firstOrNull { col -> Math.abs(col.first().cx - it.cx) < colGap }; if (c != null) c += it else cols += mutableListOf(it) }
+        val dateCol = cols.firstOrNull { c -> c.count { wheelDate(it.text, today) != null && !W_NUM.matches(it.text.trim()) } >= maxOf(1, (c.size + 1) / 2) } ?: return null
+        val ampmCol = cols.firstOrNull { c -> c !== dateCol && c.all { W_AMPM.matches(it.text.trim()) } }
+        val nums = cols.filter { c -> c !== dateCol && c !== ampmCol && c.all { W_NUM.matches(it.text.trim()) } }.sortedBy { it.first().cx }
+        val hourCol = nums.getOrNull(0) ?: return null; val minCol = nums.getOrNull(1) ?: return null
+        val ys = (dateCol + hourCol + minCol).map { it.cy }.distinct().sorted()
+        val rowH = ys.zipWithNext { a, b -> b - a }.filter { it > 8 }.minOrNull() ?: return null
+        fun sel(c: List<WItem>) = c.minByOrNull { Math.abs(it.cy - band) }?.takeIf { Math.abs(it.cy - band) < rowH * 0.5 }
+        return WRead(
+            date = sel(dateCol)?.let { wheelDate(it.text, today) }, hour = sel(hourCol)?.text?.trim()?.toIntOrNull(), minute = sel(minCol)?.text?.trim()?.toIntOrNull(),
+            pm = ampmCol?.let { sel(it) }?.text?.trim()?.lowercase()?.startsWith("p"), twelve = ampmCol != null,
+            colX = listOf(dateCol, hourCol, minCol).map { c -> c.map { it.cx }.average().toInt() } + (ampmCol?.let { c -> listOf(c.map { it.cx }.average().toInt()) } ?: emptyList()),
+            rowH = rowH, band = band)
+    }
+
+    /**
+     * Próximo passo pra chegar no alvo: (coluna, quantas linhas falta; + = valor maior). null = está tudo certo (pode tocar em Done).
+     * Valor ilegível numa coluna conta como "falta 1" pra rodinha se ajeitar e ser lida de novo.
+     */
+    fun wheelNext(r: WRead, target: ZonedDateTime, noWrap: Set<Int> = emptySet()): Pair<Int, Int>? {
+        val wantH = if (r.twelve) (if (target.hour % 12 == 0) 12 else target.hour % 12) else target.hour
+        val wantPm = target.hour >= 12
+        val d = r.date?.let { ChronoUnit.DAYS.between(it, target.toLocalDate()).toInt() }
+        if (d == null) return 0 to 1
+        if (d != 0) return 0 to d
+        // AM/PM antes da hora: em algumas rodinhas a hora "12" depende dele
+        if (r.twelve) { if (r.pm == null) return 3 to 1; if (r.pm != wantPm) return 3 to (if (wantPm) 1 else -1) }
+        val h = r.hour ?: return 1 to 1
+        if (h != wantH) {
+            // rodinha de 1 a 12 costuma dar a volta: vai pelo lado mais curto
+            var dh = wantH - h
+            // (se a rodinha não andou quando tentou dar a volta, [noWrap] avisa: aí vai pelo caminho direto)
+            if (r.twelve && 1 !in noWrap) { if (dh > 6) dh -= 12; if (dh < -6) dh += 12 }
+            return 1 to dh
+        }
+        val m = r.minute ?: return 2 to 1
+        if (m != target.minute) return 2 to (target.minute - m)
+        return null
+    }
+
+    /** Linha do post que mostra o agendamento ("Today 7 PM", "Nov 22 6:47 PM", "Hoje 18:47"): devolve a data/hora ou null. */
+    fun parsePostingRow(text: String, now: ZonedDateTime): ZonedDateTime? {
+        val date = wheelDate(text, now.toLocalDate()) ?: findDate(listOf(text), now.toLocalDate()) ?: return null
+        val time = findTime(listOf(text)) ?: Regex("(?<![\\d:])(\\d{1,2})\\s*([ap])\\.?\\s?m\\.?", RegexOption.IGNORE_CASE).find(text)?.let { m ->
+            var h = m.groupValues[1].toInt(); val ap = m.groupValues[2].lowercase()
+            if (ap == "p" && h < 12) h += 12; if (ap == "a" && h == 12) h = 0
+            if (h in 0..23) LocalTime.of(h, 0) else null
+        } ?: return null
+        return ZonedDateTime.of(date, time, now.zone)
+    }
 }

@@ -146,6 +146,8 @@ object SelfTest {
             try { Growth.report(c).let { r -> appendLine("Crescimento: " + r.lines.joinToString(" | ")); if (r.recs.isNotEmpty()) appendLine("Falta: " + r.recs.joinToString(" | ")) } } catch (e: Exception) { }
             try { appendLine("Threads → Refs: " + ThreadsRefs.diag(c)) } catch (e: Exception) { }
             try { appendLine("Agenda: " + Agenda.diag(c) + " · detectado no Threads: " + (Store.prefs(c).getString("ag_sw_last", "") ?: "") + " · tela lida: " + (Store.prefs(c).getString("ag_sw_seen", "") ?: "").take(160)) } catch (e: Exception) { }
+            Store.prefs(c).getString("auto_result", null)?.let { appendLine("Piloto automático (último lote): $it") }
+            try { Batch.load(c).takeIf { it.isNotEmpty() }?.let { l -> appendLine("Lote: " + l.joinToString(" · ") { o -> AgendaCore.fmt(o.optLong("at")).substringAfter(" ") + " " + when { o.optBoolean("verified") -> "✓conferido"; o.optBoolean("done") -> "✓"; o.optLong("sent") > 0 -> "enviado?"; o.optInt("fails") > 0 -> "✗" + o.optInt("fails") + " " + o.optString("err").take(40); else -> "falta" } }) } } catch (e: Exception) { }
             Store.prefs(c).getString("agendar_menus", null)?.takeIf { it.isNotBlank() }?.let { appendLine("Menus ⋯ do post:\n$it") }
             Store.prefs(c).getString("agendar_tela", null)?.takeIf { it.isNotBlank() }?.let { appendLine("Tela de agendar do Threads:\n" + it.take(4000)) }
             Store.prefs(c).getString("agendar_log", null)?.takeIf { it.isNotBlank() }?.let { appendLine("Agendar (passos):\n" + it.takeLast(2500)) }

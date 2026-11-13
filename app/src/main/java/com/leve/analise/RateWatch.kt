@@ -647,7 +647,7 @@ class ScreenReader : AccessibilityService() {
 
     /** [fromShare]: o post já abriu com a foto (Compartilhar); senão começa do "novo post". */
     fun armCompose(label: String, cap: String, fromShare: Boolean = true, target: Long = 0L) {
-        cPicked = false; cTarget = target; cWheel.clear()
+        cPicked = false; cTarget = target; cWheel.clear(); wLast = null; wStuck.clear(); wGesture.clear(); wNoWrap.clear(); cVerifyTries = 0
         composeUntil = System.currentTimeMillis() + 180_000L; cStep = if (fromShare) 0 else 1; cCap = cap; cLabel = label; cTries = 0; cTapAt = 0
         h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, 1800)
         // passou do tempo e não terminou: tira o aviso (não fica preso na tela)
@@ -658,10 +658,14 @@ class ScreenReader : AccessibilityService() {
     private fun cFail(msg: String, all: List<AccessibilityNodeInfo>) {
         composeUntil = 0
         if (autoRunning) {
-            autoRunning = false; saveTree(all, "parou: $msg")
-            clog("✗ parou: $msg", all)
-            show("🤖 Parei no post de $cLabel: $msg\nOs $autoDone anteriores ficaram agendados. Toque em 'Agendar tudo' de novo pra continuar.", 0xEEB45309.toInt())
-            h.postDelayed({ if (!running && !forcing) clearOverlay() }, 15000); return
+            saveTree(all, "falhou: $msg")
+            clog("✗ falhou: $msg", all)
+            // anota a falha no item; descarta o post aberto (sem salvar rascunho) e segue: tenta de novo 1x, depois pula pro próximo
+            val id = autoItemId
+            val l = Batch.load(this); l.firstOrNull { it.optString("id") == id && !it.optBoolean("done") }?.let { it.put("fails", it.optInt("fails") + 1).put("err", "passo $cStep: $msg"); Batch.save(this, l) }
+            show("🤖 Falhou ($msg). Descartando e tentando de novo…", 0xEEB45309.toInt())
+            abortCompose { h.postDelayed({ nextAuto() }, 2500) }
+            return
         }
         dump(all.mapNotNull { (it.text ?: it.contentDescription)?.toString() })
         show("🗓 $msg\nFaça esse passo na mão: a foto é a mais recente da galeria e a legenda já está copiada. Depois ⋯ › Agendar › $cLabel", 0xEEB45309.toInt())
@@ -815,31 +819,141 @@ class ScreenReader : AccessibilityService() {
                 show("🗓 Procurando o Agendar…"); if (tap(next)) cTapAt = now; cTries++; again()
             }
             6 -> pickerStep(all, now) { again() }
-            7 -> { // depois de confirmar a data: o botão do post vira "Agendar" (toca) ou o editor já fechou (agendou)
+            7 -> { // depois do Done: confere a data/hora que o post mostra e toca no Schedule final
                 if (!editor || all.none { it.isEditable }) { autoOk(); return }
+                val nowZ = java.time.ZonedDateTime.now()
+                val rowNode = all.firstOrNull { n -> AgendaCore.parsePostingRow(((n.text ?: n.contentDescription) ?: "").toString(), nowZ) != null }
+                val shown = rowNode?.let { AgendaCore.parsePostingRow(((it.text ?: it.contentDescription) ?: "").toString(), nowZ) }
+                if (shown != null && Math.abs(shown.toInstant().toEpochMilli() - cTarget) >= 60_000L) {
+                    clog("o post mostra ${AgendaCore.fmt(shown.toInstant().toEpochMilli())}, alvo ${AgendaCore.fmt(cTarget)}: abrindo de novo", all)
+                    if (cVerifyTries++ >= 2) { cFail("O post ficou com outra data/hora.", all); return }
+                    if (tap(rowNode)) { cStep = 6; cTries = 0; cTapAt = now; wLast = null }
+                    again(); return
+                }
                 val fin = all.filter { val l = lab(it); SCHED_FINAL.matches(l) && !POSTBTN.matches(l) }.maxByOrNull { rect(it).left }
-                if (fin != null && cTries < 3) { clog("toquei no Agendar final: " + lab(fin), all); if (tap(fin)) cTapAt = now; cTries++; again(); return }
+                if (fin != null && cTries < 3) {
+                    // anota ANTES de tocar: se cair aqui, o post não é agendado de novo (confere na lista no fim)
+                    if (autoRunning) { val l = Batch.load(this); l.firstOrNull { it.optString("id") == autoItemId && !it.optBoolean("done") }?.let { it.put("sent", System.currentTimeMillis()); Batch.save(this, l) } }
+                    clog("toquei no Schedule final (post mostra ${shown?.let { AgendaCore.fmt(it.toInstant().toEpochMilli()) } ?: "?"})", all)
+                    if (tap(fin)) cTapAt = now; cTries++; again(); return
+                }
                 if (cTries >= 8) { saveTree(all, "não fechou"); cFail("Escolhi a data, mas o post não foi agendado.", all); return }
                 cTries++; again()
-            }
-        }
+            }        }
     }
 
     // ================= 🤖 piloto automático do lote: agenda TODOS no Agendar do próprio Threads, um atrás do outro =================
     private val SCHED_FINAL = Regex("^(agendar|schedule|programar|agendar post|schedule post)$")
     private val OKBTN = Regex("^(ok|done|concluir|concluído|concluido|set|definir|salvar|save|confirmar|confirm|agendar|schedule|programar)$")
-    @Volatile var autoRunning = false; private var autoDone = 0; private var autoItemAt = 0L
+    @Volatile var autoRunning = false; private var autoDone = 0; private var autoItemAt = 0L; private var autoItemId = ""; private var cVerifyTries = 0
+
+    /** Fim do lote: confere na lista de agendados do Threads e mostra o resultado. */
+    private fun finishAuto() {
+        val l = Batch.load(this)
+        val sent = l.filter { it.optBoolean("done") || it.optLong("sent") > 0 }
+        if (sent.isEmpty()) { autoRunning = false; val f = l.count { it.optInt("fails") >= 2 }; show("🤖 Nada agendado" + (if (f > 0) ": $f post(s) falharam 2x (veja o diagnóstico)" else ""), 0xEEB45309.toInt()); h.postDelayed({ if (!running && !forcing) clearOverlay() }, 12000); return }
+        show("🤖 Conferindo na lista de agendados do Threads…")
+        verifyStart()
+    }
+
+    // ================= ✅ conferência: abre os agendados do Threads e procura cada legenda =================
+    private var vStep = 0; private var vTries = 0; private var vUntil = 0L; private val vSeen = LinkedHashSet<String>()
+    private fun verifyStart() {
+        vStep = 1; vTries = 0; vSeen.clear(); vUntil = System.currentTimeMillis() + 90_000L
+        try { startActivity(packageManager.getLaunchIntentForPackage(PostQueue.THREADS)!!.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) { }
+        h.postDelayed({ verifyStep() }, 2500)
+    }
+    private fun verifyStep() {
+        if (System.currentTimeMillis() > vUntil || vStep == 0) { verifyEnd(); return }
+        val root = rootInActiveWindow
+        if (root == null || root.packageName?.toString() != ThreadsNotif.THREADS) { h.postDelayed({ verifyStep() }, 1500); return }
+        val all = nodes(root).filter { it.isVisibleToUser }
+        fun lab(n: AccessibilityNodeInfo) = norm(((n.contentDescription ?: n.text) ?: "").toString())
+        val dm = resources.displayMetrics
+        when (vStep) {
+            1 -> { // abre um post novo (o botão de rascunhos/agendados fica nele)
+                val drafts = all.firstOrNull { Regex("saved drafts|rascunhos|drafts").containsMatchIn(lab(it)) && clickable(it) != null }
+                if (drafts != null) { clog("conferência: abri rascunhos", all); click(drafts) || tapCenter(drafts); vStep = 2; vTries = 0; h.postDelayed({ verifyStep() }, 2000); return }
+                val plus = all.filter { val r = rect(it); r.top > dm.heightPixels * 0.82 && Math.abs(r.centerX() - dm.widthPixels / 2) < dm.widthPixels * 0.12 && (it.isClickable || CREATE.matches(lab(it))) }.maxByOrNull { if (CREATE.matches(lab(it))) 1 else 0 }
+                if (plus != null && vTries < 4) { tapCenter(plus) || click(plus) }
+                if (++vTries > 8) { saveTree(all, "conferência: não abri os rascunhos"); verifyEnd(); return }
+                h.postDelayed({ verifyStep() }, 2000)
+            }
+            2 -> { // aba "Scheduled/Agendados" e lê tudo (rolando)
+                val tab = all.firstOrNull { Regex("^(scheduled|agendad[oa]s?|programad[oa]s?)$").matches(lab(it)) }
+                if (tab != null && vTries == 0) { click(tab) || tapCenter(tab); vTries++; h.postDelayed({ verifyStep() }, 1800); return }
+                all.mapNotNull { ((it.text ?: it.contentDescription) ?: "").toString().trim().takeIf { s -> s.length >= 3 } }.forEach { vSeen += it }
+                if (vTries == 1 || vTries == 2) saveTree(all, "lista de agendados")
+                val list = all.filter { it.isScrollable }.maxByOrNull { rect(it).height() }
+                if (list != null && vTries < 6 && list.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) { vTries++; h.postDelayed({ verifyStep() }, 1300); return }
+                verifyEnd()
+            }
+        }
+    }
+    private fun verifyEnd() {
+        val seen = vSeen.map { Agenda.ck(it) }
+        vStep = 0
+        val l = Batch.load(this); var ok = 0; var miss = 0
+        l.filter { it.optBoolean("done") || it.optLong("sent") > 0 }.forEach { o ->
+            val k = Agenda.ck(o.optString("cap")).take(24)
+            val found = k.isNotEmpty() && seen.any { it.contains(k) || (it.length >= 12 && k.startsWith(it.take(24))) }
+            if (found) { o.put("verified", true); o.put("done", true); ok++ } else if (seen.isNotEmpty()) { o.put("verified", false); miss++ }
+        }
+        Batch.save(this, l)
+        // os que foram enviados e apareceram na lista entram na Agenda (se ainda não entraram)
+        l.filter { it.optBoolean("verified") }.forEach { o -> Thread { try { Agenda.addDetected(this, o.optLong("at"), o.optString("cap")) } catch (e: Exception) { } }.start() }
+        val failed = l.count { it.optInt("fails") >= 2 && !it.optBoolean("done") }
+        val msg = when {
+            seen.isEmpty() -> "🤖 ✓ $autoDone post(s) agendados (não consegui abrir a lista de agendados pra conferir)"
+            miss == 0 -> "🤖 ✓ $ok post(s) agendados e conferidos na lista do Threads"
+            else -> "🤖 $ok conferido(s) na lista do Threads · ⚠ $miss não apareceram"
+        } + (if (failed > 0) " · ✗ $failed falharam" else "")
+        clog(msg, emptyList())
+        Store.prefs(this).edit().putString("auto_result", android.text.format.DateFormat.format("dd/MM HH:mm", System.currentTimeMillis()).toString() + " " + msg).apply()
+        autoRunning = false
+        show(msg, if (miss == 0 && failed == 0) 0xEE15803D.toInt() else 0xEEB45309.toInt())
+        // sai da lista e do post vazio, sem salvar nada
+        abortCompose { }
+        h.postDelayed({ if (!running && !forcing) clearOverlay() }, 15000)
+    }
+
+    /** Fecha o post aberto sem salvar rascunho (Cancel/voltar → "Não salvar"). */
+    private fun abortCompose(then: () -> Unit) {
+        composeUntil = 0
+        var n = 0
+        fun stepOut() {
+            val root = rootInActiveWindow
+            if (root == null || root.packageName?.toString() != ThreadsNotif.THREADS || n++ > 5) { then(); return }
+            val all = nodes(root).filter { it.isVisibleToUser }
+            fun lab(x: AccessibilityNodeInfo) = norm(((x.contentDescription ?: x.text) ?: "").toString())
+            val dont = all.firstOrNull { Regex("^(don.t save|não salvar|nao salvar|discard|descartar)$").matches(lab(it)) }
+            when {
+                dont != null -> { click(dont) || tapCenter(dont); h.postDelayed({ stepOut() }, 1200) }
+                all.any { it.isEditable } || all.any { Regex("drafts|rascunhos|scheduled|agendad").containsMatchIn(lab(it)) } -> { performGlobalAction(GLOBAL_ACTION_BACK); h.postDelayed({ stepOut() }, 1200) }
+                else -> then()
+            }
+        }
+        stepOut()
+    }
 
     /** Um toque: agenda no Threads todos os posts do lote que faltam. */
-    fun runBatchAuto() { autoRunning = true; autoDone = 0; Store.prefs(this).edit().putString("agendar_log", "").apply(); nextAuto() }
+    fun runBatchAuto() {
+        autoRunning = true; autoDone = 0; Store.prefs(this).edit().putString("agendar_log", "").apply()
+        // rodada nova: quem falhou antes ganha outra chance
+        val l = Batch.load(this); l.forEach { it.remove("fails"); it.remove("err") }; Batch.save(this, l)
+        nextAuto()
+    }
     fun stopBatchAuto(why: String) { autoRunning = false; composeUntil = 0; show("🤖 $why", 0xEEB45309.toInt()); h.postDelayed({ if (!running && !forcing) clearOverlay() }, 10000) }
 
     private fun nextAuto() {
         if (!autoRunning) return
         Batch.refreshTimes(this)
-        val l = Batch.load(this); val o = l.firstOrNull { !it.optBoolean("done") }
-        if (o == null) { autoRunning = false; show("🤖 ✓ Pronto: $autoDone post(s) agendados no Threads", 0xEE15803D.toInt()); h.postDelayed({ if (!running && !forcing) clearOverlay() }, 8000); return }
-        val at = o.optLong("at"); val left = l.count { !it.optBoolean("done") }
+        val l = Batch.load(this)
+        fun pending(it: org.json.JSONObject) = !it.optBoolean("done") && it.optLong("sent") == 0L && it.optInt("fails") < 2
+        val o = l.firstOrNull { pending(it) }
+        if (o == null) { finishAuto(); return }
+        val at = o.optLong("at"); val left = l.count { pending(it) }
+        autoItemId = o.optString("id")
         try {
             ClipSync.copy(this, o.optString("cap"))
             PostQueue.putInGallery(this, o.optString("id"), force = true)
@@ -855,6 +969,7 @@ class ScreenReader : AccessibilityService() {
         composeUntil = 0
         val at = cTarget; val cap = cCap
         Thread { try { Agenda.addDetected(this, at, cap) } catch (e: Exception) { ErrLog.log(this, "agenda", e) } }.start()
+        if (autoRunning) { val l = Batch.load(this); l.firstOrNull { it.optString("id") == autoItemId }?.let { it.put("done", true).put("at", at); Batch.save(this, l) } }
         clog("✓ agendado " + AgendaCore.fmt(at), emptyList())
         autoDone++
         if (autoRunning) { show("🤖 ✓ Agendado " + AgendaCore.fmt(at)); h.postDelayed({ nextAuto() }, 3500) }
@@ -877,74 +992,55 @@ class ScreenReader : AccessibilityService() {
      * Devolve false se a tela não for essa (aí tenta os outros tipos de seletor).
      */
     private fun wheelSheet(all: List<AccessibilityNodeInfo>, now: Long, again: () -> Unit): Boolean {
-        fun t(n: AccessibilityNodeInfo) = (n.text ?: "").toString().trim()
+        fun t(n: AccessibilityNodeInfo) = (n.text ?: n.contentDescription ?: "").toString().trim()
         val title = all.firstOrNull { Regex("^(schedule post|schedule thread|agendar post|agendar thread|agendar publicação|agendar publicacao|programar publicação)$", RegexOption.IGNORE_CASE).matches(t(it)) && !it.isClickable } ?: return false
-        val done = all.filter { Regex("^(done|concluir|concluído|concluido|ok|pronto)$", RegexOption.IGNORE_CASE).matches(t(it).ifEmpty { (it.contentDescription ?: "").toString().trim() }) }.maxByOrNull { rect(it).top } ?: return false
+        val done = all.filter { Regex("^(done|concluir|concluído|concluido|ok|pronto)$", RegexOption.IGNORE_CASE).matches(t(it)) }.maxByOrNull { rect(it).top } ?: return false
         val top = rect(title).bottom; val bottom = rect(done).top
         val z = java.time.Instant.ofEpochMilli(cTarget).atZone(java.time.ZoneId.systemDefault())
-        val tDate = z.toLocalDate(); val today = java.time.LocalDate.now()
-        // itens das rodinhas: textos entre o título e o Done, agrupados em colunas pela posição
-        val AMPM0 = Regex("^(am|pm|a\\.m\\.|p\\.m\\.|a\\. m\\.|p\\. m\\.)$", RegexOption.IGNORE_CASE)
-        fun wheelLike(x: String) = Regex("^\\d{1,2}$").matches(x) || AMPM0.matches(x) || Regex("(?i)^(today|hoje|tomorrow|amanhã|amanha)").containsMatchIn(x) ||
-            (x.length <= 24 && AgendaCore.findDate(listOf(x), today) != null && AgendaCore.findTime(listOf(x)) == null)
-        val items = all.filter { n -> val r = rect(n); wheelLike(t(n)) && r.centerY() in top..bottom && n !== title }.map { it to rect(it) }
-        val cols = ArrayList<MutableList<Pair<AccessibilityNodeInfo, android.graphics.Rect>>>()
-        for (it in items.sortedBy { it.second.centerX() }) {
-            val c = cols.firstOrNull { col -> Math.abs(col.first().second.centerX() - it.second.centerX()) < dpx(45) }
-            if (c != null) c += it else cols += mutableListOf(it)
-        }
-        if (cols.size < 2) return false
-        val AMPM = Regex("^(am|pm|a\\.m\\.|p\\.m\\.|a\\. m\\.|p\\. m\\.)$", RegexOption.IGNORE_CASE)
-        fun dateOf(s: String): java.time.LocalDate? = when {
-            Regex("(?i)^(today|hoje)").containsMatchIn(s) -> today
-            Regex("(?i)^(tomorrow|amanhã|amanha)").containsMatchIn(s) -> today.plusDays(1)
-            else -> AgendaCore.findDate(listOf(s), today)
-        }
-        val dateCol = cols.firstOrNull { c -> c.count { dateOf(t(it.first)) != null } >= maxOf(1, c.size / 2) }
-        val ampmCol = cols.firstOrNull { c -> c.all { AMPM.matches(t(it.first)) } }
-        val numCols = cols.filter { c -> c !== dateCol && c !== ampmCol && c.all { Regex("^\\d{1,2}$").matches(t(it.first)) } }
-        val hourCol = numCols.getOrNull(0); val minCol = numCols.getOrNull(1)
-        if (dateCol == null || hourCol == null || minCol == null) { if (cTries % 6 == 0) saveTree(all, "rodinhas: não reconheci as colunas (${cols.size})"); return false }
-        // altura de uma linha e a faixa do meio (onde fica o escolhido)
-        val ys = (dateCol.map { it.second.centerY() } + hourCol.map { it.second.centerY() }).distinct().sorted()
-        val rowH = ys.zipWithNext { a, b -> b - a }.filter { it > dpx(20) }.minOrNull() ?: dpx(36)
-        val scroll = all.firstOrNull { it.isScrollable && rect(it).centerY() in top..bottom }
-        val band = scroll?.let { rect(it).centerY() } ?: ((top + bottom) / 2)
-        fun sel(c: List<Pair<AccessibilityNodeInfo, android.graphics.Rect>>) = c.minByOrNull { Math.abs(it.second.centerY() - band) }?.takeIf { Math.abs(it.second.centerY() - band) < rowH * 0.6 }
-        val twelve = ampmCol != null
-        val wantH = if (twelve) (if (z.hour % 12 == 0) 12 else z.hour % 12) else z.hour
-        val curD = sel(dateCol)?.let { dateOf(t(it.first)) }
-        val curH = sel(hourCol)?.let { t(it.first).toIntOrNull() }
-        val curM = sel(minCol)?.let { t(it.first).toIntOrNull() }
-        val curPm = ampmCol?.let { sel(it) }?.let { t(it.first).lowercase().startsWith("p") }
-        val wantPm = z.hour >= 12
-        val sig = "rodinhas: dia $curD hora $curH min $curM ${if (curPm == null) "" else if (curPm) "PM" else "AM"} · alvo $tDate $wantH:%02d ${if (twelve) (if (wantPm) "PM" else "AM") else ""}".format(z.minute)
-        clog(sig, emptyList())
-        // quanto falta em cada rodinha (positivo = valor maior = arrastar pra cima)
-        val moves = listOf(
-            dateCol to (curD?.let { java.time.temporal.ChronoUnit.DAYS.between(it, tDate).toInt() }),
-            hourCol to (curH?.let { wantH - it }),
-            minCol to (curM?.let { z.minute - it }),
-        ) + (if (ampmCol != null) listOf(ampmCol to (curPm?.let { if (wantPm == it) 0 else if (wantPm) 1 else -1 })) else emptyList())
-        val todo = moves.firstOrNull { it.second == null || it.second != 0 }
-        if (todo == null) {
-            // tudo certo: Done
-            clog("rodinhas certas → Done (" + AgendaCore.fmt(cTarget) + ")", emptyList())
+        val today = java.time.LocalDate.now()
+        val items = all.filter { n -> rect(n).centerY() in top..bottom && n !== title }.map { AgendaCore.WItem(t(it), rect(it).centerX(), rect(it).centerY()) }
+        val wheels = all.filter { it.isScrollable && rect(it).centerY() in top..bottom }
+        // faixa do meio: centro das rodinhas que rolam (todas têm o escolhido no meio); sem elas, o meio entre o título e o Done
+        val band = wheels.map { rect(it).centerY() }.sorted().let { if (it.isEmpty()) (top + bottom) / 2 else it[it.size / 2] }
+        val r = AgendaCore.wheelRead(items, band, dpx(45), today)
+        if (r == null) { if (cTries % 6 == 0) saveTree(all, "rodinhas: não reconheci as colunas"); return false }
+        val sig = r.toString()
+        // mandou mexer e não mudou nada? aquela rodinha chegou no fim (ou não dá a volta): anota pra ir pelo outro lado / outro jeito
+        wLast?.let { (col, before, how) -> if (before == sig) { wStuck[col] = (wStuck[col] ?: 0) + 1; if (how == "acao") wGesture += col; if (col == 1) wNoWrap += 1 } else wStuck.remove(col) }
+        val next = AgendaCore.wheelNext(r, z, wNoWrap)
+        clog("rodinhas: $sig · alvo " + AgendaCore.fmt(cTarget) + (next?.let { " → coluna ${it.first} ${if (it.second > 0) "+" else ""}${it.second}" } ?: " → certo"), emptyList())
+        if (next == null) {
+            wLast = null
+            clog("rodinhas certas → Done", emptyList())
             if (click(done) || tapCenter(done)) { cStep = 7; cTries = 0; cTapAt = now }
             again(); return true
         }
-        val (col, diff) = todo
-        val x = col.map { it.second.centerX() }.average().toFloat()
-        // valor escolhido ilegível (faixa vazia): dá um passo pra ajeitar
-        val k = (diff ?: 1).let { if (it > 0) minOf(it, 4) else maxOf(it, -4) }
-        val dy = -k * rowH.toFloat() // pra cima = valor maior
-        val dur = (Math.abs(k) * 650L).coerceAtLeast(500L)
-        val path = android.graphics.Path().apply { moveTo(x, band.toFloat()); lineTo(x, band + dy) }
-        try { dispatchGesture(android.accessibilityservice.GestureDescription.Builder().addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, dur)).build(), null, null) } catch (e: Exception) { }
-        cTapAt = now + dur + 400
-        if (cTries % 10 == 9) saveTree(all, sig)
+        val (col, diff) = next
+        if ((wStuck[col] ?: 0) >= 4) { saveTree(all, "rodinha $col não anda: $sig"); cFail("A rodinha ${listOf("do dia", "da hora", "do minuto", "AM/PM")[col]} não anda.", all); return true }
+        val dir = if (diff > 0) 1 else -1
+        val x = r.colX.getOrNull(col) ?: return false
+        val wheel = wheels.filter { rect(it).left <= x && rect(it).right >= x }.minByOrNull { rect(it).width() }
+        // 1º jeito: o comando "rolar" da acessibilidade (no seu celular ele anda exatamente 1 linha); se não andar, arrasta com o dedo
+        val n = minOf(Math.abs(diff), if (col == 2 || col == 0) 3 else 1) // longe: até 3 linhas de uma vez (relê e corrige)
+        var how = "gesto"
+        if (wheel != null && col !in wGesture) {
+            var ok = true
+            repeat(n) { if (ok) ok = wheel.performAction(if (dir > 0) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) }
+            if (ok) how = "acao"
+        }
+        if (how == "gesto") {
+            // arrasto lento, de linha em linha (pra cima = valor maior), começando na faixa do meio da coluna
+            val dy = -dir * n * r.rowH.toFloat(); val dur = (n * 700L).coerceAtLeast(600L)
+            val path = android.graphics.Path().apply { moveTo(x.toFloat(), band.toFloat()); lineTo(x.toFloat(), band + dy) }
+            try { dispatchGesture(android.accessibilityservice.GestureDescription.Builder().addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, dur)).build(), null, null) } catch (e: Exception) { }
+            cTapAt = now + dur
+        } else cTapAt = now - 600 // o comando é rápido: relê logo
+        wLast = Triple(col, sig, how)
+        if (cTries % 15 == 14) saveTree(all, "rodinhas: $sig")
         again(); return true
     }
+    private var wLast: Triple<Int, String, String>? = null
+    private val wStuck = HashMap<Int, Int>(); private val wGesture = HashSet<Int>(); private val wNoWrap = HashSet<Int>()
 
     private fun textsOf(all: List<AccessibilityNodeInfo>) = all.mapNotNull { (it.text ?: it.contentDescription)?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() && s.length < 80 } }
 
