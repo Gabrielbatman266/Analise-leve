@@ -254,4 +254,43 @@ class AgendaCoreTest {
         assertEquals(ZonedDateTime.of(2026, 11, 14, 20, 15, 0, 0, ZoneId.of(sp)), AgendaCore.parsePostingRow("sáb 20:15", now))
         assertEquals(null, AgendaCore.parsePostingRow("Edit 9 PM", now))
     }
+
+    // ---------------------------------------------------------------- aprendizado por recompensa
+    /**
+     * Rodinha "escorregadia": mandar muitas linhas de uma vez faz ela andar a mais (passa do ponto) — o que achamos que
+     * fazia o 3º post "voltar a data". O aprendizado tem que descobrir sozinho quantas linhas mexer por vez.
+     */
+    @Test fun recompensaAprendeANaoPassarDoPonto() {
+        val rnd = java.util.Random(3)
+        val b = AgendaCore.Bandit(intArrayOf(1, 2, 4, 8, 12))
+        fun slide(k: Int) = if (k >= 4) k + k / 3 else k // 4 → 5, 8 → 10, 12 → 16 (escorrega)
+        var totalSteps = 0; var lastSteps = 0
+        repeat(300) { ep ->
+            var d = 1 + rnd.nextInt(30); var steps = 0
+            while (d != 0 && steps < 80) {
+                val key = AgendaCore.wheelKey(0, d)
+                val idx = b.choose(key, { it <= Math.abs(d) }, rnd)
+                val k = b.arms[idx]; val moved = slide(k)
+                val after = if (d > 0) d - moved else d + moved
+                b.update(key, idx, AgendaCore.wheelReward(d, after, k))
+                d = after; steps++
+            }
+            assertEquals("episódio $ep não chegou", 0, d)
+            if (ep >= 250) lastSteps += steps
+            totalSteps += steps
+        }
+        // longe (9+): aprendeu que 8/12 escorregam e passam; perto (1): mexe 1
+        assertEquals(1, b.best(AgendaCore.wheelKey(0, 1)))
+        assertTrue("passos médios no fim: ${lastSteps / 50.0}", lastSteps / 50.0 < 8.0)
+        // salva e carrega igual
+        val b2 = AgendaCore.Bandit.load(b.arms, b.save())
+        assertEquals(b.best(AgendaCore.wheelKey(0, 20)), b2.best(AgendaCore.wheelKey(0, 20)))
+    }
+
+    @Test fun recompensaDensa() {
+        assertTrue(AgendaCore.wheelReward(10, 6, 4) > 0.9)      // aproximou certinho
+        assertTrue(AgendaCore.wheelReward(3, -2, 4) < -1.5)     // passou do ponto: castigo
+        assertTrue(AgendaCore.wheelReward(5, 5, 2) < 0)         // não mexeu
+        assertTrue(AgendaCore.wheelReward(4, 6, 2) < 0)         // voltou
+    }
 }

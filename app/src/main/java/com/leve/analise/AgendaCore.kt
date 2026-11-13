@@ -284,4 +284,66 @@ object AgendaCore {
         } ?: return null
         return ZonedDateTime.of(date, time, now.zone)
     }
+
+    // ---------------------------------------------------------------- 🎯 aprendizado por recompensa (rodinhas e Done)
+    /**
+     * "Bandido" com recompensa: pra cada situação (coluna + quão longe está) guarda a nota média de cada jeito de mexer.
+     * Escolhe o de melhor nota (às vezes testa outro), e a nota sobe quando o passo aproxima do alvo e desce quando passa do ponto/volta.
+     */
+    class Bandit(val arms: IntArray, private val q: HashMap<String, DoubleArray> = HashMap(), private val n: HashMap<String, IntArray> = HashMap()) {
+        private fun qa(k: String) = q.getOrPut(k) { DoubleArray(arms.size) { 0.6 } } // começa otimista: testa todos
+        private fun na(k: String) = n.getOrPut(k) { IntArray(arms.size) }
+        /** Índice do braço escolhido entre os permitidos. */
+        fun choose(k: String, allowed: (Int) -> Boolean, rnd: java.util.Random, explore: Double = 0.08): Int {
+            val ok = arms.indices.filter { allowed(arms[it]) }.ifEmpty { listOf(0) }
+            if (rnd.nextDouble() < explore) return ok[rnd.nextInt(ok.size)]
+            val qq = qa(k); return ok.maxByOrNull { qq[it] }!!
+        }
+        fun update(k: String, idx: Int, reward: Double) {
+            val qq = qa(k); val nn = na(k); nn[idx]++
+            val lr = maxOf(0.15, 1.0 / nn[idx]); qq[idx] += lr * (reward - qq[idx])
+        }
+        fun value(k: String, idx: Int) = qa(k)[idx]
+        fun best(k: String) = arms[qa(k).indices.maxByOrNull { qa(k)[it] }!!]
+        /** Texto pra guardar: chave=notas;contagens|... */
+        fun save(): String = q.keys.joinToString("|") { k -> k + "=" + q[k]!!.joinToString(",") { "%.3f".format(java.util.Locale.US, it) } + ";" + na(k).joinToString(",") }
+        companion object {
+            fun load(arms: IntArray, txt: String?): Bandit {
+                val b = Bandit(arms)
+                txt?.split("|")?.forEach { e ->
+                    val k = e.substringBefore("="); val parts = e.substringAfter("=").split(";")
+                    val qv = parts.getOrNull(0)?.split(",")?.mapNotNull { it.toDoubleOrNull() }; val nv = parts.getOrNull(1)?.split(",")?.mapNotNull { it.toIntOrNull() }
+                    if (k.isNotEmpty() && qv != null && qv.size == arms.size) { b.q[k] = qv.toDoubleArray(); if (nv != null && nv.size == arms.size) b.n[k] = nv.toIntArray() }
+                }
+                return b
+            }
+        }
+    }
+
+    /** Situação da rodinha: coluna + distância (1 · 2–3 · 4–8 · 9+). */
+    fun wheelKey(col: Int, dist: Int) = "c$col:" + when (Math.abs(dist)) { 0, 1 -> "1"; 2, 3 -> "2-3"; in 4..8 -> "4-8"; else -> "9+" }
+
+    /**
+     * Recompensa densa de um passo: quanto aproximou do alvo (por linha mexida), castigo forte por passar do ponto ou voltar,
+     * e castigo por não mexer nada.
+     */
+    fun wheelReward(before: Int, after: Int, rows: Int): Double {
+        if (before == after) return -1.0
+        val overshoot = before != 0 && after != 0 && (before > 0) != (after > 0)
+        val progress = Math.abs(before) - Math.abs(after)
+        return (progress.toDouble() / maxOf(1, rows)) - (if (overshoot) 2.0 + Math.abs(after) * 0.5 else 0.0) - (if (progress < 0) 1.0 else 0.0)
+    }
+
+    /** Quanto falta numa coluna específica (mesmas regras do [wheelNext]); null = ilegível. */
+    fun wheelDiff(r: WRead, target: ZonedDateTime, col: Int, noWrap: Set<Int> = emptySet()): Int? = when (col) {
+        0 -> r.date?.let { ChronoUnit.DAYS.between(it, target.toLocalDate()).toInt() }
+        1 -> r.hour?.let { h ->
+            val wantH = if (r.twelve) (if (target.hour % 12 == 0) 12 else target.hour % 12) else target.hour
+            var dh = if (r.twelve) (wantH % 12) - (h % 12) else wantH - h
+            if (r.twelve && 1 !in noWrap) { if (dh > 6) dh -= 12; if (dh < -6) dh += 12 }
+            dh
+        }
+        2 -> r.minute?.let { target.minute - it }
+        else -> r.pm?.let { if (it == target.hour >= 12) 0 else if (target.hour >= 12) 1 else -1 }
+    }
 }

@@ -647,7 +647,7 @@ class ScreenReader : AccessibilityService() {
 
     /** [fromShare]: o post já abriu com a foto (Compartilhar); senão começa do "novo post". */
     fun armCompose(label: String, cap: String, fromShare: Boolean = true, target: Long = 0L) {
-        cPicked = false; cTarget = target; cWheel.clear(); wLast = null; wOkSig = ""; cDoneProblems = 0; wStuck.clear(); wGesture.clear(); wNoWrap.clear(); cVerifyTries = 0
+        cPicked = false; cTarget = target; cWheel.clear(); wLast = null; wOkSig = ""; cDoneProblems = 0; wPend = null; cDoneArm = -1; cDoneJudge = -1; cDoneSeen = ""; cVision = false; cGray = 0; wScore = 0.0; cPaused = false; wStuck.clear(); wGesture.clear(); wNoWrap.clear(); cVerifyTries = 0
         composeUntil = System.currentTimeMillis() + 180_000L; cStep = if (fromShare) 0 else 1; cCap = cap; cLabel = label; cTries = 0; cTapAt = 0
         h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, 1800)
         // passou do tempo e não terminou: tira o aviso (não fica preso na tela)
@@ -691,6 +691,7 @@ class ScreenReader : AccessibilityService() {
 
     private fun composeStep() {
         val now = System.currentTimeMillis(); if (now - cLast < 600) return; cLast = now
+        if (cPaused) { composeUntil = maxOf(composeUntil, now + 120_000L); h.postDelayed({ composeStep() }, 1000); return }
         val wait = if (cStep == 6) AgendarTreino.stepMs(this) else 1500L // nas rodinhas o comando é instantâneo: relê logo
         if (now - cTapAt < wait) { h.postDelayed({ composeStep() }, wait + 50); return } // espera a tela reagir ao último toque
         val root = rootInActiveWindow
@@ -848,6 +849,7 @@ class ScreenReader : AccessibilityService() {
                     // o Done não fechou a folha: relê. Se as rodinhas mudaram, volta a acertar; se estão certas, o horário não vale
                     val r2 = teachRead(all)
                     val ok2 = r2 != null && AgendaCore.wheelNext(r2, java.time.Instant.ofEpochMilli(cTarget).atZone(java.time.ZoneId.systemDefault()), wNoWrap) == null
+                    judgeDone(false, "folha não fechou")
                     AgendarTreino.add(this, false, "rodinhas", cTarget, "folha não fechou: leu ${r2 ?: "?"}" + (if (ok2) " (certo: horário recusado)" else " (rodinha mexeu depois do Done)"))
                     if (ok2) doneProblem(r2.toString()) else { clog("folha aberta e rodinha errada (${r2 ?: "?"}): acertando de novo", all); cStep = 6; cTries = 0; wOkSig = "" }
                     again(); return
@@ -859,6 +861,7 @@ class ScreenReader : AccessibilityService() {
                 if (shown != null && Math.abs(shown.toInstant().toEpochMilli() - cTarget) >= 60_000L) {
                     clog("o post mostra ${AgendaCore.fmt(shown.toInstant().toEpochMilli())}, alvo ${AgendaCore.fmt(cTarget)}: abrindo de novo", all)
                     AgendarTreino.add(this, false, "post", cTarget, "post mostrou ${AgendaCore.fmt(shown.toInstant().toEpochMilli())} depois do Done ($cDoneSig)")
+                    judgeDone(false, "post mostrou outra data")
                     if (cVerifyTries++ >= 2) { cFail("O post ficou com outra data/hora.", all); return }
                     if (tap(rowNode)) { cStep = 6; cTries = 0; cTapAt = now; wLast = null }
                     again(); return
@@ -868,6 +871,7 @@ class ScreenReader : AccessibilityService() {
                     // anota ANTES de tocar: se cair aqui, o post não é agendado de novo (confere na lista no fim)
                     if (autoRunning) { val l = Batch.load(this); l.firstOrNull { it.optString("id") == autoItemId && !it.optBoolean("done") }?.let { it.put("sent", System.currentTimeMillis()); Batch.save(this, l) } }
                     clog("toquei no Schedule final (post mostra ${shown?.let { AgendaCore.fmt(it.toInstant().toEpochMilli()) } ?: "?"})", all)
+                    if (cTries == 0 && shown != null) judgeDone(true, "post mostra o horário certo")
                     if (cTries == 0) AgendarTreino.add(this, shown != null, "post", cTarget, if (shown != null) "post mostrou o horário certo (${rowNode?.let { ((it.text ?: it.contentDescription) ?: "").toString() }})" else "não consegui ler o horário no post: ${all.filter { r -> rect(r).top < resources.displayMetrics.heightPixels / 4 }.mapNotNull { (it.text ?: it.contentDescription)?.toString() }.take(8)}")
                     if (tap(fin)) cTapAt = now; cTries++; again(); return
                 }
@@ -946,7 +950,8 @@ class ScreenReader : AccessibilityService() {
         clog(msg, emptyList())
         Store.prefs(this).edit().putString("auto_result", android.text.format.DateFormat.format("dd/MM HH:mm", System.currentTimeMillis()).toString() + " " + msg).apply()
         autoRunning = false
-        show(msg, if (miss == 0 && failed == 0) 0xEE15803D.toInt() else 0xEEB45309.toInt())
+        h.postDelayed({ panelHide() }, 20_000L)
+        show(msg + " · 🎯 nota da rodada: ${"%.1f".format(wScore)}", if (miss == 0 && failed == 0) 0xEE15803D.toInt() else 0xEEB45309.toInt())
         // sai da lista e do post vazio, sem salvar nada
         abortCompose { }
         h.postDelayed({ if (!running && !forcing) clearOverlay() }, 15000)
@@ -1005,8 +1010,47 @@ class ScreenReader : AccessibilityService() {
         }, 600)
     }
 
+    // ================= 🎛 painel flutuante do piloto: ⏸ Corrigir · ✓ Certo · ✗ Errado =================
+    @Volatile private var cPaused = false
+    private var panel: android.widget.LinearLayout? = null
+    fun panelShow() {
+        if (panel != null) return
+        try {
+            val p = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL; setPadding(dpx(6), dpx(6), dpx(6), dpx(6))
+                background = android.graphics.drawable.GradientDrawable().apply { setColor(0xEE1C1C24.toInt()); cornerRadius = dpx(22).toFloat(); setStroke(dpx(1), 0x55FFFFFF) } }
+            fun b(t: String, color: Int, on: (android.widget.TextView) -> Unit) = android.widget.TextView(this).apply { text = t; textSize = 13f; setTextColor(color); setPadding(dpx(12), dpx(8), dpx(12), dpx(8)); setOnClickListener { on(this) } }.also { p.addView(it) }
+            b("⏸ Corrigir", 0xFFFFD166.toInt()) { v ->
+                cPaused = !cPaused
+                if (cPaused) {
+                    v.text = "▶ Seguir"
+                    Store.prefs(this).edit().putLong("ensinar_ate", System.currentTimeMillis() + 10 * 60_000L).putString("ensino_novo", Store.prefs(this).getString("ensino", "[]")).apply()
+                    show("⏸ Pausado: corrija na mão (rodinhas, Done…). Eu observo e aprendo. Depois toque em ▶ Seguir.", 0xEE7C3AED.toInt())
+                    AgendarTreino.add(this, false, "você corrigiu", cTarget, "pausou no passo $cStep")
+                    judgeDone(false, "você precisou corrigir")
+                } else {
+                    v.text = "⏸ Corrigir"
+                    Store.prefs(this).edit().putLong("ensinar_ate", 0).apply()
+                    // continua de onde a tela está: folha aberta → rodinhas; post aberto → conferir e Schedule
+                    val root = rootInActiveWindow; val all = root?.let { nodes(it).filter { n -> n.isVisibleToUser } } ?: emptyList()
+                    fun l(n: AccessibilityNodeInfo) = norm(((n.contentDescription ?: n.text) ?: "").toString())
+                    cStep = when { all.any { Regex("^(schedule post|agendar post)$").matches(l(it)) } -> 6; all.any { it.isEditable } && cStep >= 6 -> 7; else -> cStep }
+                    cTries = 0; wOkSig = ""; wLast = null; wPend = null
+                    show("▶ Seguindo de onde você deixou…"); h.postDelayed({ composeStep() }, 500)
+                }
+            }
+            b("✓", 0xFF4CC68E.toInt()) { AgendarTreino.add(this, true, "você marcou", cTarget, "✓ certo (passo $cStep)"); if (cDoneJudge >= 0) judgeDone(true, "você marcou certo"); show("✓ anotado como CERTO", 0xEE15803D.toInt()) }
+            b("✗", 0xFFFF5A5A.toInt()) { AgendarTreino.add(this, false, "você marcou", cTarget, "✗ errado (passo $cStep, rodinhas: ${wOkSig.ifEmpty { "?" }})"); if (cDoneJudge >= 0) judgeDone(false, "você marcou errado"); show("✗ anotado como ERRADO: toque em ⏸ Corrigir pra me mostrar", 0xEEB45309.toInt()) }
+            val lp = android.view.WindowManager.LayoutParams(-2, -2, android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, android.graphics.PixelFormat.TRANSLUCENT)
+                .apply { gravity = android.view.Gravity.TOP or android.view.Gravity.END; x = dpx(8); y = dpx(130) }
+            wm.addView(p, lp); panel = p
+        } catch (e: Exception) { ErrLog.log(this, "painel do piloto", e) }
+    }
+    fun panelHide() { try { panel?.let { wm.removeView(it) } } catch (e: Exception) { }; panel = null; cPaused = false }
+
     /** Um toque: agenda no Threads todos os posts do lote que faltam. */
     fun runBatchAuto() {
+        panelShow()
         autoRunning = true; autoDone = 0; Store.prefs(this).edit().putString("agendar_log", "").apply()
         // rodada nova: quem falhou antes ganha outra chance
         val l = Batch.load(this); l.forEach { it.remove("fails"); it.remove("err") }; Batch.save(this, l)
@@ -1083,20 +1127,41 @@ class ScreenReader : AccessibilityService() {
             if (before == sig) { wStuck[col] = (wStuck[col] ?: 0) + 1; if (how == "acao") wGesture.add(col); if (col == 1) wNoWrap.add(1) } else wStuck.remove(col)
         }
         if (wLast?.second != sig) composeUntil = maxOf(composeUntil, System.currentTimeMillis() + 90_000L)
+        // 🎯 recompensa do passo anterior: aproximou? passou do ponto? voltou?
+        wPend?.let { (pc, before, idx, key) ->
+            val after = AgendaCore.wheelDiff(r, z, pc, wNoWrap)
+            if (after != null) { val rw = AgendaCore.wheelReward(before, after, wb().arms[idx]); wb().update(key, idx, rw); wbSave(); wScore += rw
+                if (after != 0 && (after > 0) != (before > 0)) clog("🎯 passou do ponto na coluna $pc ($before → $after): −${"%.1f".format(-rw)}", emptyList()) }
+            wPend = null
+        }
         val next = AgendaCore.wheelNext(r, z, wNoWrap)
         clog("rodinhas: $sig · alvo " + AgendaCore.fmt(cTarget) + (next?.let { " → coluna ${it.first} ${if (it.second > 0) "+" else ""}${it.second}" } ?: " → certo"), emptyList())
         if (next == null) {
             wLast = null
-            val settle = AgendarTreino.settleMs(this)
+            val dArm = if (cDoneArm >= 0) cDoneArm else db().choose("done", { true }, wRnd).also { cDoneArm = it }
+            val settle = maxOf(AgendarTreino.settleMs(this), db().arms[dArm].toLong())
             if (wOkSig != sig || now - wOkAt < settle) {
                 if (wOkSig != sig) { wOkSig = sig; wOkAt = now }
                 clog("rodinhas certas: esperando parar (${settle} ms)", emptyList())
                 cTapAt = now; h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, settle - (now - wOkAt) + 60); return true
             }
             // Done desligado (o Threads apaga o botão quando o horário não vale): analisa em vez de tocar
-            if (!done.isEnabled || (clickable(done)?.isEnabled == false)) { doneProblem(r.toString()); again(); return true }
+            if (!done.isEnabled || (clickable(done)?.isEnabled == false)) { db().update("done", dArm, -2.0); wbSave(); doneProblem(r.toString()); again(); return true }
+            // 👁 olha a COR do Done no print da tela: branco = liberado; cinza = ainda não (espera e relê)
+            if (android.os.Build.VERSION.SDK_INT >= 30 && cDoneSeen != sig) {
+                if (cVision) { cTapAt = now; again(); return true }
+                cVision = true
+                doneColor(rect(clickable(done) ?: done)) { lum ->
+                    cVision = false
+                    if (lum == null || lum >= 200) { cDoneSeen = sig; clog("👁 Done branco (${lum ?: "?"}): liberado", emptyList()) }
+                    else { cGray++; db().update("done", dArm, -1.0); wbSave(); wScore -= 1; wOkSig = ""; clog("👁 Done cinza ($lum): não toquei, relendo", emptyList())
+                        if (cGray >= 4) { cGray = 0; doneProblem(sig) } }
+                    h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, 250)
+                }
+                return true
+            }
             clog("rodinhas paradas e certas ($sig) → Done", emptyList())
-            if (click(done) || tapCenter(done)) { cStep = 7; cTries = 0; cTapAt = now; cDoneAt = now; cDoneSig = sig }
+            if (click(done) || tapCenter(done)) { cStep = 7; cTries = 0; cTapAt = now; cDoneAt = now; cDoneSig = sig; cDoneJudge = dArm }
             again(); return true
         }
         wOkSig = ""
@@ -1107,14 +1172,19 @@ class ScreenReader : AccessibilityService() {
         val wheel = wheels.filter { rect(it).left <= x && rect(it).right >= x }.minByOrNull { rect(it).width() }
         // 1º jeito: o comando "rolar" da acessibilidade (no seu celular ele anda exatamente 1 linha); se não andar, arrasta com o dedo
         // longe do alvo: vários comandos de 1 linha de uma vez (no seu celular cada um anda exatamente 1 linha); relê e corrige
-        val n = minOf(Math.abs(diff), AgendarTreino.rowsAtOnce(this, col))
+        // quantas linhas mexer: o aprendizado escolhe (nunca mais que falta, nem mais que a velocidade escolhida)
+        val key = AgendaCore.wheelKey(col, diff)
+        val cap = AgendarTreino.rowsAtOnce(this, col)
+        val arm = wb().choose(key, { it <= Math.abs(diff) && it <= cap }, wRnd)
+        val n = wb().arms[arm]
+        wPend = Quad(col, diff, arm, key)
         var how = "gesto"
         if (wheel != null && col !in wGesture) {
             var ok = true
             repeat(n) { if (ok) ok = wheel.performAction(if (dir > 0) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) }
             if (ok) how = "acao"
             else { // não dá pra rolar pra esse lado: é o fim da rodinha (ex.: 12 no topo). Não arrasta; vai pelo outro lado.
-                wNoWrap.add(col); clog("rodinha $col: fim pra ${if (dir > 0) "baixo" else "cima"}", emptyList())
+                wNoWrap.add(col); wPend = null; clog("rodinha $col: fim pra ${if (dir > 0) "baixo" else "cima"}", emptyList())
                 wLast = Triple(col, sig, "fim"); cTapAt = now - 600; again(); return true
             }
         }
@@ -1132,6 +1202,46 @@ class ScreenReader : AccessibilityService() {
         again(); return true
     }
     private var wLast: Triple<Int, String, String>? = null
+    // 🎯 aprendizado: rodinhas (quantas linhas por vez) e Done (quanto esperar), salvos no celular
+    private data class Quad(val col: Int, val before: Int, val arm: Int, val key: String)
+    private var wPend: Quad? = null; private val wRnd = java.util.Random(); private var wScore = 0.0
+    private var cDoneArm = -1; private var cDoneJudge = -1; private var cDoneSeen = ""; private var cVision = false; private var cGray = 0
+    private var _wb: AgendaCore.Bandit? = null; private var _db: AgendaCore.Bandit? = null
+    private fun wb() = _wb ?: AgendaCore.Bandit.load(intArrayOf(1, 2, 4, 8, 12), Store.prefs(this).getString("ag_bandit", null)).also { _wb = it }
+    private fun db() = _db ?: AgendaCore.Bandit.load(intArrayOf(300, 600, 1000, 1600), Store.prefs(this).getString("ag_bandit_done", null)).also { _db = it }
+    private fun wbSave() = Store.prefs(this).edit().putString("ag_bandit", wb().save()).putString("ag_bandit_done", db().save()).apply()
+    /** Nota do Done que acabou de ser tocado (certo/errado), uma vez só. */
+    private fun judgeDone(ok: Boolean, why: String) {
+        if (cDoneJudge < 0) return
+        db().update("done", cDoneJudge, if (ok) 3.0 else -3.0); wbSave(); wScore += if (ok) 3 else -3
+        clog("🎯 Done ${if (ok) "certo +3" else "errado −3"} ($why) · espera ${db().arms[cDoneJudge]} ms", emptyList())
+        cDoneJudge = -1; cDoneArm = -1
+    }
+
+    /** Média de brilho no meio do botão (print da tela). Branco ≈ 230+, cinza ≈ 100–180. null = não deu pra ver. */
+    private fun doneColor(r: android.graphics.Rect, cb: (Int?) -> Unit) {
+        if (android.os.Build.VERSION.SDK_INT < 30) { cb(null); return }
+        try {
+            takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+                override fun onSuccess(sh: ScreenshotResult) {
+                    val lum = try {
+                        val hb = sh.hardwareBuffer
+                        val bmp = Bitmap.wrapHardwareBuffer(hb, sh.colorSpace)?.copy(Bitmap.Config.ARGB_8888, false); hb.close()
+                        bmp?.let { b ->
+                            // faixas à esquerda e à direita do texto "Done" (o fundo do botão)
+                            val ys = listOf(r.top + r.height() / 3, r.centerY(), r.bottom - r.height() / 3)
+                            val xs = (1..6).map { r.left + r.width() * it / 20 } + (14..19).map { r.left + r.width() * it / 20 }
+                            val v = ys.flatMap { y -> xs.map { x -> b.getPixel(x.coerceIn(0, b.width - 1), y.coerceIn(0, b.height - 1)) } }
+                                .map { p -> (0.299 * android.graphics.Color.red(p) + 0.587 * android.graphics.Color.green(p) + 0.114 * android.graphics.Color.blue(p)).toInt() }.sorted()
+                            v[v.size / 2]
+                        }
+                    } catch (e: Exception) { null }
+                    cb(lum)
+                }
+                override fun onFailure(code: Int) { cb(null) }
+            })
+        } catch (e: Exception) { cb(null) }
+    }
     private var wOkSig = ""; private var wOkAt = 0L; private var cDoneAt = 0L; private var cDoneSig = ""; private var cDoneProblems = 0
 
     /**
