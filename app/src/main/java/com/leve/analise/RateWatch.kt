@@ -2339,84 +2339,12 @@ class ScreenReader : AccessibilityService() {
     }
 
     private val FOLLOW = Regex("(\\d[\\d.,]*)\\s*(mil|k|mi)?\\s*(seguidores|followers)", RegexOption.IGNORE_CASE)
-    private val LABELS = mapOf(
-        "views" to Regex("^(visualiza[cç][oõ]es|views|visualizações|reprodu[cç][oõ]es|plays|contas alcan[cç]adas|accounts reached)$", RegexOption.IGNORE_CASE),
-        "likes" to Regex("^(curtidas?|likes?|curtir|like)$", RegexOption.IGNORE_CASE),
-        "replies" to Regex("^(respostas?|replies|reply|responder|coment[aá]rios?|comments?|comentar|comment)$", RegexOption.IGNORE_CASE),
-        "saves" to Regex("^(salvamentos|salvos|saves?|salvar)$", RegexOption.IGNORE_CASE),
-        "reposts" to Regex("^(reposts?|repostar|republica[cç][oõ]es)$", RegexOption.IGNORE_CASE),
-        "quotes" to Regex("^(cita[cç][oõ]es|quotes?|citar)$", RegexOption.IGNORE_CASE),
-        "shares" to Regex("^(compartilhamentos|shares?|compartilhar|enviar|envios|sends?)$", RegexOption.IGNORE_CASE),
-        "viewers" to Regex("^(viewers|espectadores|pessoas alcan[cç]adas|contas que viram|alcance)$", RegexOption.IGNORE_CASE),
-        "visits" to Regex("^(profile visits|visitas ao perfil|visitas no perfil)$", RegexOption.IGNORE_CASE),
-        "follows" to Regex("^(seguidores|follows|novos seguidores|seguiram|seguimentos|follows gained)$", RegexOption.IGNORE_CASE))
-
-    private fun numOf(t: String): Int? {
-        // "57m"/"5h"/"3d" são HORÁRIOS do post (57 minutos atrás), não números: só aceita mil/k/mi/milhões
-        val m = Regex("^(\\d[\\d.,]*)\\s*(mil|k|mi|milh[oõ]es|mi\\.)?$", RegexOption.IGNORE_CASE).find(t.trim()) ?: return null
-        val mult = when (m.groupValues[2].lowercase().trimEnd('.')) { "mil", "k" -> 1000.0; "mi", "milhões", "milhoes" -> 1_000_000.0; else -> 1.0 }
-        val s = m.groupValues[1]; val clean = if (mult > 1) s.replace(',', '.') else s.replace(".", "").replace(",", "")
-        return ((clean.toDoubleOrNull() ?: return null) * mult).toInt()
-    }
-
-    private val VS = Regex("^(higher|lower|typical|maior|menor|t[ií]pico|t[ií]pica|acima( do normal)?|abaixo( do normal)?|normal|mais alto|mais baixo|above|below)$", RegexOption.IGNORE_CASE)
-
-    /**
-     * Tela de insights do post: o que vai além dos rótulos.
-     * - a comparação da própria Meta embaixo de cada número (Higher/Typical/Lower) → vs_views, vs_fol...
-     * - o resumo da Meta AI ("16x more views") → xviews (x10)
-     * - a fileira de ícones do post (❤ 57 · 💬 24 · 🔁 0 · ↗ 0), que não tem rótulo
-     */
-    private fun extras(nt: List<String>, m: MutableMap<String, Int>) {
-        fun lab(t: String) = LABELS.entries.firstOrNull { it.value.matches(t) }?.key
-        for (i in nt.indices) {
-            val k = lab(nt[i]) ?: continue
-            val j = (i + 1..minOf(nt.size - 1, i + 3)).firstOrNull { VS.matches(nt[it]) } ?: continue
-            if ((i + 1 until j).none { numOf(nt[it]) != null }) continue
-            val v = nt[j].lowercase()
-            m["vs_" + (if (k == "follows") "fol" else k)] = when { Regex("high|maior|acima|mais alto|above").containsMatchIn(v) -> 1; Regex("low|menor|abaixo|mais baixo|below").containsMatchIn(v) -> -1; else -> 0 }
-        }
-        nt.firstNotNullOfOrNull { Regex("(\\d+(?:[.,]\\d+)?)\\s*(?:x|vezes)\\s+(?:more|mais)").find(it) }?.let { r ->
-            r.groupValues[1].replace(',', '.').toDoubleOrNull()?.let { if (it in 0.1..500.0) m["xviews"] = (it * 10).toInt() }
-        }
-        if (m["likes"] == null) {
-            val stop = nt.indexOfFirst { it == "summary" || it == "resumo" || lab(it) != null }.let { if (it < 0) nt.size else it }
-            var run = ArrayList<Int>()
-            for (i in 0 until stop) { val v = numOf(nt[i]); if (v != null) run.add(v) else if (run.size in 1..2) run = ArrayList() else if (run.size >= 3) break }
-            if (run.size >= 3) listOf("likes", "replies", "reposts", "shares").forEachIndexed { k, key -> run.getOrNull(k)?.let { m.putIfAbsent(key, it) } }
-        }
-    }
-
-    /** Número de cada rótulo. Descobre se a tela mostra "Curtidas 52" ou "52 Curtidas" e usa só esse lado. */
-    private fun pairs(nt: List<String>, from: Int, to: Int): Map<String, Int> {
-        val out = HashMap<String, Int>()
-        fun lab(t: String) = LABELS.entries.firstOrNull { it.value.matches(t) }?.key
-        val idx = (from until to).filter { lab(nt[it]) != null }
-        if (idx.isEmpty()) {
-            // "52 curtidas" num texto só
-            for (i in from until to) Regex("^(\\d[\\d.,]*\\s*(?:mil|k|mi)?)\\s+(.+)$", RegexOption.IGNORE_CASE).find(nt[i])?.let { mm ->
-                lab(mm.groupValues[2])?.let { k -> numOf(mm.groupValues[1])?.let { v -> out.putIfAbsent(k, v) } } }
-            return out
-        }
-        val after = idx.count { it + 1 < nt.size && numOf(nt[it + 1]) != null }
-        val before = idx.count { it > 0 && numOf(nt[it - 1]) != null && lab(nt.getOrElse(it - 2) { "" }) == null }
-        // tela "52 Curtidas": começa com número antes do 1º rótulo e o último rótulo não tem número depois
-        val first = idx.first(); val last = idx.last()
-        val startsWithNum = first > 0 && numOf(nt[first - 1]) != null
-        val lastAlone = last + 1 >= nt.size || numOf(nt[last + 1]) == null
-        val useBefore = (startsWithNum && lastAlone) || before > after
-        idx.forEach { i ->
-            val k = lab(nt[i]) ?: return@forEach
-            val v = if (useBefore) (if (i > 0) numOf(nt[i - 1]) else null) else (if (i + 1 < nt.size) numOf(nt[i + 1]) else null)
-            v?.let { out.putIfAbsent(k, it) }
-        }
-        for (i in from until to) Regex("^(\\d[\\d.,]*\\s*(?:mil|k|mi)?)\\s+(.+)$", RegexOption.IGNORE_CASE).find(nt[i])?.let { mm ->
-            lab(mm.groupValues[2])?.let { k -> numOf(mm.groupValues[1])?.let { v -> out.putIfAbsent(k, v) } } }
-        // "Curtir, 57" / "Like 57" / "Curtidas: 57" (botão com descrição)
-        for (i in from until to) Regex("^(.+?)[,:]?\\s+(\\d[\\d.,]*\\s*(?:mil|k|mi)?)$", RegexOption.IGNORE_CASE).find(nt[i])?.let { mm ->
-            lab(mm.groupValues[1].trim())?.let { k -> numOf(mm.groupValues[2])?.let { v -> out.putIfAbsent(k, v) } } }
-        return out
-    }
+    // 📖 o leitor de números mora no ReadCore (puro, treinado no ReaderTrainingTest); aqui só repassa
+    private val LABELS = ReadCore.LABELS
+    private val VS = ReadCore.VS
+    private fun numOf(t: String): Int? = ReadCore.numOf(t)
+    private fun extras(nt: List<String>, m: MutableMap<String, Int>) = ReadCore.extras(nt, m)
+    private fun pairs(nt: List<String>, from: Int, to: Int): Map<String, Int> = ReadCore.pairs(nt, from, to)
 
     private fun scan(pkg: String, texts: List<String>): List<Map<String, Int>> {
         val got = ArrayList<Map<String, Int>>()
