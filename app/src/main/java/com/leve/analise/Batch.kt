@@ -62,17 +62,31 @@ object Batch {
     fun setItems(c: Context, l: List<JSONObject>) { save(c, l.sortedBy { it.optLong("at") }); p(c).edit().remove("lote_wait").apply() }
 
     /** Horário que já passou (ou está em cima): refaz os horários dos que faltam, a partir de daqui a 20 min. */
+    /**
+     * Horários que já passaram (ou estão a menos de 15 min) são empurrados pra frente — SÓ eles.
+     * Antes o lote inteiro era refeito pra caber até as 23:30 de hoje: um post de amanhã/depois "voltava" pra hoje
+     * (o bug do 3º post) e até um que já tinha sido enviado ao Threads mudava de horário.
+     */
     fun refreshTimes(c: Context) {
-        val l = load(c); val left = l.filter { !it.optBoolean("done") }
-        if (left.none { it.optLong("at") < System.currentTimeMillis() + 15 * 60_000L }) return
-        val cal = Calendar.getInstance()
-        val from = System.currentTimeMillis() + 20 * 60_000L
-        cal.set(Calendar.HOUR_OF_DAY, 23); cal.set(Calendar.MINUTE, 30)
-        var to = cal.timeInMillis
-        if (to - from < left.size * 25 * 60_000L) { cal.add(Calendar.DAY_OF_YEAR, 1); to = cal.timeInMillis } // não cabe hoje: vai até amanhã
-        val t = slots(c, left.size, from, to)
-        left.forEachIndexed { k, o -> t.getOrNull(k)?.let { o.put("at", it) } }
-        save(c, l.sortedBy { it.optBoolean("done").not().let { nd -> if (nd) 1 else 0 } * 0 + it.optLong("at") })
+        val l = load(c); val now = System.currentTimeMillis()
+        val min = 15 * 60_000L; val gap = 25 * 60_000L; val five = 5 * 60_000L
+        val pend = l.filter { !it.optBoolean("done") && it.optLong("sent") == 0L }.sortedBy { it.optLong("at") }
+        if (pend.none { it.optLong("at") < now + min }) return
+        // horários ocupados pelos que já foram (ou estão indo) pro Threads: não cola em cima deles
+        val busy = l.filter { it.optBoolean("done") || it.optLong("sent") > 0L }.map { it.optLong("at") }
+        fun free(t: Long) = busy.none { Math.abs(it - t) < gap }
+        var last = now + 20 * 60_000L - gap
+        pend.forEach { o ->
+            var t = o.optLong("at")
+            if (t < now + min || t < last + gap) {
+                t = maxOf(now + 20 * 60_000L, last + gap)
+                t = (t + five - 1) / five * five                   // redondo de 5 em 5 min
+                while (!free(t)) t += five
+                o.put("at", t).put("movido", true)
+            }
+            last = t
+        }
+        save(c, l.sortedBy { it.optLong("at") })
     }
 
     /** Você confirmou que agendou: entra no histórico com o HORÁRIO AGENDADO (é dele que contam idade, números e nota). */

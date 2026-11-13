@@ -2122,8 +2122,17 @@ class ScreenReader : AccessibilityService() {
             ?.let { i -> norm(a.getJSONObject(i - 1).optString("l")).takeIf { it.isNotEmpty() } }
     } catch (x: Exception) { null }
 
+    private var dualPickAt = 0L
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
         val ep = e?.packageName?.toString()
+        // 📱 "Abrir com: Threads / Threads (duplo)" do Xiaomi (ou a escolha de apps do Android): clica sozinho no DUPLO,
+        // venha de onde vier (robô, link, Compartilhar). Essas janelas não são do Threads: não passam pro resto do leitor.
+        if (ep != null && ep != ThreadsNotif.THREADS && ep != ThreadsNotif.INSTA && ep != packageName) {
+            if (e.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && DualApp.on(this) && System.currentTimeMillis() - dualPickAt > 2500) {
+                dualPickAt = System.currentTimeMillis(); pickChooser(6)
+            }
+            return
+        }
         if (ep == ThreadsNotif.THREADS && e != null && teachOn()) try { teachEvent(e) } catch (x: Exception) { ErrLog.log(this, "ensinar", x) }
         if (ep == ThreadsNotif.THREADS && e != null) try { schedWatch(e) } catch (x: Exception) { ErrLog.log(this, "agenda: leitor", x) }
         // eventos novos (toque, digitação, avisos) só servem pra agenda: o resto do leitor continua como antes
