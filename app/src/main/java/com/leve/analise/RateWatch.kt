@@ -517,15 +517,26 @@ class ScreenReader : AccessibilityService() {
             m.forEach { (k, v) -> if (v > (all[k] ?: -2)) all[k] = v }
             if (cap.isEmpty()) cap = guessCap(nt, raw)
         }
+        // ⚡ espera ADAPTATIVA: lê a cada 250 ms e segue assim que 2 leituras seguidas dão os mesmos números
+        //    (a tela já carregou). No pior caso espera o mesmo de antes (1,3 s).
+        fun settle(maxMs: Long, then: () -> Unit) {
+            val t0 = System.currentTimeMillis(); var prev = ""
+            fun tick() {
+                take()
+                val sig = all.toSortedMap().toString() + "#" + lastTexts.size
+                val el = System.currentTimeMillis() - t0
+                if ((sig == prev && all.isNotEmpty() && el >= 450) || el >= maxMs) then() else { prev = sig; h.postDelayed({ tick() }, 250) }
+            }
+            h.postDelayed({ tick() }, 250)
+        }
         take()
-        h.postDelayed({
-            take()
+        settle(1300) {
             val insights = lastTexts.any { LABELS["views"]!!.matches(norm(it)) }
             val sc = rootInActiveWindow?.let { r -> nodes(r).firstOrNull { it.isScrollable && it.actionList.any { a -> a.id == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD } } }
             if (insights && sc != null && sc.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) {
-                h.postDelayed({ take(); try { rootInActiveWindow?.let { r -> nodes(r).firstOrNull { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) } } catch (e: Exception) { }; done(pkg, all, cap, lastTexts) }, 1300)
+                settle(1300) { try { rootInActiveWindow?.let { r -> nodes(r).firstOrNull { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) } } catch (e: Exception) { }; done(pkg, all, cap, lastTexts) }
             } else done(pkg, all, cap, lastTexts)
-        }, 1300)
+        }
     }
 
     private fun done(pkg: String, all0: Map<String, Int>, cap: String, texts: List<String>) {

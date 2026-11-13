@@ -161,4 +161,23 @@ class ReaderTrainingTest {
         val m = res.toMap()
         assertTrue(sb.toString(), m[Lv.FACIL]!! >= 99.0 && m[Lv.MEDIO]!! >= 95.0 && m[Lv.DIFICIL]!! >= 85.0 && m[Lv.IMPOSSIVEL]!! >= 90.0 && m[Lv.MAXIMO]!! >= 70.0)
     }
+
+    /** ⚡ velocidade: quantas telas por segundo o leitor lê (mesmas telas do treino, todos os níveis). */
+    @Test fun velocidade() {
+        val r = java.util.Random(7); val telas = (0 until 20_000).map { gen(Lv.values()[it % 5], r) }
+        repeat(2) { telas.take(3000).forEach { read(it) } }   // aquece
+        val ms = (1..7).minOf { val t0 = System.nanoTime(); telas.forEach { read(it) }; (System.nanoTime() - t0) / 1e6 }   // a melhor de 7
+        val msg = "⚡ ${"%.1f".format(telas.size / (ms / 1000))} telas/s · ${"%.3f".format(ms / telas.size)} ms por tela"
+        println(msg); java.io.File("build/leitor_vel.txt").writeText(msg)
+    }
+
+    /** 🔒 a versão rápida tem que ler IGUALZINHO: compara com as respostas gravadas (build/ouro.txt). */
+    @Test fun mesmasRespostas() {
+        val r = java.util.Random(31); val telas = (0 until 30_000).map { gen(Lv.values()[it % 5], r) }
+        val out = telas.joinToString("\n") { read(it).toSortedMap().toString() }
+        val f = java.io.File("build/ouro.txt")
+        if (System.getenv("GRAVA") != null || !f.exists()) { f.writeText(out); return }
+        val a = f.readLines(); val b = out.lines(); val diff = a.indices.count { a[it] != b[it] }
+        assertTrue("$diff telas lidas diferente da versão anterior", diff == 0)
+    }
 }

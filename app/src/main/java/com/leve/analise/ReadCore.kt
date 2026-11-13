@@ -6,11 +6,24 @@ package com.leve.analise
  * visits, follows… Treinado com o simulador do ReaderTrainingTest (fácil → médio → difícil → impossível).
  */
 object ReadCore {
+    // ⚡ todas as expressões compiladas UMA vez (antes: recompiladas a cada texto lido)
+    private val R_THIN = Regex("(?<=\\d)[\\u00A0\\u202F\\u2009 ](?=\\d{3}(?!\\d))")
+    private val R_BIGM = Regex("(\\d[\\d.,]*)\\s?M(?![a-zA-Z])")
+    private val R_INVIS = Regex("[\\u200B-\\u200F\\u202A-\\u202E\\u2066-\\u2069\\uFEFF]")
+    private val R_NBSP = Regex("[\\u00A0\\u202F\\u2009]")
+    private val R_WS = Regex("\\s+")
     fun norm(s: String): String {
-        var t = s.replace(Regex("(?<=\\d)[\\u00A0\\u202F\\u2009 ](?=\\d{3}(?!\\d))"), "")   // "1 234" (espaço fino) = 1234
-        t = t.replace(Regex("(\\d[\\d.,]*)\\s?M(?![a-zA-Z])"), "$1 mi")                              // "1.2M" = milhões ("57m" = minutos)
-        t = t.replace(Regex("[\\u200B-\\u200F\\u202A-\\u202E\\u2066-\\u2069\\uFEFF]"), "")                       // marcas invisíveis (direção do texto, espaço zero)
-        return t.replace(Regex("[\\u00A0\\u202F\\u2009]"), " ").lowercase().replace(Regex("\\s+"), " ").trim()
+        // ⚡ caminho curto: texto comum (sem espaço especial, sem M de milhão, sem marca invisível)
+        var plain = true
+        for (ch in s) if (ch == '\u00A0' || ch == '\u202F' || ch == '\u2009' || ch == 'M' || ch in '\u200B'..'\u200F' || ch in '\u202A'..'\u202E' || ch in '\u2066'..'\u2069' || ch == '\uFEFF' || (ch == ' ' && false)) { plain = false; break }
+        if (plain && s.none { it.isWhitespace() }) return s.lowercase().trim()
+        var t = if (s.any { it.isDigit() }) s.replace(R_THIN, "") else s      // "1 234" (espaço fino) = 1234
+        if (!plain) {
+            t = t.replace(R_BIGM, "$1 mi")                                     // "1.2M" = milhões ("57m" = minutos)
+            t = t.replace(R_INVIS, "")                                         // marcas invisíveis (direção do texto, espaço zero)
+            t = t.replace(R_NBSP, " ")
+        }
+        return t.lowercase().replace(R_WS, " ").trim()
     }
 
     val LABELS = mapOf(
@@ -25,13 +38,18 @@ object ReadCore {
         "visits" to Regex("^(profile visits|visitas ao perfil|visitas no perfil)$", RegexOption.IGNORE_CASE),
         "follows" to Regex("^(seguidores|follows|novos seguidores|seguiram|seguimentos|follows gained)$", RegexOption.IGNORE_CASE))
 
+    private val R_NUM = Regex("^(\\d[\\d.,]*)\\s*(mil|k|mi|milh[oõ]es|milh[aã]o|mi\\.|m)?\\s*(…|\\.\\.\\.)?$", RegexOption.IGNORE_CASE)
+    private val R_DEC = Regex("[.,]\\d")
     fun numOf(t: String): Int? {
         // "57m"/"5h"/"3d" são HORÁRIOS do post (57 minutos atrás), não números: só aceita mil/k/mi/milhões
         // ("1.2m" com casa decimal é milhão; "1.234.567"/"1,234,567" é número inteiro)
-        val m = Regex("^(\\d[\\d.,]*)\\s*(mil|k|mi|milh[oõ]es|milh[aã]o|mi\\.|m)?\\s*(…|\\.\\.\\.)?$", RegexOption.IGNORE_CASE).find(t.trim()) ?: return null
+        val tt = t.trim()
+        if (tt.isEmpty() || !tt[0].isDigit()) return null                    // ⚡ não começa com dígito: nem tenta
+        if (tt.length <= 9 && tt.all { it in '0'..'9' }) return tt.toIntOrNull()   // ⚡ "57", "1234"
+        val m = R_NUM.find(tt) ?: return null
         val suf = m.groupValues[2].lowercase().trimEnd('.')
         val s = m.groupValues[1].trimEnd('.', ',')
-        if (suf == "m" && !Regex("[.,]\\d").containsMatchIn(s)) return null
+        if (suf == "m" && !R_DEC.containsMatchIn(s)) return null
         val mult = when (suf) { "mil", "k" -> 1000.0; "mi", "m", "milhões", "milhoes", "milhão", "milhao" -> 1_000_000.0; else -> 1.0 }
         val clean = if (mult > 1) s.replace(',', '.') else s.replace(".", "").replace(",", "")
         return ((clean.toDoubleOrNull() ?: return null) * mult).toInt()
@@ -45,16 +63,18 @@ object ReadCore {
      * - o resumo da Meta AI ("16x more views") → xviews (x10)
      * - a fileira de ícones do post (❤ 57 · 💬 24 · 🔁 0 · ↗ 0), que não tem rótulo
      */
+    private val R_HIGH = Regex("high|maior|acima|mais alto|above"); private val R_LOW = Regex("low|menor|abaixo|mais baixo|below")
+    private val R_X = Regex("(\\d+(?:[.,]\\d+)?)\\s*(?:x|vezes)\\s+(?:more|mais)")
     fun extras(nt: List<String>, m: MutableMap<String, Int>) {
-        fun lab(t: String) = LABELS.entries.firstOrNull { it.value.matches(t) }?.key
+        fun lab(t: String) = if (t.isEmpty() || t.length > 26 || t[0].isDigit()) null else LABELS.entries.firstOrNull { it.value.matches(t) }?.key
         for (i in nt.indices) {
             val k = lab(nt[i]) ?: continue
             val j = (i + 1..minOf(nt.size - 1, i + 3)).firstOrNull { VS.matches(nt[it]) } ?: continue
             if ((i + 1 until j).none { numOf(nt[it]) != null }) continue
             val v = nt[j].lowercase()
-            m["vs_" + (if (k == "follows") "fol" else k)] = when { Regex("high|maior|acima|mais alto|above").containsMatchIn(v) -> 1; Regex("low|menor|abaixo|mais baixo|below").containsMatchIn(v) -> -1; else -> 0 }
+            m["vs_" + (if (k == "follows") "fol" else k)] = when { R_HIGH.containsMatchIn(v) -> 1; R_LOW.containsMatchIn(v) -> -1; else -> 0 }
         }
-        nt.firstNotNullOfOrNull { Regex("(\\d+(?:[.,]\\d+)?)\\s*(?:x|vezes)\\s+(?:more|mais)").find(it) }?.let { r ->
+        nt.firstNotNullOfOrNull { if (it.length >= 6) R_X.find(it) else null }?.let { r ->
             r.groupValues[1].replace(',', '.').toDoubleOrNull()?.let { if (it in 0.1..500.0) m["xviews"] = (it * 10).toInt() }
         }
         if (m["likes"] == null) {
@@ -66,9 +86,18 @@ object ReadCore {
     }
 
     /** Rótulo da métrica (aceita "Curtidas:", "ⓘ Views", "VIEWS"). */
-    fun lab(t: String): String? { val c = t.trim().trim('ⓘ', ':', ' ', '·').trim(); return LABELS.entries.firstOrNull { it.value.matches(c) }?.key }
+    private val labCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    fun lab(t: String): String? {
+        val c = t.trim().trim('ⓘ', ':', ' ', '·').trim()
+        if (c.isEmpty() || c.length > 26 || c[0].isDigit()) return null     // ⚡ rótulo nunca é longo nem começa com número
+        labCache[c]?.let { return it.ifEmpty { null } }
+        val k = LABELS.entries.firstOrNull { it.value.matches(c) }?.key
+        if (labCache.size < 4000) labCache[c] = k ?: ""
+        return k
+    }
     /** Lixo entre o rótulo e o número: vazio, ⓘ, ·, e a comparação da Meta (Higher/Typical). */
-    private fun skip(t: String) = t.isBlank() || t.trim() in setOf("ⓘ", "·", "•", "-", "—", "–") || VS.matches(t.trim())
+    private val JUNK1 = setOf("ⓘ", "·", "•", "-", "—", "–")
+    private fun skip(t: String) = t.isBlank() || t.trim().let { it in JUNK1 || (it.length <= 20 && !it[0].isDigit() && VS.matches(it)) }
     private val ONE_BEFORE = Regex("^(\\d[\\d.,]*\\s*(?:mil|k|mi|milh[oõ]es|milh[aã]o|m)?)\\s+(.+)$", RegexOption.IGNORE_CASE)
     private val ONE_AFTER = Regex("^(.+?)[,:]?\\s+(\\d[\\d.,]*\\s*(?:mil|k|mi|milh[oõ]es|milh[aã]o|m)?)$", RegexOption.IGNORE_CASE)
 
@@ -78,16 +107,21 @@ object ReadCore {
         // 2) rótulo e número em textos separados. Testa os 2 sentidos ("Curtidas 52" × "52 Curtidas"): cada número vai pra
         //    UM rótulo só, pulando lixo (ⓘ, Higher, títulos) até 3 textos, sem atravessar outro rótulo. Ganha o sentido que dá
         //    número pra mais métricas DIFERENTES (um título "Views" sem número no topo não engana); empate: o das pontas.
-        val idx = (from until to).filter { lab(nt[it]) != null }
+        // ⚡ cada texto é classificado UMA vez (rótulo? número?) e as passadas usam a tabela
+        val LB = arrayOfNulls<String>(nt.size); val NV = arrayOfNulls<Int>(nt.size)
+        for (i in from until to) { LB[i] = lab(nt[i]); if (LB[i] == null) NV[i] = numOf(nt[i]) }
+        fun lab(i: Int) = LB[i]
+        fun numOf(i: Int) = NV[i]
+        val idx = (from until to).filter { LB[it] != null }
         fun assign(afterDir: Boolean): Map<String, Int> {
             val used = HashSet<Int>(); val m = LinkedHashMap<String, Int>()
             val order = if (afterDir) idx else idx.reversed()
             for (i in order) {
-                val k = lab(nt[i])!!
+                val k = LB[i]!!
                 var j = if (afterDir) i + 1 else i - 1; var steps = 0
                 while (j in from until to && steps < 4) {
-                    if (lab(nt[j]) != null) break
-                    val v = numOf(nt[j])
+                    if (LB[j] != null) break
+                    val v = NV[j]
                     if (v != null) { if (j !in used) { used += j; if (k !in m) m[k] = v }; break }
                     j += if (afterDir) 1 else -1; steps++
                 }
@@ -96,7 +130,7 @@ object ReadCore {
         }
         val a = assign(true); val b = assign(false)
         fun firstAlone(): Boolean { if (idx.isEmpty()) return false // pontas: o 1º rótulo tem número antes e o último não tem depois → "52 Curtidas"
-            fun numNear(i: Int, d: Int): Boolean { var j = i + d; var n = 0; while (j in from until to && n < 3) { if (lab(nt[j]) != null) return false; if (numOf(nt[j]) != null) return true; if (!skip(nt[j])) return false; j += d; n++ }; return false }
+            fun numNear(i: Int, d: Int): Boolean { var j = i + d; var n = 0; while (j in from until to && n < 3) { if (LB[j] != null) return false; if (NV[j] != null) return true; if (!skip(nt[j])) return false; j += d; n++ }; return false }
             return numNear(idx.first(), -1) && !numNear(idx.last(), 1)
         }
         // grade: uma fileira de rótulos e logo depois a fileira de números, na mesma ordem
@@ -104,18 +138,19 @@ object ReadCore {
             var i = from
             while (i < to) {
                 val labs = ArrayList<Int>(); var j = i
-                while (j < to && (lab(nt[j]) != null || (labs.isNotEmpty() && skip(nt[j])))) { if (lab(nt[j]) != null) labs += j; j++ }
+                while (j < to && (LB[j] != null || (labs.isNotEmpty() && skip(nt[j])))) { if (LB[j] != null) labs += j; j++ }
                 val nums = ArrayList<Int>()
-                while (j < to && (numOf(nt[j]) != null || (nums.isNotEmpty() && skip(nt[j])))) { if (numOf(nt[j]) != null) nums += j; j++ }
-                if (labs.size >= 3 && nums.size == labs.size) { labs.forEachIndexed { q, li -> out.putIfAbsent(lab(nt[li])!!, numOf(nt[nums[q]])!!) }; i = j } else i = maxOf(i + 1, if (labs.isEmpty()) i + 1 else labs.last() + 1)
+                while (j < to && (NV[j] != null || (nums.isNotEmpty() && skip(nt[j])))) { if (NV[j] != null) nums += j; j++ }
+                if (labs.size >= 3 && nums.size == labs.size) { labs.forEachIndexed { q, li -> out.putIfAbsent(LB[li]!!, NV[nums[q]]!!) }; i = j } else i = maxOf(i + 1, if (labs.isEmpty()) i + 1 else labs.last() + 1)
             }
         }
         val pick = when { b.size > a.size -> b; a.size > b.size -> a; firstAlone() -> b; else -> a }
         pick.forEach { (k, v) -> out.putIfAbsent(k, v) }
         // por último: rótulo e número no MESMO texto ("52 curtidas", "Curtidas: 52", "Curtir, 57")
         for (i in from until to) {
-            ONE_BEFORE.find(nt[i])?.let { mm -> lab(mm.groupValues[2])?.let { k -> numOf(mm.groupValues[1])?.let { v -> out.putIfAbsent(k, v) } } }
-            ONE_AFTER.find(nt[i])?.let { mm -> lab(mm.groupValues[1])?.let { k -> numOf(mm.groupValues[2])?.let { v -> out.putIfAbsent(k, v) } } }
+            val sp = nt[i].indexOf(' ') > 0
+            if (sp && nt[i][0].isDigit()) ONE_BEFORE.find(nt[i])?.let { mm -> lab(mm.groupValues[2])?.let { k -> numOf(mm.groupValues[1])?.let { v -> out.putIfAbsent(k, v) } } }
+            if (sp && nt[i].any { it.isDigit() }) ONE_AFTER.find(nt[i])?.let { mm -> lab(mm.groupValues[1])?.let { k -> numOf(mm.groupValues[2])?.let { v -> out.putIfAbsent(k, v) } } }
         }
         return out
     }
