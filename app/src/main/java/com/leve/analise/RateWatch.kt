@@ -1136,11 +1136,15 @@ class ScreenReader : AccessibilityService() {
         val wheels = all.filter { it.isScrollable && rect(it).centerY() in top..bottom }
         val band = wheels.map { rect(it).centerY() }.sorted().let { if (it.isEmpty()) (top + bottom) / 2 else it[it.size / 2] }
         val areas = loadAreas()
-        val r = if (areas != null) readAreas(all, areas) else AgendaCore.wheelRead(all.filter { n -> rect(n).centerY() in top..bottom && n !== title }.map { AgendaCore.WItem(t(it), rect(it).centerX(), rect(it).centerY()) }, band, dpx(45), java.time.LocalDate.now())
+        // áreas: só dizem a COLUNA; a faixa do meio vem da rodinha (um quadrado torto não lê a linha errada)
+        val r = if (areas != null) AgendaCore.areaRead(all.filter { n -> rect(n).centerY() in top..bottom && n !== title }.map { AgendaCore.WItem(t(it), rect(it).centerX(), rect(it).centerY()) },
+                areas.map { it.centerX() }, areas.map { it.width() / 2 + dpx(12) }, band, java.time.LocalDate.now())
+                ?: AgendaCore.wheelRead(all.filter { n -> rect(n).centerY() in top..bottom && n !== title }.map { AgendaCore.WItem(t(it), rect(it).centerX(), rect(it).centerY()) }, band, dpx(45), java.time.LocalDate.now())
+            else AgendaCore.wheelRead(all.filter { n -> rect(n).centerY() in top..bottom && n !== title }.map { AgendaCore.WItem(t(it), rect(it).centerX(), rect(it).centerY()) }, band, dpx(45), java.time.LocalDate.now())
         lastSheet = Triple(r, band, wheels.size)
         // 🧠 o mesmo cérebro treinado no simulador (SheetPilot)
         val pilot = cPilot ?: SheetPilot(z, wb(), db(), { c -> AgendarTreino.rowsAtOnce(this, c) }, hb = hb(), g = Genome.load(Store.prefs(this).getString("ag_genome", null) ?: TreinoPronto.GENOMA),
-            forceHow = if (areas != null) 1 else -1).also { cPilot = it }
+            forceHow = -1).also { cPilot = it }
         val doneOn = done.isEnabled && clickable(done)?.isEnabled != false
         val act = pilot.step(r, now, doneOn, canLook = android.os.Build.VERSION.SDK_INT >= 30)
         val sig = r?.toString() ?: "?"
@@ -1160,8 +1164,7 @@ class ScreenReader : AccessibilityService() {
                         if (!ok) { if (wheel == null) { /* sem rodinha que rola nessa coluna: conta como "não mexeu" */ } else { pilot.scrollRefused(act.col); clog("rodinha ${act.col}: fim pra ${if (act.dir > 0) "baixo" else "cima"}", emptyList()) } }
                     }
                     1 -> { // TOCA no número que quer (1–2 linhas pra lá: valor maior fica embaixo). Com áreas: logo abaixo/acima da SUA área
-                        val box = areas?.getOrNull(act.col)
-                        val y = if (box != null) box.exactCenterY() + act.dir * act.rows * box.height() else band + act.dir * act.rows * rowH
+                        val y = band + act.dir * act.rows * rowH
                         val path = android.graphics.Path().apply { moveTo(x.toFloat(), y) }
                         try { dispatchGesture(android.accessibilityservice.GestureDescription.Builder().addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 60)).build(), null, null) } catch (e: Exception) { }
                         markDot(x.toFloat(), y, 0xFF36D399.toInt())
@@ -1258,11 +1261,14 @@ class ScreenReader : AccessibilityService() {
                 true
             }
         }
+        h.post { try { val loc = IntArray(2); areaEditor?.getLocationOnScreen(loc); if (loc[1] != 0 || loc[0] != 0) { boxes.forEachIndexed { i, b -> b.offset(-loc[0], -loc[1]); place(i) } } } catch (e: Exception) { } }
         val bar = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL; setPadding(dpx(8), dpx(8), dpx(8), dpx(8))
             background = android.graphics.drawable.GradientDrawable().apply { setColor(0xEE1C1C24.toInt()); cornerRadius = dpx(18).toFloat() } }
         fun bb(t: String, c: Int, on: () -> Unit) = bar.addView(android.widget.TextView(this).apply { text = t; textSize = 14f; setTextColor(c); setPadding(dpx(12), dpx(8), dpx(12), dpx(8)); setOnClickListener { on() } })
         fun close() { try { wm.removeView(f) } catch (e: Exception) { }; areaEditor = null }
-        bb("💾 Salvar", 0xFF4CC68E.toInt()) { saveAreas(boxes); close(); cPilot = null; show("🎯 Áreas salvas: agora eu leio o número DENTRO de cada quadrado e toco logo abaixo/acima até bater. Toque em ▶.", 0xEE15803D.toInt()) }
+        bb("💾 Salvar", 0xFF4CC68E.toInt()) {
+            val loc = IntArray(2); f.getLocationOnScreen(loc)
+            saveAreas(boxes.map { android.graphics.Rect(it).apply { offset(loc[0], loc[1]) } }); close(); cPilot = null; show("🎯 Áreas salvas: agora eu leio o número DENTRO de cada quadrado e toco logo abaixo/acima até bater. Toque em ▶.", 0xEE15803D.toInt()) }
         bb("🗑 Sem áreas", 0xFFFF5A5A.toInt()) { Store.prefs(this).edit().remove("ag_areas").apply(); close(); cPilot = null; show("Áreas apagadas: volto a achar as rodinhas sozinho.") }
         bb("✕", 0xFFB0B4C0.toInt()) { close() }
         f.addView(bar, android.widget.FrameLayout.LayoutParams(-2, -2).apply { gravity = android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL; topMargin = dpx(150) })

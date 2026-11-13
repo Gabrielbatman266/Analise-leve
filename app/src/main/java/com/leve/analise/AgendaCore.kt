@@ -346,4 +346,19 @@ object AgendaCore {
         2 -> r.minute?.let { target.minute - it }
         else -> r.pm?.let { if (it == target.hour >= 12) 0 else if (target.hour >= 12) 1 else -1 }
     }
+
+    /**
+     * Leitura pelas ÁREAS que você ajustou: a área diz QUAL coluna (x); a faixa do meio vem da própria rodinha ([band]).
+     * Assim um quadrado meio torto não lê a linha errada. Pega o texto da coluna mais perto da faixa (até meia linha).
+     */
+    fun areaRead(items0: List<WItem>, colX: List<Int>, colHalfW: List<Int>, band: Int, today: LocalDate): WRead? {
+        val items = items0.filter { wheelLike(it.text.trim(), today) }
+        fun col(i: Int) = items.filter { Math.abs(it.cx - colX[i]) <= colHalfW[i] }
+        val c0 = col(0); val c1 = col(1); val c2 = col(2); val c3 = if (colX.size > 3) col(3) else emptyList()
+        val ys = (c0 + c1 + c2).map { it.cy }.distinct().sorted()
+        val rowH = ys.zipWithNext { a, b -> b - a }.filter { it > 8 }.minOrNull() ?: return null
+        fun sel(c: List<WItem>) = c.minByOrNull { Math.abs(it.cy - band) }?.takeIf { Math.abs(it.cy - band) < rowH * 0.5 }?.text?.trim()
+        return WRead(sel(c0)?.let { wheelDate(it, today) }, sel(c1)?.toIntOrNull(), sel(c2)?.toIntOrNull(),
+            sel(c3)?.lowercase()?.startsWith("p"), colX.size > 3, colX, rowH, band)
+    }
 }

@@ -293,4 +293,27 @@ class AgendaCoreTest {
         assertTrue(AgendaCore.wheelReward(5, 5, 2) < 0)         // não mexeu
         assertTrue(AgendaCore.wheelReward(4, 6, 2) < 0)         // voltou
     }
+
+    /** A tela EXATA do diagnóstico de 13/11 01:53 (Redmi 1220×2712) com as áreas que foram salvas meio tortas pra baixo. */
+    @Test fun areasDoDiagnostico() {
+        val hoje = LocalDate.of(2026, 11, 13)
+        val W = 1220; val H = 2712
+        fun c(t: String, left: Int, top: Int, w: Int) = AgendaCore.WItem(t, left + w / 2, top + 30)
+        val tela = listOf(
+            c("Mon, Nov 16", 275, 1802, 200), c("Tue, Nov 17", 290, 1910, 190), c("Wed, Nov 18", 277, 2018, 200), c("Thu, Nov 19", 287, 2126, 190), c("Fri, Nov 20", 310, 2234, 170),
+            c("1", 621, 1802, 20), c("2", 621, 1910, 20), c("3", 621, 2018, 20), c("4", 621, 2126, 20), c("5", 621, 2234, 20),
+            c("00", 740, 2018, 40), c("01", 740, 2126, 40), c("02", 740, 2234, 40), c("AM", 882, 2018, 50), c("PM", 883, 2126, 50),
+            c("Done", 563, 2420, 90), c("Schedule post", 48, 1663, 300))
+        val areas = listOf(listOf(0.2016, 0.7586, 0.4377, 0.7982), listOf(0.4393, 0.7590, 0.5664, 0.7986), listOf(0.5697, 0.7590, 0.6975, 0.7970), listOf(0.7000, 0.7541, 0.8590, 0.7994))
+        val colX = areas.map { ((it[0] + it[2]) / 2 * W).toInt() }; val half = areas.map { ((it[2] - it[0]) / 2 * W).toInt() + 30 }
+        // faixa do meio vinda das rodinhas (View[s] de 1778 até ~2340): ~2059
+        val r = AgendaCore.areaRead(tela, colX, half, 2059, hoje)!!
+        assertEquals(LocalDate.of(2026, 11, 18), r.date); assertEquals(3, r.hour); assertEquals(0, r.minute); assertEquals(false, r.pm)
+        // e a leitura automática (sem áreas) também acerta
+        val a = AgendaCore.wheelRead(tela, 2059, 124, hoje)!!
+        assertEquals(LocalDate.of(2026, 11, 18), a.date); assertEquals(3, a.hour); assertEquals(0, a.minute); assertEquals(false, a.pm)
+        // e o caminho até o alvo do diagnóstico (sáb 14/11 10:40): volta 4 dias primeiro
+        assertEquals(0 to -4, AgendaCore.wheelNext(r, ZonedDateTime.of(2026, 11, 14, 10, 40, 0, 0, ZoneId.of(sp))))
+        assertEquals(H, 2712)
+    }
 }
