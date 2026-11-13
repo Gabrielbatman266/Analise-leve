@@ -64,13 +64,15 @@ class SheetPilotTrainingTest {
             val out = ArrayList<AgendaCore.WItem>()
             for (k in -2..2) {
                 val y = band + k * rowH
-                (d0 + k).takeIf { it in 0..75 }?.let { out += AgendaCore.WItem(fmtDay(today.plusDays(it.toLong())), 375, y) }
+                // posições REAIS do Xiaomi (árvore de 13/11 13:45): data alinhada à direita em ~483, hora alinhada à direita em ~646
+                // (o "1" fica a ~131 px do minuto: com 45 dp de distância as duas colunas se juntavam), minuto ~765, AM/PM ~907
+                (d0 + k).takeIf { it in 0..75 }?.let { val t = fmtDay(today.plusDays(it.toLong())); out += AgendaCore.WItem(t, 483 - t.length * 19 / 2, y) }
                 val p = h0 + k
-                (if (hourWraps) ((p % 12) + 12) % 12 else p.takeIf { it in 0..11 })?.let { out += AgendaCore.WItem(hour12(it).toString(), 600, y) }
-                (m0 + k).takeIf { it in 0..59 }?.let { out += AgendaCore.WItem("%02d".format(it), 724, y) }
+                (if (hourWraps) ((p % 12) + 12) % 12 else p.takeIf { it in 0..11 })?.let { val t = hour12(it).toString(); out += AgendaCore.WItem(t, 646 - t.length * 25 / 2, y) }
+                (m0 + k).takeIf { it in 0..59 }?.let { out += AgendaCore.WItem("%02d".format(it), 765, y) }
             }
-            out += AgendaCore.WItem(if (shownPm) "PM" else "AM", 867, band)
-            out += AgendaCore.WItem(if (shownPm) "AM" else "PM", 867, if (shownPm) band - rowH else band + rowH)
+            out += AgendaCore.WItem(if (shownPm) "PM" else "AM", 907, band)
+            out += AgendaCore.WItem(if (shownPm) "AM" else "PM", 907, if (shownPm) band - rowH else band + rowH)
             out += AgendaCore.WItem("Edit", 280, 1919)
             return out
         }
@@ -95,9 +97,9 @@ class SheetPilotTrainingTest {
             val h0 = (if (now >= animUntil) hPos + (if (pm) 12 else 0) else shown.second + (if (shownPm) 12 else 0))
             for (k in -2..2) {
                 val y = band + k * rowH
-                (shown.first + k).takeIf { it in 0..75 }?.let { out += AgendaCore.WItem(fmtDay(today.plusDays(it.toLong())), 375, y) }
-                (h0 + k).takeIf { it in 0..23 }?.let { out += AgendaCore.WItem("%02d".format(it), 600, y) }
-                (shown.third + k).takeIf { it in 0..59 }?.let { out += AgendaCore.WItem("%02d".format(it), 724, y) }
+                (shown.first + k).takeIf { it in 0..75 }?.let { val t = fmtDay(today.plusDays(it.toLong())); out += AgendaCore.WItem(t, 483 - t.length * 19 / 2, y) }
+                (h0 + k).takeIf { it in 0..23 }?.let { out += AgendaCore.WItem("%02d".format(it), 621, y) }
+                (shown.third + k).takeIf { it in 0..59 }?.let { out += AgendaCore.WItem("%02d".format(it), 765, y) }
             }
             return out
         }
@@ -120,6 +122,8 @@ class SheetPilotTrainingTest {
         fun doneEnabled(clock: ZonedDateTime) = at().isAfter(clock.plusMinutes(5))
         /** a rodinha ainda está girando (é aí que o Android manda eventos de acessibilidade) */
         fun animating() = now < animUntil
+        /** as 4 rodinhas roláveis (left..right), como o Xiaomi mostra */
+        val wheelsX = listOf(227..550, 550..692, 692..834, 834..990)
     }
 
     data class Result(val ok: Boolean, val ms: Long, val why: String)
@@ -130,7 +134,7 @@ class SheetPilotTrainingTest {
         val pilot = SheetPilot(target, wb, db, { c -> when (c) { 3 -> 1; 1 -> 11; else -> 20 } }, rnd, explore, hb, g)
         var reopen = 0
         while (true) {
-            val r = sim.screenOrNull()?.let { AgendaCore.wheelRead(it, sim.band, 124, sim.today) }
+            val r = sim.screenOrNull()?.let { AgendaCore.wheelRead(it, sim.band, 135, sim.today, sim.wheelsX) }
             when (val a = pilot.step(r, sim.now, sim.doneEnabled(clock), canLook = true)) {
                 is SheetPilot.Act.Scroll -> { if (!sim.act(a.col, a.dir, a.rows, a.how)) pilot.scrollRefused(a.col); sim.now += 120 }
                 is SheetPilot.Act.Wait -> sim.now += a.ms
@@ -192,7 +196,7 @@ class SheetPilotTrainingTest {
         val g = Genome.load(TreinoPronto.GENOMA)
         val f = fitness(g, 31337L, 60)
         java.io.File("build/treino_brutal.txt").writeText("BRUTAL ${"%.2f".format(f.second)}% · ${"%.1f".format(f.third)} s/post")
-        assertTrue("brutal: ${f.second}%", f.second >= 92.0) // 🧠 novo (opcional): o simulador ficou mais fiel (arrasto embala, hora anima pelo caminho curto) e ele caiu; o padrão é o antigo (LoteRealTest)
+        assertTrue("brutal: ${f.second}%", f.second >= 92.0) // 🧠 novo (opcional): o simulador ficou mais fiel (arrasto embala, hora anima pelo caminho curto) e ele caiu; o padrão é o mesclado (LoteRealTest)
     }
 
     @Test fun cenarioDificil() {
@@ -291,7 +295,7 @@ class SheetPilotTrainingTest {
         while (true) {
             if (sim.now - t0 > 240_000) return Result(false, sim.now, "demorou")
             sim.now += 350
-            val r = sim.screenOrNull()?.let { AgendaCore.wheelRead(it, sim.band, 124, sim.today) } ?: continue
+            val r = sim.screenOrNull()?.let { AgendaCore.wheelRead(it, sim.band, 135, sim.today, sim.wheelsX) } ?: continue
             val sig = r.toString()
             last?.let { (c, b, how) -> if (b == sig) { stuck[c] = (stuck[c] ?: 0) + 1; if (how == "acao") gesture.add(c); if (c == 1) noWrap.add(1) } else { stuck.remove(c) }; Unit }
             val next = AgendaCore.wheelNext(r, target, noWrap)

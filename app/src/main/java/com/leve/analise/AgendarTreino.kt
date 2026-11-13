@@ -14,12 +14,14 @@ object AgendarTreino {
 
     /** ok = deu certo; etapa = onde (rodinhas, done, post, lista…); info = o que leu/fez. */
     // 🧠 qual cérebro mexe nas rodinhas: o ANTIGO (o 1º que deu certo, padrão) ou o NOVO (treinado no simulador)
-    fun oldBrain(c: Context) = Store.prefs(c).getBoolean("ag_cerebro_antigo", true)
-    fun setOldBrain(c: Context, v: Boolean) = Store.prefs(c).edit().putBoolean("ag_cerebro_antigo", v).apply()
-    private fun brain(c: Context) = if (oldBrain(c)) "antigo" else "novo"
+    // 🧠 MESCLADO (padrão): o antigo mexe nas rodinhas (comando, 1 linha, espera parar) e, quando ele não consegue ler a tela,
+    // usa a leitura do novo (as áreas 🎯). Se a folha fechar sem querer, ele reabre (⋯ › Agendar). NOVO = só o treinado no simulador.
+    fun oldBrain(c: Context) = Store.prefs(c).getString("ag_cerebro_modo", "mesclado") != "novo"
+    fun setOldBrain(c: Context, v: Boolean) = Store.prefs(c).edit().putString("ag_cerebro_modo", if (v) "mesclado" else "novo").apply()
+    private fun brain(c: Context) = if (oldBrain(c)) "mesclado" else "novo"
 
     /** Placar dos dois cérebros (exemplos gravados desde que o botão 🧠 existe). */
-    fun compare(c: Context): String = listOf("antigo", "novo").joinToString(" × ") { b ->
+    fun compare(c: Context): String = listOf("antigo", "mesclado", "novo").joinToString(" × ") { b ->
         val l = all(c).filter { it.optString("cerebro") == b && it.optString("etapa").let { e -> e != "voto" && e != "lista" && (!e.startsWith("passo ") || e == "passo 6") } }
         val ok = l.count { it.optBoolean("ok") }
         "$b ✓$ok ✗${l.size - ok}" + (if (l.isNotEmpty()) " (${ok * 100 / l.size}%)" else "")

@@ -646,7 +646,9 @@ class ScreenReader : AccessibilityService() {
     private val POSTBTN = Regex("^(post|postar|publicar|publish|share|compartilhar)$")
 
     /** [fromShare]: o post já abriu com a foto (Compartilhar); senão começa do "novo post". */
+    private var cArmAt = 0L
     fun armCompose(label: String, cap: String, fromShare: Boolean = true, target: Long = 0L) {
+        cArmAt = System.nanoTime()
         cPicked = false; cTarget = target; cWheel.clear(); wLast = null; wSettle = ""; wOkSig = ""; cDoneProblems = 0; wPend = null; cPilot = null; wLastSig = ""; cDoneArm = -1; cDoneJudge = -1; cDoneSeen = ""; cVision = false; cGray = 0; wScore = 0.0; cPaused = false; wStuck.clear(); wGesture.clear(); wNoWrap.clear(); cVerifyTries = 0
         composeUntil = System.currentTimeMillis() + 180_000L; cStep = if (fromShare) 0 else 1; cCap = cap; cLabel = label; cTries = 0; cTapAt = 0
         h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, 1800)
@@ -697,6 +699,9 @@ class ScreenReader : AccessibilityService() {
             return
         }
         cLast = now
+        // o post já acabou (✓, falhou ou parou): um composeStep atrasado não pode rodar o passo 7 de novo
+        // (ele chamava o autoOk 2x → dois robôs ao mesmo tempo no lote: horário trocado, item errado marcado ✓)
+        if (composeUntil <= now) return
         if (cPaused) { composeUntil = maxOf(composeUntil, now + 120_000L); h.postDelayed({ composeStep() }, 1000); return }
         val wait = if (cStep == 6) (if (AgendarTreino.oldBrain(this)) 350L else AgendarTreino.stepMs(this)) else 1500L // nas rodinhas o comando é instantâneo: relê logo
         if (now - cTapAt < wait) { h.postDelayed({ composeStep() }, wait + 50); return } // espera a tela reagir ao último toque
@@ -963,7 +968,7 @@ class ScreenReader : AccessibilityService() {
         } + (if (failed > 0) " · ✗ $failed falharam" else "")
         clog(msg, emptyList())
         Store.prefs(this).edit().putString("auto_result", android.text.format.DateFormat.format("dd/MM HH:mm", System.currentTimeMillis()).toString() + " " + msg).apply()
-        autoRunning = false
+        autoRunning = false; awake(false)
         h.postDelayed({ panelHide() }, 20_000L)
         show(msg + " · 🎯 nota da rodada: ${"%.1f".format(wScore)}", if (miss == 0 && failed == 0) 0xEE15803D.toInt() else 0xEEB45309.toInt())
         // sai da lista e do post vazio, sem salvar nada
@@ -1007,7 +1012,7 @@ class ScreenReader : AccessibilityService() {
                 val ws = windows.mapNotNull { it.root }.filter { it.packageName?.toString() != packageName }
                 val all = ws.flatMap { nodes(it) }.filter { it.isVisibleToUser }
                 fun lab(x: AccessibilityNodeInfo) = norm(((x.contentDescription ?: x.text) ?: "").toString())
-                val opts = all.filter { Regex("threads").containsMatchIn(lab(it)) && clickable(it) != null && it.packageName?.toString() != ThreadsNotif.THREADS }
+                val opts = all.filter { Regex("threads|instagram").containsMatchIn(lab(it)) && clickable(it) != null && it.packageName?.toString() != ThreadsNotif.THREADS && it.packageName?.toString() != ThreadsNotif.INSTA }
                     .distinctBy { clickable(it)?.let { c -> rect(c).toShortString() } }.sortedWith(compareBy({ rect(it).top / dpx(40) }, { rect(it).left }))
                 if (opts.size >= 2) {
                     Store.prefs(this).edit().putString("dual_chooser", opts.joinToString(" | ") { lab(it) + " @" + rect(it).toShortString() } + " · pacote " + opts.first().packageName).apply()
@@ -1015,7 +1020,10 @@ class ScreenReader : AccessibilityService() {
                     val pick = opts.firstOrNull { Regex("dual|duplo|clone|segund|\\(2\\)|xspace").containsMatchIn(lab(it)) }
                         ?: opts.getOrNull(if (DualApp.on(this)) dualIdx else 1 - dualIdx) ?: opts.last()
                     clog("escolhi no 'qual dos dois': " + lab(pick), all)
-                    clickable(pick)?.let { if (!it.performAction(AccessibilityNodeInfo.ACTION_CLICK)) tapCenter(it) }
+                    // como no Done: o "clique" de acessibilidade pode voltar true e não fazer nada → 1º toque de verdade, depois o clique
+                    clickable(pick)?.let { c -> if (n % 2 == 0) { if (!tapCenter(c)) c.performAction(AccessibilityNodeInfo.ACTION_CLICK) } else { if (!c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) tapCenter(c) } }
+                    // confere: se a janela de escolha continua aberta, tenta de novo pelo outro jeito
+                    h.postDelayed({ try { val still = windows.mapNotNull { it.root }.any { r -> r.packageName?.toString() == opts.first().packageName?.toString() && nodes(r).any { Regex("threads|instagram").containsMatchIn(lab(it)) } }; if (still) pickChooser(n + 1) } catch (e: Exception) { } }, 900)
                     Store.prefs(this).edit().putString("dual_last", "escolhi no 'qual dos dois': ${lab(pick)} (${opts.indexOf(pick) + 1}º)").apply()
                     return@postDelayed
                 }
@@ -1062,14 +1070,14 @@ class ScreenReader : AccessibilityService() {
                     } else show("▶ Nada pra seguir: toque em 🤖 Agendar todos", 0xEEB45309.toInt())
                 }
             }
-            b(if (AgendarTreino.oldBrain(this)) "🧠A" else "🧠N", 0xFFFFD166.toInt()) { v ->
-                val old = !AgendarTreino.oldBrain(this); AgendarTreino.setOldBrain(this, old); v.text = if (old) "🧠A" else "🧠N"; cPilot = null; wLast = null; wOkSig = ""
-                show(if (old) "🧠 Cérebro ANTIGO (o 1º que deu certo): só o comando de rolar, 1 linha por vez" else "🧠 Cérebro NOVO (treinado no simulador)", 0xEE7C3AED.toInt()) }
+            b(if (AgendarTreino.oldBrain(this)) "🧠M" else "🧠N", 0xFFFFD166.toInt()) { v ->
+                val old = !AgendarTreino.oldBrain(this); AgendarTreino.setOldBrain(this, old); v.text = if (old) "🧠M" else "🧠N"; cPilot = null; wLast = null; wOkSig = ""
+                show(if (old) "🧠 MESCLADO: o antigo mexe nas rodinhas, o novo ajuda a ler (áreas 🎯), e reabre o Agendar se fechar" else "🧠 Cérebro NOVO (treinado no simulador)", 0xEE7C3AED.toInt()) }
             b("🎯", 0xFF5B9DFF.toInt()) { areasEdit() }
             b("✓", 0xFF4CC68E.toInt()) { AgendarTreino.add(this, true, "você marcou", cTarget, "✓ certo (passo $cStep)"); judgeDone(true, "você marcou certo"); show("✓ anotado como CERTO", 0xEE15803D.toInt()) }
             b("✗", 0xFFFF5A5A.toInt()) { AgendarTreino.add(this, false, "você marcou", cTarget, "✗ errado (passo $cStep, rodinhas: ${wOkSig.ifEmpty { "?" }})"); judgeDone(false, "você marcou errado"); show("✗ anotado como ERRADO: toque em ⏸ Corrigir pra me mostrar", 0xEEB45309.toInt()) }
             val lp = android.view.WindowManager.LayoutParams(-2, -2, android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, android.graphics.PixelFormat.TRANSLUCENT)
+                android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON, android.graphics.PixelFormat.TRANSLUCENT) // 📱 a tela não apaga enquanto o robô trabalha
                 .apply { gravity = android.view.Gravity.TOP or android.view.Gravity.START
                     x = Store.prefs(this@ScreenReader).getInt("panel_x", resources.displayMetrics.widthPixels - dpx(190)); y = Store.prefs(this@ScreenReader).getInt("panel_y2", dpx(96)) }
             var sx = 0f; var sy = 0f; var ox = 0; var oy = 0
@@ -1084,20 +1092,37 @@ class ScreenReader : AccessibilityService() {
             wm.addView(p, lp); panel = p
         } catch (e: Exception) { ErrLog.log(this, "painel do piloto", e) }
     }
-    fun panelHide() { try { panel?.let { wm.removeView(it) } } catch (e: Exception) { }; panel = null; cPaused = false }
+    fun panelHide() { try { panel?.let { wm.removeView(it) } } catch (e: Exception) { }; panel = null; cPaused = false; awake(false) }
+
+    /** 📱 Acende a tela (se apagou) e segura ela ligada enquanto o lote roda. Tela com senha/digital: o Android não deixa passar sozinho. */
+    private var screenWl: android.os.PowerManager.WakeLock? = null
+    @Suppress("DEPRECATION")
+    fun awake(on: Boolean) {
+        try {
+            if (on) {
+                if (screenWl?.isHeld == true) return
+                screenWl = getSystemService(android.os.PowerManager::class.java).newWakeLock(android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP, "leve:agendar")
+                    .apply { acquire(60 * 60 * 1000L) }
+            } else { screenWl?.let { if (it.isHeld) it.release() }; screenWl = null }
+        } catch (e: Exception) { ErrLog.log(this, "tela ligada", e) }
+    }
 
     /** Um toque: agenda no Threads todos os posts do lote que faltam. */
     fun runBatchAuto() {
+        awake(true)
         panelShow()
+        nextAutoAt = 0L
         autoRunning = true; autoDone = 0; Store.prefs(this).edit().putString("agendar_log", "").apply()
         // rodada nova: quem falhou antes ganha outra chance
         val l = Batch.load(this); l.forEach { it.remove("fails"); it.remove("err") }; Batch.save(this, l)
         nextAuto()
     }
-    fun stopBatchAuto(why: String) { autoRunning = false; composeUntil = 0; show("🤖 $why", 0xEEB45309.toInt()); h.postDelayed({ if (!running && !forcing) clearOverlay() }, 10000) }
+    fun stopBatchAuto(why: String) { autoRunning = false; composeUntil = 0; awake(false); show("🤖 $why", 0xEEB45309.toInt()); h.postDelayed({ if (!running && !forcing) clearOverlay() }, 10000) }
 
+    private var nextAutoAt = 0L
     private fun nextAuto() {
         if (!autoRunning) return
+        val t = System.currentTimeMillis(); if (t - nextAutoAt < 5000) return; nextAutoAt = t   // 2 chamadas juntas = 2 robôs: só a 1ª vale
         Batch.refreshTimes(this)
         val l = Batch.load(this)
         fun pending(it: org.json.JSONObject) = !it.optBoolean("done") && it.optLong("sent") == 0L && it.optInt("fails") < 2
@@ -1116,7 +1141,10 @@ class ScreenReader : AccessibilityService() {
     }
 
     /** Esse post ficou agendado: anota (agenda + lote + histórico) e vai pro próximo. */
+    private var okToken = -1L
     private fun autoOk() {
+        if (okToken == cArmAt) return   // esse post já foi dado como agendado
+        okToken = cArmAt
         composeUntil = 0
         val at = cTarget; val cap = cCap
         Thread { try { Agenda.addDetected(this, at, cap) } catch (e: Exception) { ErrLog.log(this, "agenda", e) } }.start()
@@ -1157,8 +1185,8 @@ class ScreenReader : AccessibilityService() {
         // áreas: só dizem a COLUNA; a faixa do meio vem da rodinha (um quadrado torto não lê a linha errada)
         val r = if (areas != null) AgendaCore.areaRead(all.filter { n -> rect(n).centerY() in top..bottom && n !== title }.map { AgendaCore.WItem(t(it), rect(it).centerX(), rect(it).centerY()) },
                 areas.map { it.centerX() }, areas.map { it.width() / 2 + dpx(12) }, band, java.time.LocalDate.now())
-                ?: AgendaCore.wheelRead(all.filter { n -> rect(n).centerY() in top..bottom && n !== title }.map { AgendaCore.WItem(t(it), rect(it).centerX(), rect(it).centerY()) }, band, dpx(45), java.time.LocalDate.now())
-            else AgendaCore.wheelRead(all.filter { n -> rect(n).centerY() in top..bottom && n !== title }.map { AgendaCore.WItem(t(it), rect(it).centerX(), rect(it).centerY()) }, band, dpx(45), java.time.LocalDate.now())
+                ?: AgendaCore.wheelRead(all.filter { n -> rect(n).centerY() in top..bottom && n !== title }.map { AgendaCore.WItem(t(it), rect(it).centerX(), rect(it).centerY()) }, band, dpx(45), java.time.LocalDate.now(), wheels.map { rect(it).left..rect(it).right })
+            else AgendaCore.wheelRead(all.filter { n -> rect(n).centerY() in top..bottom && n !== title }.map { AgendaCore.WItem(t(it), rect(it).centerX(), rect(it).centerY()) }, band, dpx(45), java.time.LocalDate.now(), wheels.map { rect(it).left..rect(it).right })
         lastSheet = Triple(r, band, wheels.size)
         // 🧠 o mesmo cérebro treinado no simulador (SheetPilot)
         val pilot = cPilot ?: SheetPilot(z, wb(), db(), { c -> AgendarTreino.rowsAtOnce(this, c) }, hb = hb(), g = Genome.load(Store.prefs(this).getString("ag_genome", null) ?: TreinoPronto.GENOMA),
@@ -1315,7 +1343,9 @@ class ScreenReader : AccessibilityService() {
         val items = all.filter { n -> rect(n).centerY() in top..bottom && n !== title }.map { AgendaCore.WItem(t(it), rect(it).centerX(), rect(it).centerY()) }
         val wheels = all.filter { it.isScrollable && rect(it).centerY() in top..bottom }
         val band = wheels.map { rect(it).centerY() }.sorted().let { if (it.isEmpty()) (top + bottom) / 2 else it[it.size / 2] }
-        val r = AgendaCore.wheelRead(items, band, dpx(45), today)
+        val r = AgendaCore.wheelRead(items, band, dpx(45), today, wheels.map { rect(it).left..rect(it).right })
+            // 🧠 mesclado: o antigo não leu → tenta a leitura do novo (as áreas 🎯 dizem qual coluna é qual)
+            ?: loadAreas()?.let { a -> AgendaCore.areaRead(items, a.map { it.centerX() }, a.map { it.width() / 2 + dpx(12) }, band, today) }?.also { clog("🧠 li pelas áreas 🎯 (o antigo não reconheceu as colunas)", emptyList()) }
         lastSheet = Triple(r, band, wheels.size)
         if (r == null) { if (cTries % 6 == 0) saveTree(all, "rodinhas: não reconheci as colunas"); return false }
         val sig = r.toString()
@@ -1472,6 +1502,23 @@ class ScreenReader : AccessibilityService() {
         fun act(n: AccessibilityNodeInfo, what: String): Boolean { clog(what, all); val ok = tap(n); if (ok) cTapAt = now; return ok }
         if (cTries == 0) saveTree(all, "tela de agendar")
         if (wheelSheet(all, now, again)) return
+        // 🧠 a folha do Agendar FECHOU (um arrasto pra baixo fecha a folha) e voltou pro post: reabre
+        // — pela linha "Posting/Today 4:43 PM" do post, ou pelo ⋯ › Agendar de novo
+        val sheet = all.any { Regex("^(schedule post|schedule thread|agendar post|agendar publicação|programar publicação)$").matches(lab(it)) }
+        if (!sheet && all.any { it.isEditable }) {
+            val n = (cWheel["semFolha"] ?: 0) + 1; cWheel["semFolha"] = n
+            if (n >= 5) { // ~2 s sem folha (dá tempo dela abrir depois do toque no Agendar)
+                cWheel["semFolha"] = 0; cWheel["reabriu"] = (cWheel["reabriu"] ?: 0) + 1
+                if ((cWheel["reabriu"] ?: 0) > 6) { cFail("A folha do Agendar fecha sozinha.", all); return }
+                val nowZ = java.time.ZonedDateTime.now()
+                val row = all.firstOrNull { x -> AgendaCore.parsePostingRow(((x.text ?: x.contentDescription) ?: "").toString(), nowZ) != null }
+                wLast = null; wOkSig = ""; wSettle = ""
+                if (row != null && tap(row)) { clog("a folha do Agendar fechou: reabri pela linha do horário", all); cTapAt = now }
+                else { clog("a folha do Agendar fechou: volto pro ⋯ › Agendar", all); cStep = 5; cTries = 0 }
+            }
+            again(); return
+        }
+        cWheel["semFolha"] = 0
         val texts = textsOf(all)
         val sel = all.filter { it.isSelected || it.isChecked || it.isEditable }.mapNotNull { (it.text ?: it.contentDescription)?.toString() }
         // ---- calendário aberto? (dias com data completa na descrição, ou grade de números 1..31 com "Mês Ano" em cima)
@@ -2068,7 +2115,7 @@ class ScreenReader : AccessibilityService() {
         val top = rect(title).bottom; val bottom = rect(done).top
         val wheels = all.filter { it.isScrollable && rect(it).centerY() in top..bottom }
         val band = wheels.map { rect(it).centerY() }.sorted().let { if (it.isEmpty()) (top + bottom) / 2 else it[it.size / 2] }
-        return AgendaCore.wheelRead(all.filter { rect(it).centerY() in top..bottom }.map { AgendaCore.WItem(l(it), rect(it).centerX(), rect(it).centerY()) }, band, dpx(45), java.time.LocalDate.now())
+        return AgendaCore.wheelRead(all.filter { rect(it).centerY() in top..bottom }.map { AgendaCore.WItem(l(it), rect(it).centerX(), rect(it).centerY()) }, band, dpx(45), java.time.LocalDate.now(), wheels.map { rect(it).left..rect(it).right })
     }
     private fun teachEvent(e: AccessibilityEvent) {
         val root = rootInActiveWindow ?: return
@@ -2147,7 +2194,7 @@ class ScreenReader : AccessibilityService() {
         // venha de onde vier (robô, link, Compartilhar). Essas janelas não são do Threads: não passam pro resto do leitor.
         if (ep != null && ep != ThreadsNotif.THREADS && ep != ThreadsNotif.INSTA && ep != packageName) {
             if (e.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && DualApp.on(this) && System.currentTimeMillis() - dualPickAt > 2500) {
-                dualPickAt = System.currentTimeMillis(); pickChooser(6)
+                dualPickAt = System.currentTimeMillis(); pickChooser(3)
             }
             return
         }

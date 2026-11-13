@@ -75,7 +75,7 @@ class LoteRealTest {
             post(if (cStep == 6) stepMs + 30 else 700) { if (composeUntil > t) composeStep() }
         }
 
-        private fun read(): AgendaCore.WRead? { sim.now = t; return sim.screenOrNull()?.let { AgendaCore.wheelRead(it, sim.band, 124, sim.today) } }
+        private fun read(): AgendaCore.WRead? { sim.now = t; return sim.screenOrNull()?.let { AgendaCore.wheelRead(it, sim.band, 135, sim.today, if (System.getenv("COLS") == "distancia") emptyList() else sim.wheelsX) } }
 
         fun composeStep() {
             val now = t

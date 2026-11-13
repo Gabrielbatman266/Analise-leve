@@ -217,10 +217,22 @@ object AgendaCore {
      * Lê as rodinhas: agrupa os textos em colunas pela posição e pega, em cada uma, o item que está na faixa [band].
      * null = a tela não tem as colunas de dia + hora + minuto.
      */
-    fun wheelRead(items0: List<WItem>, band: Int, colGap: Int, today: LocalDate): WRead? {
+    /**
+     * [wheelsX]: a faixa horizontal (left..right) de cada rodinha rolável da tela. Quando vem (3+), cada número vai pra rodinha
+     * que o contém — sem adivinhar pela distância. No Xiaomi a hora e o minuto ficam a ~120 px um do outro e a distância
+     * de 45 dp (~124–135 px) juntava as duas colunas → "não reconheci as colunas" / rodinhas "?".
+     */
+    fun wheelRead(items0: List<WItem>, band: Int, colGap: Int, today: LocalDate, wheelsX: List<IntRange> = emptyList()): WRead? {
         val items = items0.filter { wheelLike(it.text.trim(), today) }
         val cols = ArrayList<MutableList<WItem>>()
-        for (it in items.sortedBy { it.cx }) { val c = cols.firstOrNull { col -> Math.abs(col.first().cx - it.cx) < colGap }; if (c != null) c += it else cols += mutableListOf(it) }
+        val ranges = wheelsX.filter { it.last - it.first > 20 }.sortedBy { it.first }
+        if (ranges.size >= 3) {
+            ranges.forEach { rg -> items.filter { it.cx in rg }.takeIf { it.isNotEmpty() }?.let { cols += it.toMutableList() } }
+        } else {
+            // sem as rodinhas: separa onde há um VÃO entre os centros (vizinho a vizinho), com no máximo 28 dp
+            val gap = minOf(colGap, colGap * 28 / 45)
+            for (it in items.sortedBy { it.cx }) { val c = cols.lastOrNull(); if (c != null && it.cx - c.maxOf { x -> x.cx } < gap) c += it else cols += mutableListOf(it) }
+        }
         val dateCol = cols.firstOrNull { c -> c.count { wheelDate(it.text, today) != null && !W_NUM.matches(it.text.trim()) } >= maxOf(1, (c.size + 1) / 2) } ?: return null
         val ampmCol = cols.firstOrNull { c -> c !== dateCol && c.all { W_AMPM.matches(it.text.trim()) } }
         val nums = cols.filter { c -> c !== dateCol && c !== ampmCol && c.all { W_NUM.matches(it.text.trim()) } }.sortedBy { it.first().cx }
