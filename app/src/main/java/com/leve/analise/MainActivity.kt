@@ -371,6 +371,12 @@ class MainActivity : Activity() {
                 .setPositiveButton("Começar") { _, _ -> toast(Macro.startInstagram(this)) }.setNegativeButton("Cancelar", null).show()
         }
         val crO = sub(crk, "⚙ Opções do leitor de tela (📖 ler, 🎓 ensinar, ✍ legenda)")
+        // 🫥 ícones flutuantes: o 📖🎓 da borda e o painel do robô (⏸ 🧠 🎯 ✕). Escondidos, o robô continua trabalhando igual.
+        chips(crO, listOf("🫥 Esconder ícones flutuantes", "Mostrar ícones"), { if (!Macro.readBtn(this) && !Store.prefs(this).getBoolean("panel_on", true)) "🫥 Esconder ícones flutuantes" else "Mostrar ícones" }) {
+            val hide = it.startsWith("🫥"); Macro.setReadBtn(this, !hide); Store.prefs(this).edit().putBoolean("panel_on", !hide).apply()
+            if (hide) ScreenReader.instance?.panelHide()
+        }
+        text("🫥 Some o 📖🎓 da borda e o painel do robô (⏸ 🧠 🎯). O robô agenda igual; só não dá pra pausar/corrigir no meio. No painel também tem o ✕ pra esconder só nessa vez.", 12f, MUTED, parent = crO)
         chips(crO, listOf("Ler todos os meus posts", "Só os do app"), { if (Macro.readAll(this)) "Ler todos os meus posts" else "Só os do app" }) { Macro.setReadAll(this, it.startsWith("Ler")) }
         text("✋ Modo manual: role e abra os posts você mesmo; quando o leitor captar, aparece um aviso verde.", 12f, MUTED, parent = crO)
         text("📖 Forçar leitura: no Threads/Instagram aparece um botãozinho 📖 na borda. Abra o post ou o \"Ver insights\" e toque nele: lê, espera carregar, lê de novo, desce pra ver o resto e guarda (até post feito fora do app). Arraste pra mudar de lugar; segure pra esconder 30 min.", 12f, MUTED, parent = crO)

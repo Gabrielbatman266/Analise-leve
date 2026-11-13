@@ -256,7 +256,7 @@ class ScreenReader : AccessibilityService() {
     companion object { @Volatile var instance: ScreenReader? = null }
     private var last = 0L
 
-    override fun onServiceConnected() { super.onServiceConnected(); instance = this }
+    override fun onServiceConnected() { super.onServiceConnected(); instance = this; try { restoreGood(); saveTeach() } catch (e: Exception) { } } // 💾 guarda a config que está dando certo
     override fun onDestroy() { instance = null; hideReadBtn(); super.onDestroy() }
 
     // ================= 📖 botão "Ler agora" (aparece só no Threads/Instagram) =================
@@ -1093,7 +1093,7 @@ class ScreenReader : AccessibilityService() {
     @Volatile private var cPaused = false
     private var panel: android.widget.LinearLayout? = null
     fun panelShow() {
-        if (panel != null) return
+        if (panel != null || !Store.prefs(this).getBoolean("panel_on", true)) return
         try {
             val p = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL; setPadding(dpx(6), dpx(6), dpx(6), dpx(6))
                 background = android.graphics.drawable.GradientDrawable().apply { setColor(0xEE1C1C24.toInt()); cornerRadius = dpx(22).toFloat(); setStroke(dpx(1), 0x55FFFFFF) } }
@@ -1131,6 +1131,7 @@ class ScreenReader : AccessibilityService() {
                 val old = !AgendarTreino.oldBrain(this); AgendarTreino.setOldBrain(this, old); v.text = if (old) "🧠M" else "🧠N"; cPilot = null; wLast = null; wOkSig = ""
                 show(if (old) "🧠 MESCLADO: o antigo mexe nas rodinhas, o novo ajuda a ler (áreas 🎯), e reabre o Agendar se fechar" else "🧠 Cérebro NOVO (treinado no simulador)", 0xEE7C3AED.toInt()) }
             b("🎯", 0xFF5B9DFF.toInt()) { areasEdit() }
+            b("✕", 0xFF8F94A3.toInt()) { panelHide(); show("🎛 Painel escondido (o robô continua). Pra sumir sempre: Post Leve › ⚙ Opções do leitor › Ícones flutuantes") }
             b("✓", 0xFF4CC68E.toInt()) { AgendarTreino.add(this, true, "você marcou", cTarget, "✓ certo (passo $cStep)"); judgeDone(true, "você marcou certo"); show("✓ anotado como CERTO", 0xEE15803D.toInt()) }
             b("✗", 0xFFFF5A5A.toInt()) { AgendarTreino.add(this, false, "você marcou", cTarget, "✗ errado (passo $cStep, rodinhas: ${wOkSig.ifEmpty { "?" }})"); judgeDone(false, "você marcou errado"); show("✗ anotado como ERRADO: toque em ⏸ Corrigir pra me mostrar", 0xEEB45309.toInt()) }
             val lp = android.view.WindowManager.LayoutParams(-2, -2, android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -1185,6 +1186,15 @@ class ScreenReader : AccessibilityService() {
         fun pending(it: org.json.JSONObject) = !it.optBoolean("done") && it.optLong("sent") == 0L && it.optInt("fails") < 2
         val o = l.firstOrNull { pending(it) }
         if (o == null) { finishAuto(); return }
+        // 📅 limite de 25 agendados no Threads: cheio → para e volta sozinho quando o mais cedo sair
+        val cap = ScheduleCap.plan(this)
+        if (cap.free == 0) {
+            cap.resumeAt?.let { ScheduleCap.resumeAt(this, it) }
+            clog("📅 Threads cheio (${cap.waiting}/${ScheduleCapCore.CAP}): paro e volto ${cap.resumeAt?.let { AgendaCore.fmt(it) } ?: "depois"}", emptyList())
+            if (autoDone > 0) { stopBatchAuto("✓ $autoDone agendado(s). O Threads chegou em ${cap.waiting}/${ScheduleCapCore.CAP}: volto sozinho ${cap.resumeAt?.let { AgendaCore.fmt(it) } ?: "quando um sair"} pro resto."); h.postDelayed({ panelHide() }, 8000); return }
+            stopBatchAuto("O Threads já tem ${cap.waiting} agendados (o limite é ${ScheduleCapCore.CAP}). Volto sozinho ${cap.resumeAt?.let { AgendaCore.fmt(it) } ?: "quando um sair"} e agendo o resto.")
+            return
+        }
         val at = o.optLong("at"); val left = l.count { pending(it) }
         autoItemId = o.optString("id")
         try {
@@ -2221,12 +2231,31 @@ class ScreenReader : AccessibilityService() {
         val p = Store.prefs(this)
         val o = org.json.JSONObject().put("ensino", p.getString("ensino", "[]")).put("salvo", System.currentTimeMillis())
         for (k in listOf("ensino_sobe", "ensino_sobe_0", "ensino_sobe_1", "ensino_sobe_2", "ensino_sobe_3")) if (p.contains(k)) o.put(k, p.getInt(k, 1))
+        // 💾 a config que deu certo: cérebro, jeito do Done, cérebro do 'Abrir com', áreas, velocidade, app duplo
+        for (k in GOOD_STR) p.getString(k, null)?.let { o.put("s_$k", it) }
+        for (k in GOOD_INT) if (p.contains(k)) o.put("i_$k", p.getInt(k, 0))
+        if (p.contains("dual_on")) o.put("b_dual_on", p.getBoolean("dual_on", true))
         try { java.io.File(filesDir, "ensino_agendar.json").writeText(o.toString()) } catch (x: Exception) { }
         p.edit().putLong("ensino_salvo", System.currentTimeMillis()).apply()
     }
     /** Volta a configuração salva se a atual sumiu. */
+    private val GOOD_STR = listOf("ag_cerebro_modo", "dual_brain", "ag_areas")
+    private val GOOD_INT = listOf("ag_done_how", "ag_speed")
+    /** 💾 Volta a config que deu certo pra cada item que sumiu (não mexe no que existe). */
+    fun restoreGood() {
+        val p = Store.prefs(this)
+        try {
+            val o = org.json.JSONObject(java.io.File(filesDir, "ensino_agendar.json").readText())
+            val e = p.edit()
+            for (k in GOOD_STR) if (!p.contains(k) && o.has("s_$k")) e.putString(k, o.getString("s_$k"))
+            for (k in GOOD_INT) if (!p.contains(k) && o.has("i_$k")) e.putInt(k, o.getInt("i_$k"))
+            if (!p.contains("dual_on") && o.has("b_dual_on")) e.putBoolean("dual_on", o.getBoolean("b_dual_on"))
+            e.apply()
+        } catch (x: Exception) { }
+    }
     private fun loadTeach() {
         val p = Store.prefs(this)
+        restoreGood()
         if ((p.getString("ensino", "") ?: "").length > 2) return
         try {
             val o = org.json.JSONObject(java.io.File(filesDir, "ensino_agendar.json").readText())
