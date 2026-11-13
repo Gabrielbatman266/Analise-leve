@@ -13,9 +13,21 @@ object AgendarTreino {
     fun all(c: Context): List<JSONObject> = JsonFile.peek(f(c))
 
     /** ok = deu certo; etapa = onde (rodinhas, done, post, lista…); info = o que leu/fez. */
+    // 🧠 qual cérebro mexe nas rodinhas: o ANTIGO (o 1º que deu certo, padrão) ou o NOVO (treinado no simulador)
+    fun oldBrain(c: Context) = Store.prefs(c).getBoolean("ag_cerebro_antigo", true)
+    fun setOldBrain(c: Context, v: Boolean) = Store.prefs(c).edit().putBoolean("ag_cerebro_antigo", v).apply()
+    private fun brain(c: Context) = if (oldBrain(c)) "antigo" else "novo"
+
+    /** Placar dos dois cérebros (exemplos gravados desde que o botão 🧠 existe). */
+    fun compare(c: Context): String = listOf("antigo", "novo").joinToString(" × ") { b ->
+        val l = all(c).filter { it.optString("cerebro") == b && it.optString("etapa").let { e -> e != "voto" && e != "lista" && (!e.startsWith("passo ") || e == "passo 6") } }
+        val ok = l.count { it.optBoolean("ok") }
+        "$b ✓$ok ✗${l.size - ok}" + (if (l.isNotEmpty()) " (${ok * 100 / l.size}%)" else "")
+    }
+
     fun add(c: Context, ok: Boolean, etapa: String, alvo: Long, info: String) {
         JsonFile.edit(f(c)) { l ->
-            l.add(JSONObject().put("at", System.currentTimeMillis()).put("ok", ok).put("etapa", etapa).put("alvo", alvo).put("info", info.take(300))
+            l.add(JSONObject().put("at", System.currentTimeMillis()).put("ok", ok).put("etapa", etapa).put("alvo", alvo).put("info", info.take(300)).put("cerebro", brain(c))
                 .put("espera", settleMs(c)))
             while (l.size > 300) l.removeAt(0)
         }
@@ -48,6 +60,6 @@ object AgendarTreino {
         val ok = l.count { it.optBoolean("ok") }; val bad = l.size - ok
         val last = l.takeLast(6).joinToString(" | ") { (if (it.optBoolean("ok")) "✓" else "✗") + " " + it.optString("etapa") + ": " + it.optString("info").take(70) }
         val bd = Store.prefs(c).getString("ag_bandit_done", "") ?: ""
-        return "jeito por coluna (0 comando,1 tocar,2 arrastar): ${Store.prefs(c).getString("ag_bandit_how", "-")} · aprendido: ${Store.prefs(c).getString("ag_bandit", "")?.take(400)} · Done: ${bd.take(120)} · velocidade ${SPEEDS[speed(c)]} · votos: ${votes(c)} · ✓ $ok certo(s) · ✗ $bad errado(s) · espera a rodinha parar ${settleMs(c)} ms · últimos: $last"
+        return "🧠 cérebro em uso: ${brain(c)} · placar ${compare(c)} · jeito por coluna (0 comando,1 tocar,2 arrastar): ${Store.prefs(c).getString("ag_bandit_how", "-")} · aprendido: ${Store.prefs(c).getString("ag_bandit", "")?.take(400)} · Done: ${bd.take(120)} · velocidade ${SPEEDS[speed(c)]} · votos: ${votes(c)} · ✓ $ok certo(s) · ✗ $bad errado(s) · espera a rodinha parar ${settleMs(c)} ms · últimos: $last"
     }
 }

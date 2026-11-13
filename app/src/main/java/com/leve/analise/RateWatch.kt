@@ -692,7 +692,7 @@ class ScreenReader : AccessibilityService() {
     private fun composeStep() {
         val now = System.currentTimeMillis(); if (now - cLast < 600) return; cLast = now
         if (cPaused) { composeUntil = maxOf(composeUntil, now + 120_000L); h.postDelayed({ composeStep() }, 1000); return }
-        val wait = if (cStep == 6) AgendarTreino.stepMs(this) else 1500L // nas rodinhas o comando é instantâneo: relê logo
+        val wait = if (cStep == 6) (if (AgendarTreino.oldBrain(this)) 350L else AgendarTreino.stepMs(this)) else 1500L // nas rodinhas o comando é instantâneo: relê logo
         if (now - cTapAt < wait) { h.postDelayed({ composeStep() }, wait + 50); return } // espera a tela reagir ao último toque
         val root = rootInActiveWindow
         if (root == null || root.packageName?.toString() != ThreadsNotif.THREADS) {
@@ -1052,6 +1052,9 @@ class ScreenReader : AccessibilityService() {
                     } else show("▶ Nada pra seguir: toque em 🤖 Agendar todos", 0xEEB45309.toInt())
                 }
             }
+            b(if (AgendarTreino.oldBrain(this)) "🧠A" else "🧠N", 0xFFFFD166.toInt()) { v ->
+                val old = !AgendarTreino.oldBrain(this); AgendarTreino.setOldBrain(this, old); v.text = if (old) "🧠A" else "🧠N"; cPilot = null; wLast = null; wOkSig = ""
+                show(if (old) "🧠 Cérebro ANTIGO (o 1º que deu certo): só o comando de rolar, 1 linha por vez" else "🧠 Cérebro NOVO (treinado no simulador)", 0xEE7C3AED.toInt()) }
             b("🎯", 0xFF5B9DFF.toInt()) { areasEdit() }
             b("✓", 0xFF4CC68E.toInt()) { AgendarTreino.add(this, true, "você marcou", cTarget, "✓ certo (passo $cStep)"); judgeDone(true, "você marcou certo"); show("✓ anotado como CERTO", 0xEE15803D.toInt()) }
             b("✗", 0xFFFF5A5A.toInt()) { AgendarTreino.add(this, false, "você marcou", cTarget, "✗ errado (passo $cStep, rodinhas: ${wOkSig.ifEmpty { "?" }})"); judgeDone(false, "você marcou errado"); show("✗ anotado como ERRADO: toque em ⏸ Corrigir pra me mostrar", 0xEEB45309.toInt()) }
@@ -1132,6 +1135,7 @@ class ScreenReader : AccessibilityService() {
      * Devolve false se a tela não for essa (aí tenta os outros tipos de seletor).
      */
     private fun wheelSheet(all: List<AccessibilityNodeInfo>, now: Long, again: () -> Unit): Boolean {
+        if (AgendarTreino.oldBrain(this)) return oldWheelSheet(all, now, again)
         fun t(n: AccessibilityNodeInfo) = (n.text ?: n.contentDescription ?: "").toString().trim()
         val title = all.firstOrNull { Regex("^(schedule post|schedule thread|agendar post|agendar thread|agendar publicação|agendar publicacao|programar publicação)$", RegexOption.IGNORE_CASE).matches(t(it)) && !it.isClickable } ?: return false
         val done = all.filter { Regex("^(done|concluir|concluído|concluido|ok|pronto)$", RegexOption.IGNORE_CASE).matches(t(it)) }.maxByOrNull { rect(it).top } ?: return false
@@ -1286,6 +1290,71 @@ class ScreenReader : AccessibilityService() {
         } catch (e: Exception) { ErrLog.log(this, "áreas de toque", e) }
     }
 
+    /**
+     * 🧠 CÉREBRO ANTIGO (o primeiro que deu certo, versão de 12/11 23:15): só o COMANDO de rolar da acessibilidade,
+     * vários passos de 1 linha de uma vez, relê e corrige. Arrasta só se o comando não funcionar naquela coluna.
+     * Única mudança: só toca no Done quando lê a data/hora certa 2 vezes seguidas (rodinha parada).
+     */
+    private fun oldWheelSheet(all: List<AccessibilityNodeInfo>, now: Long, again: () -> Unit): Boolean {
+        fun t(n: AccessibilityNodeInfo) = (n.text ?: n.contentDescription ?: "").toString().trim()
+        val title = all.firstOrNull { Regex("^(schedule post|schedule thread|agendar post|agendar thread|agendar publicação|agendar publicacao|programar publicação)$", RegexOption.IGNORE_CASE).matches(t(it)) && !it.isClickable } ?: return false
+        val done = all.filter { Regex("^(done|concluir|concluído|concluido|ok|pronto)$", RegexOption.IGNORE_CASE).matches(t(it)) }.maxByOrNull { rect(it).top } ?: return false
+        val top = rect(title).bottom; val bottom = rect(done).top
+        val z = java.time.Instant.ofEpochMilli(cTarget).atZone(java.time.ZoneId.systemDefault())
+        val today = java.time.LocalDate.now()
+        val items = all.filter { n -> rect(n).centerY() in top..bottom && n !== title }.map { AgendaCore.WItem(t(it), rect(it).centerX(), rect(it).centerY()) }
+        val wheels = all.filter { it.isScrollable && rect(it).centerY() in top..bottom }
+        val band = wheels.map { rect(it).centerY() }.sorted().let { if (it.isEmpty()) (top + bottom) / 2 else it[it.size / 2] }
+        val r = AgendaCore.wheelRead(items, band, dpx(45), today)
+        lastSheet = Triple(r, band, wheels.size)
+        if (r == null) { if (cTries % 6 == 0) saveTree(all, "rodinhas: não reconheci as colunas"); return false }
+        val sig = r.toString()
+        val last = wLast
+        if (last != null) {
+            val (col, before, how) = last
+            if (before == sig) { wStuck[col] = (wStuck[col] ?: 0) + 1; if (how == "acao") wGesture.add(col); if (col == 1) wNoWrap.add(1) } else wStuck.remove(col)
+        }
+        if (wLast?.second != sig) composeUntil = maxOf(composeUntil, System.currentTimeMillis() + 90_000L)
+        val next = AgendaCore.wheelNext(r, z, wNoWrap)
+        if (sig != wLastSig) { wLastSig = sig; clog("🧠antigo rodinhas: $sig · alvo " + AgendaCore.fmt(cTarget) + (next?.let { " → coluna ${it.first} ${if (it.second > 0) "+" else ""}${it.second}" } ?: " → certo"), emptyList()) }
+        if (next == null) {
+            wLast = null
+            if (wOkSig != sig) { wOkSig = sig; cTapAt = now; again(); return true } // confere de novo (rodinha parada)
+            clog("🧠antigo: certo e parado ($sig) → Done", emptyList())
+            rect(clickable(done) ?: done).let { markDot(it.exactCenterX(), it.exactCenterY(), 0xFFFFD166.toInt()) }
+            if (click(done) || tapCenter(done)) { cStep = 7; cTries = 0; cTapAt = now; cDoneAt = now; cDoneSig = sig }
+            again(); return true
+        }
+        wOkSig = ""
+        val (col, diff) = next
+        if ((wStuck[col] ?: 0) >= 4) { saveTree(all, "rodinha $col não anda: $sig"); cFail("A rodinha ${listOf("do dia", "da hora", "do minuto", "AM/PM")[col]} não anda.", all); return true }
+        val dir = if (diff > 0) 1 else -1
+        val x = r.colX.getOrNull(col) ?: return false
+        val wheel = wheels.filter { rect(it).left <= x && rect(it).right >= x }.minByOrNull { rect(it).width() }
+        val n = minOf(Math.abs(diff), when (col) { 3 -> 1; 1 -> 6; else -> 12 })
+        var how = "gesto"
+        if (wheel != null && col !in wGesture) {
+            var ok = true
+            repeat(n) { if (ok) ok = wheel.performAction(if (dir > 0) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) }
+            if (ok) { how = "acao"; markDot(x.toFloat(), band.toFloat(), 0xFF5B9DFF.toInt()) }
+            else {
+                wNoWrap.add(col); clog("rodinha $col: fim pra ${if (dir > 0) "baixo" else "cima"}", emptyList())
+                wLast = Triple(col, sig, "fim"); cTapAt = now - 600; again(); return true
+            }
+        }
+        if (how == "gesto") {
+            val up = Store.prefs(this).getInt("ensino_sobe_$col", Store.prefs(this).getInt("ensino_sobe", 1))
+            val g = minOf(n, 3)
+            val dy = -dir * up * g * r.rowH.toFloat(); val dur = (g * 600L).coerceAtLeast(500L)
+            val path = android.graphics.Path().apply { moveTo(x.toFloat(), band.toFloat()); lineTo(x.toFloat(), band + dy) }
+            try { dispatchGesture(android.accessibilityservice.GestureDescription.Builder().addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, dur)).build(), null, null) } catch (e: Exception) { }
+            markLine(x.toFloat(), band.toFloat(), band + dy)
+            cTapAt = now + dur
+        } else cTapAt = now
+        wLast = Triple(col, sig, how)
+        if (cTries % 15 == 14) saveTree(all, "rodinhas: $sig")
+        again(); return true
+    }
     private var wLast: Triple<Int, String, String>? = null
     // 🎯 aprendizado: rodinhas (quantas linhas por vez) e Done (quanto esperar), salvos no celular
     private data class Quad(val col: Int, val before: Int, val arm: Int, val key: String)
