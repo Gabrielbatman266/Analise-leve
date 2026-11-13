@@ -14,7 +14,10 @@ import java.time.ZonedDateTime
  *  - cada comando anda 1 linha, mas mandar muitos de uma vez às vezes ESCORREGA e anda a mais;
  *  - a tela mostra o valor ANTIGO por um tempo enquanto a rodinha anima (ler cedo demais engana);
  *  - Done CINZA quando o horário escolhido já passou (ou está a menos de 5 min);
- *  - a folha abre com o horário do post anterior (o "3º post" que voltava a data).
+ *  - a folha abre com o horário do post anterior (o "3º post" que voltava a data);
+ *  - TOCAR no número de cima/baixo anda exatamente 1 linha (como o NumberPicker do Android);
+ *  - ARRASTAR embala (fling): metade das vezes passa do ponto, às vezes fica curto, e a animação é mais longa
+ *    (no celular de verdade o arrasto tirou nota −6,5; antes o simulador tratava o arrasto como perfeito).
  * O Done vale o que está DE VERDADE na rodinha (não o que a tela mostrava).
  */
 class SheetPilotTrainingTest {
@@ -73,8 +76,17 @@ class SheetPilotTrainingTest {
         /** true = andou ou "aceitou" (comando ignorado também devolve true, como no celular); false = fim da rodinha. */
         fun act(col: Int, dir: Int, rows: Int, how: Int): Boolean {
             if (!works[col][how]) { now += 60; return true }       // ignorou: não mexe nada (o pior caso: nem avisa)
-            return scroll(col, dir, if (how == 1) minOf(rows, 2) else rows)
+            return when (how) {
+                // tocar no número de cima/baixo: como no NumberPicker do Android, cada toque anda EXATAMENTE 1 linha
+                1 -> scroll(col, dir, 1)
+                // arrastar: o dedo solta com velocidade → a rodinha embala (fling) e para onde quiser: passa do ponto ou fica curta
+                2 -> { val f = rnd.nextDouble(); val n = when { f < dragOver -> rows + 1 + rnd.nextInt(maxOf(1, rows)); f < dragOver + 0.15 -> maxOf(1, rows - 1); else -> rows }
+                       val ok = scroll(col, dir, n); animUntil += dragLagMs; ok }
+                else -> scroll(col, dir, rows)
+            }
         }
+        /** Arrasto real (fling): chance de passar do ponto e animação mais longa. */
+        var dragOver = 0.5; var dragLagMs = 500L
         private fun screen24(): List<AgendaCore.WItem> {
             if (now >= animUntil) { shown = Triple(day, hPos, min); shownPm = pm }
             val out = ArrayList<AgendaCore.WItem>()
@@ -266,5 +278,58 @@ class SheetPilotTrainingTest {
         val out = "EVOLUCAO melhor genoma ${best.save()} · prova: ${"%.2f".format(proof.second)}% em 1800 posts brutais · ${"%.1f".format(proof.third)} s/post\n$hist"
         println(out); java.io.File("build/treino_evolucao.txt").writeText(out)
         assertTrue(out, proof.second >= 97.0)
+    }
+
+    /** 🧠 o cérebro ANTIGO (RateWatch.oldWheelSheet) rodando no mesmo simulador: comando de 1 linha, vários de uma vez, relê a cada 350 ms. */
+    private fun oldEpisode(sim: Sim, target: ZonedDateTime, clock: ZonedDateTime): Result {
+        val noWrap = HashSet<Int>(); val stuck = HashMap<Int, Int>(); val gesture = HashSet<Int>()
+        var last: Triple<Int, String, String>? = null; var okSig = ""; var reopen = 0; val t0 = sim.now
+        while (true) {
+            if (sim.now - t0 > 240_000) return Result(false, sim.now, "demorou")
+            sim.now += 350
+            val r = sim.screenOrNull()?.let { AgendaCore.wheelRead(it, sim.band, 124, sim.today) } ?: continue
+            val sig = r.toString()
+            last?.let { (c, b, how) -> if (b == sig) { stuck[c] = (stuck[c] ?: 0) + 1; if (how == "acao") gesture.add(c); if (c == 1) noWrap.add(1) } else { stuck.remove(c) }; Unit }
+            val next = AgendaCore.wheelNext(r, target, noWrap)
+            if (next == null) {
+                last = null
+                if (okSig != sig) { okSig = sig; continue }
+                if (!sim.doneEnabled(clock)) return Result(false, sim.now, "não aceita")
+                if (sim.at() == target) return Result(true, sim.now, "")
+                if (++reopen > 3) return Result(false, sim.now, "post errado 4x"); sim.now += 1500; okSig = ""; continue
+            }
+            okSig = ""
+            val (col, diff) = next
+            if ((stuck[col] ?: 0) >= 4) return Result(false, sim.now, "rodinha $col não anda")
+            val dir = if (diff > 0) 1 else -1
+            val n = minOf(Math.abs(diff), when (col) { 3 -> 1; 1 -> 6; else -> 12 })
+            if (col !in gesture) {
+                if (!sim.act(col, dir, n, 0)) { noWrap += col; last = Triple(col, sig, "fim"); continue }
+                last = Triple(col, sig, "acao")
+            } else { sim.act(col, dir, minOf(n, 3), 2); sim.now += minOf(n, 3) * 600L; last = Triple(col, sig, "gesto") }
+        }
+    }
+
+    /** O celular do usuário (Xiaomi, pelo diagnóstico): comando anda 1 linha e funciona em todas; arrasto embala; animação ~300 ms. */
+    private fun xiaomi(rnd: java.util.Random, today: LocalDate) = Sim(today, rnd.nextInt(8), rnd.nextInt(12), rnd.nextInt(60), rnd.nextBoolean(),
+        hourWraps = false, slip = 0.05, lagMs = 250L + rnd.nextInt(250), rnd = rnd, readFail = 0.03, misread = 0.01)
+
+    @Test fun comparaNoXiaomi() {
+        val today = LocalDate.of(2026, 11, 13); val clock = ZonedDateTime.of(today, LocalTime.of(1, 0), zone)
+        fun run(name: String, f: (Sim, ZonedDateTime) -> Result): String {
+            val rnd = java.util.Random(777); var ok = 0; var n = 0; var ms = 0L; val fails = HashMap<String, Int>()
+            repeat(200) { val sim = xiaomi(rnd, today); repeat(6) {
+                val t = clock.plusMinutes(20L + rnd.nextInt(60 * 24 * 10)).withSecond(0).withNano(0); val t0 = sim.now
+                val r = f(sim, t); n++; ms += sim.now - t0; if (r.ok) ok++ else fails.merge(r.why, 1, Int::plus) } }
+            return "$name: ${"%.2f".format(ok * 100.0 / n)}% ($ok/$n) · ${"%.1f".format(ms / 1000.0 / n)} s/post · falhas $fails"
+        }
+        val g = Genome.load(TreinoPronto.GENOMA)
+        val out = listOf(
+            run("🧠 ANTIGO") { sim, t -> oldEpisode(sim, t, clock) },
+            run("🧠 NOVO (genoma de fábrica)") { sim, t -> episode(sim, t, clock, AgendaCore.Bandit.load(intArrayOf(1, 2, 4, 8, 12), null), AgendaCore.Bandit(intArrayOf(300, 600, 1000, 1600)), java.util.Random(1), g.explore, AgendaCore.Bandit(intArrayOf(0, 1, 2)), g) },
+            run("🧠 NOVO com comando 1º") { sim, t -> val g2 = g.copy(firstHow = 0, stableMs = 350); episode(sim, t, clock, AgendaCore.Bandit.load(intArrayOf(1, 2, 4, 8, 12), null), AgendaCore.Bandit(intArrayOf(300, 600, 1000, 1600)), java.util.Random(1), g2.explore, AgendaCore.Bandit(intArrayOf(0, 1, 2)), g2) },
+        ).joinToString("\n")
+        println(out); java.io.File("build/compara_xiaomi.txt").writeText(out)
+        assertTrue(out, out.lines()[0].contains("100.00%") || out.lines()[0].substringAfter(": ").substringBefore("%").toDouble() >= 99.0)
     }
 }
