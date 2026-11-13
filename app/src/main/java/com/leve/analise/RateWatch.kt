@@ -691,7 +691,7 @@ class ScreenReader : AccessibilityService() {
 
     private fun composeStep() {
         val now = System.currentTimeMillis(); if (now - cLast < 600) return; cLast = now
-        val wait = if (cStep == 6) 350L else 1500L // nas rodinhas o comando é instantâneo: relê logo
+        val wait = if (cStep == 6) AgendarTreino.stepMs(this) else 1500L // nas rodinhas o comando é instantâneo: relê logo
         if (now - cTapAt < wait) { h.postDelayed({ composeStep() }, wait + 50); return } // espera a tela reagir ao último toque
         val root = rootInActiveWindow
         if (root == null || root.packageName?.toString() != ThreadsNotif.THREADS) {
@@ -707,7 +707,7 @@ class ScreenReader : AccessibilityService() {
         val dm = resources.displayMetrics
         val editor = all.any { it.isEditable }
         val photosInEditor = all.filter { it.className?.toString()?.contains("Image") == true }.map { rect(it) }.filter { it.width() > dm.widthPixels * 0.35 && it.height() > dpx(150) }
-        fun again() { if (++cTries > (if (cStep == 6) 250 else if (cStep >= 7) 60 else 10)) { saveTree(all, "travou no passo $cStep"); cFail(when (cStep) { 1 -> "Toquei no + mas o post novo não abriu."; 2 -> "Não consegui anexar a foto."; 3 -> "Não consegui escolher a foto."; 4 -> "A legenda não entrou."; 5 -> "Não achei o ⋯ › Agendar."; 6 -> "Não consegui acertar a data/hora no Agendar."; else -> "O post não foi agendado." }, all); return }; h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, if (cStep == 6) 380 else if (cStep >= 7) 700 else 1500) }
+        fun again() { if (++cTries > (if (cStep == 6) 250 else if (cStep >= 7) 60 else 10)) { saveTree(all, "travou no passo $cStep"); cFail(when (cStep) { 1 -> "Toquei no + mas o post novo não abriu."; 2 -> "Não consegui anexar a foto."; 3 -> "Não consegui escolher a foto."; 4 -> "A legenda não entrou."; 5 -> "Não achei o ⋯ › Agendar."; 6 -> "Não consegui acertar a data/hora no Agendar."; else -> "O post não foi agendado." }, all); return }; h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, if (cStep == 6) AgendarTreino.stepMs(this) + 30 else if (cStep >= 7) 700 else 1500) }
         when (cStep) {
             0 -> { // veio pelo Compartilhar: a foto JÁ está no post (nunca anexa outra) → vai direto pra legenda
                 if (editor) { cStep = 4; cTries = 0; composeStep() } else again()
@@ -894,7 +894,7 @@ class ScreenReader : AccessibilityService() {
     private var vStep = 0; private var vTries = 0; private var vUntil = 0L; private val vSeen = LinkedHashSet<String>()
     private fun verifyStart() {
         vStep = 1; vTries = 0; vSeen.clear(); vUntil = System.currentTimeMillis() + 90_000L
-        try { if (DualApp.launch(this) == "") throw Exception("sem Threads") } catch (e: Exception) { }
+        try { if (!openThreads()) throw Exception("sem Threads") } catch (e: Exception) { }
         h.postDelayed({ verifyStep() }, 2500)
     }
     private fun verifyStep() {
@@ -971,6 +971,40 @@ class ScreenReader : AccessibilityService() {
         stepOut()
     }
 
+    /**
+     * Abre o Threads (duplo se ligado). Se o Xiaomi perguntar "qual dos dois", escolhe sozinho:
+     * o que tiver "duplo/dual/clone" no nome; senão a posição que você marcou em ⚙ (padrão: o 2º é o duplo).
+     */
+    fun openThreads(): Boolean {
+        val r = DualApp.launch(this)
+        if (r == "") return false
+        if (r == "normal" && DualApp.on(this)) pickChooser(0)
+        return true
+    }
+    private fun pickChooser(n: Int) {
+        if (n > 8) return
+        h.postDelayed({
+            try {
+                val ws = windows.mapNotNull { it.root }.filter { it.packageName?.toString() != packageName }
+                val all = ws.flatMap { nodes(it) }.filter { it.isVisibleToUser }
+                fun lab(x: AccessibilityNodeInfo) = norm(((x.contentDescription ?: x.text) ?: "").toString())
+                val opts = all.filter { Regex("threads").containsMatchIn(lab(it)) && clickable(it) != null && it.packageName?.toString() != ThreadsNotif.THREADS }
+                    .distinctBy { clickable(it)?.let { c -> rect(c).toShortString() } }.sortedWith(compareBy({ rect(it).top / dpx(40) }, { rect(it).left }))
+                if (opts.size >= 2) {
+                    Store.prefs(this).edit().putString("dual_chooser", opts.joinToString(" | ") { lab(it) + " @" + rect(it).toShortString() } + " · pacote " + opts.first().packageName).apply()
+                    val dualIdx = Store.prefs(this).getInt("dual_idx", 1)
+                    val pick = opts.firstOrNull { Regex("dual|duplo|clone|segund|\\(2\\)|xspace").containsMatchIn(lab(it)) }
+                        ?: opts.getOrNull(if (DualApp.on(this)) dualIdx else 1 - dualIdx) ?: opts.last()
+                    clog("escolhi no 'qual dos dois': " + lab(pick), all)
+                    clickable(pick)?.let { if (!it.performAction(AccessibilityNodeInfo.ACTION_CLICK)) tapCenter(it) }
+                    Store.prefs(this).edit().putString("dual_last", "escolhi no 'qual dos dois': ${lab(pick)} (${opts.indexOf(pick) + 1}º)").apply()
+                    return@postDelayed
+                }
+            } catch (e: Exception) { ErrLog.log(this, "app duplo", e) }
+            pickChooser(n + 1)
+        }, 600)
+    }
+
     /** Um toque: agenda no Threads todos os posts do lote que faltam. */
     fun runBatchAuto() {
         autoRunning = true; autoDone = 0; Store.prefs(this).edit().putString("agendar_log", "").apply()
@@ -992,7 +1026,7 @@ class ScreenReader : AccessibilityService() {
         try {
             ClipSync.copy(this, o.optString("cap"))
             PostQueue.putInGallery(this, o.optString("id"), force = true)
-            if (DualApp.launch(this) == "") throw Exception("sem Threads")
+            if (!openThreads()) throw Exception("sem Threads")
         } catch (e: Exception) { stopBatchAuto("Não consegui abrir o Threads"); return }
         autoItemAt = at
         show("🤖 Agendando ${autoDone + 1}/${autoDone + left}: " + AgendaCore.fmt(at))
@@ -1073,7 +1107,7 @@ class ScreenReader : AccessibilityService() {
         val wheel = wheels.filter { rect(it).left <= x && rect(it).right >= x }.minByOrNull { rect(it).width() }
         // 1º jeito: o comando "rolar" da acessibilidade (no seu celular ele anda exatamente 1 linha); se não andar, arrasta com o dedo
         // longe do alvo: vários comandos de 1 linha de uma vez (no seu celular cada um anda exatamente 1 linha); relê e corrige
-        val n = minOf(Math.abs(diff), when (col) { 3 -> 1; 1 -> 6; else -> 12 })
+        val n = minOf(Math.abs(diff), AgendarTreino.rowsAtOnce(this, col))
         var how = "gesto"
         if (wheel != null && col !in wGesture) {
             var ok = true
@@ -1703,7 +1737,7 @@ class ScreenReader : AccessibilityService() {
         Store.prefs(this).edit().putLong("ensinar_ate", System.currentTimeMillis() + 15 * 60_000L).putString("ensino_novo", "[]").apply()
         tLastRead = null
         show("🎓 Gravando: agende 1 post na mão no Threads (foto, legenda, ⋯ › Schedule…, rodinhas, Done, Schedule). Eu aprendo cada passo.", 0xEE7C3AED.toInt())
-        try { if (DualApp.launch(this) == "") throw Exception("sem Threads") } catch (x: Exception) { }
+        try { if (!openThreads()) throw Exception("sem Threads") } catch (x: Exception) { }
     }
     private fun teachOn() = Store.prefs(this).getLong("ensinar_ate", 0) > System.currentTimeMillis()
     private fun teachAdd(o: org.json.JSONObject) {

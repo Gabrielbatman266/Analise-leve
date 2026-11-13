@@ -165,6 +165,21 @@ class BatchActivity : Activity() {
         }
         if (left > 0) btn("🤖 Agendar todos sozinho no Threads ($left)", root, primary = true) { auto() }
         if (left > 0) btn("▶ Só o próximo · ${hm(l.first { !it.optBoolean("done") }.optLong("at"))}", root) { next() }
+        // ⚡ velocidade das rodinhas + voto (vai pro treino e pro diagnóstico)
+        TextView(this).apply { text = "⚡ Velocidade pra acertar a data/hora: " + AgendarTreino.SPEEDS[AgendarTreino.speed(this@BatchActivity)] + " · votos: " + AgendarTreino.votes(this@BatchActivity); setTextColor(0xFFB0B4C0.toInt()); textSize = 12.5f; setPadding(8, 18, 8, 4); root.addView(this) }
+        val sp = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; root.addView(sp)
+        AgendarTreino.SPEEDS.forEachIndexed { i, nm -> sp.addView(TextView(this).apply { text = (if (AgendarTreino.speed(this@BatchActivity) == i) "● " else "") + nm; gravity = android.view.Gravity.CENTER; setTextColor(0xFFF1F2F6.toInt()); textSize = 13f; setPadding(6, 22, 6, 22)
+            setBackgroundColor(if (AgendarTreino.speed(this@BatchActivity) == i) 0x55FF5C82 else 0x22FFFFFF); setOnClickListener { AgendarTreino.setSpeed(this@BatchActivity, i); draw() } }, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(4, 4, 4, 4) }) }
+        val vt = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; root.addView(vt)
+        vt.addView(TextView(this).apply { text = "👍 Deu certo nessa velocidade"; gravity = android.view.Gravity.CENTER; setTextColor(0xFF4CC68E.toInt()); textSize = 13f; setPadding(6, 22, 6, 22); setBackgroundColor(0x22FFFFFF)
+            setOnClickListener { AgendarTreino.vote(this@BatchActivity, true); Toast.makeText(this@BatchActivity, "👍 anotado", Toast.LENGTH_SHORT).show(); draw() } }, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(4, 4, 4, 4) })
+        vt.addView(TextView(this).apply { text = "👎 Errou"; gravity = android.view.Gravity.CENTER; setTextColor(0xFFFF5A5A.toInt()); textSize = 13f; setPadding(6, 22, 6, 22); setBackgroundColor(0x22FFFFFF)
+            setOnClickListener {
+                val e = android.widget.EditText(this@BatchActivity).apply { hint = "o que errou? (opcional: data, hora, travou…)" }
+                android.app.AlertDialog.Builder(this@BatchActivity).setTitle("👎 O que deu errado?").setView(e).setPositiveButton("Anotar") { _, _ -> AgendarTreino.vote(this@BatchActivity, false, e.text.toString()); Toast.makeText(this@BatchActivity, "👎 anotado: vai no diagnóstico", Toast.LENGTH_SHORT).show(); draw() }.show()
+            } }, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(4, 4, 4, 4) })
+        btn("📱 No 'qual dos dois' do Xiaomi, o duplo é o " + (Store.prefs(this).getInt("dual_idx", 1) + 1) + "º (toque pra trocar)", root) {
+            Store.prefs(this).edit().putInt("dual_idx", 1 - Store.prefs(this).getInt("dual_idx", 1)).apply(); draw() }
         btn("📱 Threads duplo: " + (if (DualApp.on(this)) "LIGADO (abre o app duplo)" else "desligado (abre o normal)"), root) { DualApp.set(this, !DualApp.on(this)); draw()
             Toast.makeText(this, DualApp.status(this), Toast.LENGTH_LONG).show() }
         btn("🎓 Ensinar o Agendar (faça 1 na mão, eu gravo)", root) {
@@ -219,7 +234,7 @@ class BatchActivity : Activity() {
             val r = ScreenReader.instance
             // O editor que abre pelo "Compartilhar" NÃO tem Agendar. Só o do botão de novo post (dentro do Threads) tem.
             // Galeria leve: a pasta PostLeve fica só com a foto deste post, a mais nova do celular → é a 1ª na galeria do Threads.
-            if (DualApp.launch(this) == "") throw Exception("sem Threads")
+            if (!(ScreenReader.instance?.openThreads() ?: (DualApp.launch(this) != ""))) throw Exception("sem Threads")
             if (r != null) { r.armCompose("$day às $t", o.optString("cap"), fromShare = false); r.hint("🗓 Montando o post ${i + 1} de ${l.size} pra agendar ($day às $t)…", 3000) }
             else Toast.makeText(this, "Ligue o Leitor de tela pra eu montar o post sozinho. Na mão: + › foto mais recente › colar legenda › ⋯ › Agendar ($day às $t)", Toast.LENGTH_LONG).show()
         } catch (e: Exception) { Toast.makeText(this, "Não achei o Threads", Toast.LENGTH_LONG).show() }
