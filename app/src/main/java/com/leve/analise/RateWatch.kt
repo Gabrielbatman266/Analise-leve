@@ -691,7 +691,12 @@ class ScreenReader : AccessibilityService() {
         Store.prefs(this).edit().putString("agendar_log", l.joinToString("\n")).apply()
     }
 
-    @Volatile private var cRetry = false
+    @Volatile private var cRetry = false; private var cReopen = 0
+    /** O que está na frente quando o Threads sumiu (pacote + uns textos), pro 📋 diagnóstico. */
+    private fun frontInfo(): String = try {
+        val ws = windows.mapNotNull { it.root }
+        ws.joinToString(" | ") { r -> (r.packageName?.toString() ?: "?") + ": " + nodes(r).filter { it.isVisibleToUser }.mapNotNull { ((it.text ?: it.contentDescription)?.toString()?.trim())?.takeIf { t -> t.isNotEmpty() }?.take(20) }.distinct().take(6).joinToString(", ") }.take(400)
+    } catch (e: Exception) { "?" }
     private fun composeStep() {
         val now = System.currentTimeMillis()
         if (now - cLast < 600) {
@@ -708,9 +713,30 @@ class ScreenReader : AccessibilityService() {
         val root = rootInActiveWindow
         if (root == null || root.packageName?.toString() != ThreadsNotif.THREADS) {
             // saiu do Threads: espera um pouco (pode ser a galeria/teclado); depois de 15 s para e tira o aviso
-            if (cAway == 0L) cAway = now
-            if (now - cAway > 15_000L) { composeUntil = 0; cAway = 0; if (autoRunning) autoRunning = false; clog("parei: saiu do Threads", emptyList()); h.post { clearOverlay() } }
-            else h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, 2000)
+            if (cAway == 0L) { cAway = now; cReopen = 0 }
+            val away = now - cAway
+            // 📱 passo 1 (abrindo o Threads) e o Threads não apareceu: abre de novo, alternando o jeito
+            //   1ª: duplo direto (LauncherApps) · 2ª: o normal + escolhe o DUPLO no "Abrir com" · 3ª: procura a janela "Abrir com" aberta e toca no duplo
+            if (cStep <= 1 && (away > 3000L * (cReopen + 1)) && cReopen < 3) {
+                cReopen++
+                val front = frontInfo()
+                clog("Threads não abriu (na frente: $front): tentativa ${cReopen + 1} de abrir o duplo", emptyList())
+                try {
+                    when (cReopen) {
+                        1 -> DualApp.launch(this)
+                        2 -> { startActivity(packageManager.getLaunchIntentForPackage(ThreadsNotif.THREADS)!!.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)); if (DualApp.on(this)) pickChooser(0) }
+                        else -> pickChooser(0)
+                    }
+                } catch (e: Exception) { ErrLog.log(this, "abrir o Threads de novo", e) }
+            }
+            if (away > (if (cStep <= 1) 20_000L else 15_000L)) {
+                val front = frontInfo()
+                composeUntil = 0; cAway = 0; if (autoRunning) { autoRunning = false; awake(false) }
+                clog("parei: saiu do Threads (na frente: $front)", emptyList())
+                Store.prefs(this).edit().putString("ag_fora", android.text.format.DateFormat.format("dd/MM HH:mm", System.currentTimeMillis()).toString() + " passo $cStep · na frente: $front").apply()
+                h.post { clearOverlay() }
+            }
+            else h.postDelayed({ if (composeUntil > System.currentTimeMillis()) composeStep() }, 1000)
             return
         }
         cAway = 0

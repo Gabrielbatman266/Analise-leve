@@ -50,6 +50,7 @@ object DualApp {
         val prof = dualProfile(c, PostQueue.THREADS)
         return (if (on(c)) "ligado" else "desligado") + " · Threads duplo " + (if (prof != null) "encontrado (perfil $prof)" else "não encontrado") +
             " · última abertura: " + (p(c).getString("dual_last", "-") ?: "-") + " · no 'qual dos dois' o duplo é o ${p(c).getInt("dual_idx", 1) + 1}º" +
-            (p(c).getString("dual_chooser", null)?.let { " · opções vistas: $it" } ?: "")
+            (p(c).getString("dual_chooser", null)?.let { " · opções vistas: $it" } ?: "") +
+            (p(c).getString("ag_fora", null)?.let { " · ⚠ o robô parou fora do Threads em $it" } ?: "")
     }
 }
