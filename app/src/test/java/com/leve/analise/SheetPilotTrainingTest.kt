@@ -23,17 +23,32 @@ class SheetPilotTrainingTest {
     class Sim(val today: LocalDate, var day: Int, var hPos: Int, var min: Int, var pm: Boolean, val hourWraps: Boolean,
               val slip: Double, val lagMs: Long, val rnd: java.util.Random,
               /** works[col][how]: o comando / tocar no número / arrastar funcionam nessa coluna? (falso = ignora e não mexe) */
-              val works: Array<BooleanArray> = Array(4) { BooleanArray(3) { true } }) {
+              val works: Array<BooleanArray> = Array(4) { BooleanArray(3) { true } },
+              /** dificuldade extra: leitura falha / número lido errado por um instante / português / 24 h */
+              val readFail: Double = 0.0, val misread: Double = 0.0, val pt: Boolean = false, val h24: Boolean = false) {
         val band = 1940; val rowH = 103
         var now = 0L
         // o que a tela mostra (fica pra trás enquanto anima)
         private var shown = Triple(day, hPos, min); private var shownPm = pm; private var animUntil = 0L
         private var from = Triple(day, hPos, min); private var animStart = 0L
-        private fun fmtDay(d: LocalDate) = d.dayOfWeek.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.ENGLISH) + ", " +
-            d.month.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.ENGLISH) + " " + d.dayOfMonth
+        private fun fmtDay(d: LocalDate) = if (pt) d.dayOfWeek.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale("pt", "BR")) + ", " + d.dayOfMonth + " de " +
+            d.month.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale("pt", "BR"))
+            else d.dayOfWeek.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.ENGLISH) + ", " + d.month.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.ENGLISH) + " " + d.dayOfMonth
         fun hour12(pos: Int) = if (pos == 0) 12 else pos
         fun at(): ZonedDateTime { val h24 = hPos + (if (pm) 12 else 0); return ZonedDateTime.of(today.plusDays(day.toLong()), LocalTime.of(h24, min), ZoneId.of("America/Sao_Paulo")) }
+        /** null = a leitura da tela falhou (acontece de vez em quando no celular). */
+        fun screenOrNull(): List<AgendaCore.WItem>? {
+            if (rnd.nextDouble() < readFail) return null
+            val l = screen().toMutableList()
+            if (rnd.nextDouble() < misread) { // um número lido errado só nesta leitura (o "OCR" da acessibilidade se confunde)
+                val i = l.indices.filter { l[it].cy == band && l[it].text.length <= 2 }.randomOrNull(rnd)
+                if (i != null) l[i] = l[i].copy(text = ((l[i].text.toIntOrNull() ?: 0) + if (rnd.nextBoolean()) 1 else -1).coerceAtLeast(0).let { if (l[i].text.length == 2) "%02d".format(it % 60) else it.toString() })
+            }
+            return l
+        }
+        private fun <T> List<T>.randomOrNull(r: java.util.Random) = if (isEmpty()) null else this[r.nextInt(size)]
         fun screen(): List<AgendaCore.WItem> {
+            if (h24) return screen24()
             if (now >= animUntil) { shown = Triple(day, hPos, min); shownPm = pm }
             else { // no meio da animação a tela mostra valores INTERMEDIÁRIOS (ou ainda o antigo, no começo)
                 val f = ((now - animStart).toDouble() / maxOf(1L, animUntil - animStart)).coerceIn(0.0, 1.0)
@@ -60,6 +75,18 @@ class SheetPilotTrainingTest {
             if (!works[col][how]) { now += 60; return true }       // ignorou: não mexe nada (o pior caso: nem avisa)
             return scroll(col, dir, if (how == 1) minOf(rows, 2) else rows)
         }
+        private fun screen24(): List<AgendaCore.WItem> {
+            if (now >= animUntil) { shown = Triple(day, hPos, min); shownPm = pm }
+            val out = ArrayList<AgendaCore.WItem>()
+            val h0 = (if (now >= animUntil) hPos + (if (pm) 12 else 0) else shown.second + (if (shownPm) 12 else 0))
+            for (k in -2..2) {
+                val y = band + k * rowH
+                (shown.first + k).takeIf { it in 0..75 }?.let { out += AgendaCore.WItem(fmtDay(today.plusDays(it.toLong())), 375, y) }
+                (h0 + k).takeIf { it in 0..23 }?.let { out += AgendaCore.WItem("%02d".format(it), 600, y) }
+                (shown.third + k).takeIf { it in 0..59 }?.let { out += AgendaCore.WItem("%02d".format(it), 724, y) }
+            }
+            return out
+        }
         fun scroll(col: Int, dir: Int, rows: Int): Boolean {
             if (now >= animUntil) shown = Triple(day, hPos, min)
             var moved = 0
@@ -71,7 +98,8 @@ class SheetPilotTrainingTest {
         }
         private fun one(col: Int, dir: Int): Boolean = when (col) {
             0 -> (day + dir in 0..75).also { if (it) day += dir }
-            1 -> { val p = hPos + dir; if (hourWraps) { hPos = ((p % 12) + 12) % 12; true } else (p in 0..11).also { if (it) hPos = p } }
+            1 -> if (h24) { val t = hPos + (if (pm) 12 else 0) + dir; (t in 0..23).also { if (it) { hPos = t % 12; pm = t >= 12 } } }
+                 else { val p = hPos + dir; if (hourWraps) { hPos = ((p % 12) + 12) % 12; true } else (p in 0..11).also { if (it) hPos = p } }
             2 -> (min + dir in 0..59).also { if (it) min += dir }
             else -> (if (dir > 0) !pm else pm).also { if (it) pm = !pm }
         }
@@ -82,11 +110,11 @@ class SheetPilotTrainingTest {
 
     /** Um post: abre a folha (com o horário anterior), o piloto acerta, toca no Done, confere; corrige se o post mostrar errado. */
     private fun episode(sim: Sim, target: ZonedDateTime, clock: ZonedDateTime, wb: AgendaCore.Bandit, db: AgendaCore.Bandit, rnd: java.util.Random, explore: Double,
-                        hb: AgendaCore.Bandit = AgendaCore.Bandit(intArrayOf(0, 1, 2))): Result {
-        val pilot = SheetPilot(target, wb, db, { c -> when (c) { 3 -> 1; 1 -> 11; else -> 20 } }, rnd, explore, hb)
+                        hb: AgendaCore.Bandit = AgendaCore.Bandit(intArrayOf(0, 1, 2)), g: Genome = Genome()): Result {
+        val pilot = SheetPilot(target, wb, db, { c -> when (c) { 3 -> 1; 1 -> 11; else -> 20 } }, rnd, explore, hb, g)
         var reopen = 0
         while (true) {
-            val r = AgendaCore.wheelRead(sim.screen(), sim.band, 124, sim.today)
+            val r = sim.screenOrNull()?.let { AgendaCore.wheelRead(it, sim.band, 124, sim.today) }
             when (val a = pilot.step(r, sim.now, sim.doneEnabled(clock), canLook = true)) {
                 is SheetPilot.Act.Scroll -> { if (!sim.act(a.col, a.dir, a.rows, a.how)) pilot.scrollRefused(a.col); sim.now += 120 }
                 is SheetPilot.Act.Wait -> sim.now += a.ms
@@ -143,6 +171,14 @@ class SheetPilotTrainingTest {
     }
 
     /** Celular bem pior: animação de até 1,6 s, escorrega muito, e às vezes a leitura vem vazia. */
+    /** Prova do genoma de fábrica no simulador BRUTAL (roda em todo build). */
+    @Test fun genomaDeFabricaNoBrutal() {
+        val g = Genome.load(TreinoPronto.GENOMA)
+        val f = fitness(g, 31337L, 60)
+        java.io.File("build/treino_brutal.txt").writeText("BRUTAL ${"%.2f".format(f.second)}% · ${"%.1f".format(f.third)} s/post")
+        assertTrue("brutal: ${f.second}%", f.second >= 95.0)
+    }
+
     @Test fun cenarioDificil() {
         val rnd = java.util.Random(77)
         val wb = AgendaCore.Bandit(intArrayOf(1, 2, 4, 8, 12)); val db = AgendaCore.Bandit(intArrayOf(300, 600, 1000, 1600))
@@ -184,5 +220,51 @@ class SheetPilotTrainingTest {
         val r = episode(sim, ZonedDateTime.of(2026, 11, 14, 9, 40, 0, 0, zone), clock, wb, db, rnd, 0.0, hb)
         assertTrue(r.why, r.ok)
         assertTrue("aprendeu a não usar o comando no minuto", hb.value("c2", 0) < hb.value("c2", 1) || hb.value("c2", 0) < hb.value("c2", 2))
+    }
+
+    // ================================================================ 🧬 evolução: mutações aleatórias, fica a melhor
+    private fun brutal(rnd: java.util.Random, today: LocalDate) = Sim(today, rnd.nextInt(10), rnd.nextInt(12), rnd.nextInt(60), rnd.nextBoolean(),
+        hourWraps = rnd.nextBoolean(), slip = rnd.nextDouble() * 0.8, lagMs = 100L + rnd.nextInt(2000), rnd = rnd, works = randomWorks(rnd),
+        readFail = rnd.nextDouble() * 0.15, misread = rnd.nextDouble() * 0.12, pt = rnd.nextDouble() < 0.35, h24 = rnd.nextDouble() < 0.2)
+
+    /** Nota de um genoma: % de acerto no simulador brutal (e um pouco de tempo). */
+    private fun fitness(g: Genome, seed: Long, phones: Int): Triple<Double, Double, Double> {
+        val rnd = java.util.Random(seed)
+        val wb = AgendaCore.Bandit.load(intArrayOf(1, 2, 4, 8, 12), null); val db = AgendaCore.Bandit(intArrayOf(300, 600, 1000, 1600))
+        val today = LocalDate.of(2026, 11, 13); val clock = ZonedDateTime.of(today, LocalTime.of(1, 0), zone)
+        var ok = 0; var n = 0; var ms = 0L
+        repeat(phones) {
+            val sim = brutal(rnd, today); val hb = AgendaCore.Bandit(intArrayOf(0, 1, 2))
+            repeat(6) {
+                val t = clock.plusMinutes(20L + rnd.nextInt(60 * 24 * 20)).withSecond(0).withNano(0)
+                val t0 = sim.now; val r = episode(sim, t, clock, wb, db, rnd, g.explore, hb, g)
+                n++; ms += sim.now - t0; if (r.ok) ok++
+            }
+        }
+        val rate = ok * 100.0 / n; val sec = ms / 1000.0 / n
+        return Triple(rate * 10 - sec, rate, sec)
+    }
+
+    /** Demora (minutos): roda quando EVOLUIR=1. A melhor sai em build/treino_evolucao.txt e vai pro TreinoPronto. */
+    @Test fun evolucao() {
+        if (System.getenv("EVOLUIR") != "1") return
+        val rnd = java.util.Random(42)
+        var pop = listOf(Genome()) + (1..11).map { Genome().mutate(rnd).mutate(rnd) }
+        var best = Genome(); var bestFit = Triple(-1e9, 0.0, 0.0)
+        val hist = StringBuilder()
+        repeat(14) { gen ->
+            val scored = pop.map { g -> g to fitness(g, 1000L + gen, 50) }.sortedByDescending { it.second.first }
+            val top = scored.first()
+            hist.append("geração $gen: melhor ${"%.1f".format(top.second.second)}% (${"%.1f".format(top.second.third)} s)\n")
+            if (top.second.first > bestFit.first) { best = top.first; bestFit = top.second }
+            // os 4 melhores ficam; o resto são filhos com mutação aleatória
+            val elite = scored.take(4).map { it.first }
+            pop = elite + (1..8).map { elite[rnd.nextInt(elite.size)].mutate(rnd) }
+        }
+        // prova final da melhor, em celulares brutais que ela nunca viu
+        val proof = fitness(best, 99_999L, 300)
+        val out = "EVOLUCAO melhor genoma ${best.save()} · prova: ${"%.2f".format(proof.second)}% em 1800 posts brutais · ${"%.1f".format(proof.third)} s/post\n$hist"
+        println(out); java.io.File("build/treino_evolucao.txt").writeText(out)
+        assertTrue(out, proof.second >= 97.0)
     }
 }

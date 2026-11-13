@@ -147,6 +147,7 @@ object SelfTest {
             try { appendLine("Threads → Refs: " + ThreadsRefs.diag(c)) } catch (e: Exception) { }
             try { appendLine("Agenda: " + Agenda.diag(c) + " · detectado no Threads: " + (Store.prefs(c).getString("ag_sw_last", "") ?: "") + " · tela lida: " + (Store.prefs(c).getString("ag_sw_seen", "") ?: "").take(160)) } catch (e: Exception) { }
             appendLine("🏋️ Treino de fábrica (simulador): " + TreinoPronto.RESULTADO)
+            appendLine("🧬 Genoma: " + (Store.prefs(c).getString("ag_genome", null) ?: TreinoPronto.GENOMA) + " · 🎯 áreas: " + (Store.prefs(c).getString("ag_areas", null) ?: "não ajustadas"))
             try { appendLine("🎯 Treino do Agendar: " + AgendarTreino.summary(c)) } catch (e: Exception) { }
             try { appendLine("📱 App duplo: " + DualApp.status(c)) } catch (e: Exception) { }
             Store.prefs(c).getLong("ensino_salvo", 0).takeIf { it > 0 }?.let { appendLine("💾 Config do Agendar salva em " + android.text.format.DateFormat.format("dd/MM HH:mm", it) + " · agendados com sucesso: " + Store.prefs(c).getInt("auto_ok_n", 0)) }

@@ -10,6 +10,23 @@ import java.time.ZonedDateTime
  * Recompensa: aproximou do alvo (+), passou do ponto (−−), não mexeu (−1), cada espera à toa (−pouco).
  * Done: só toca com a data/hora certa lida duas vezes (rodinha parada) e o botão branco; aprende quanto esperar.
  */
+/** 🧬 Genoma do cérebro: o que a evolução sorteia/ajusta. */
+data class Genome(
+    val stableMs: Long = 250, val motionTimeoutMs: Long = 1800, val explore: Double = 0.05,
+    val tapRows: Int = 2, val dragRows: Int = 3, val failSwitch: Int = 2, val confirmReads: Int = 2, val firstHow: Int = 0,
+) {
+    fun save() = "$stableMs,$motionTimeoutMs,$explore,$tapRows,$dragRows,$failSwitch,$confirmReads,$firstHow"
+    fun mutate(r: java.util.Random): Genome {
+        fun l(v: Long, lo: Long, hi: Long) = (v + (r.nextGaussian() * (hi - lo) * 0.15).toLong()).coerceIn(lo, hi)
+        fun i(v: Int, lo: Int, hi: Int) = if (r.nextDouble() < 0.3) (v + if (r.nextBoolean()) 1 else -1).coerceIn(lo, hi) else v
+        return Genome(l(stableMs, 100, 900), l(motionTimeoutMs, 600, 3000), (explore + r.nextGaussian() * 0.02).coerceIn(0.0, 0.2),
+            i(tapRows, 1, 2), i(dragRows, 1, 4), i(failSwitch, 1, 4), i(confirmReads, 2, 3), if (r.nextDouble() < 0.2) r.nextInt(3) else firstHow)
+    }
+    companion object {
+        fun load(s: String?): Genome = try { val p = s!!.split(","); Genome(p[0].toLong(), p[1].toLong(), p[2].toDouble(), p[3].toInt(), p[4].toInt(), p[5].toInt(), p[6].toInt(), p[7].toInt()) } catch (e: Exception) { Genome() }
+    }
+}
+
 class SheetPilot(
     val target: ZonedDateTime,
     val wb: AgendaCore.Bandit,          // linhas por vez (comando): 1, 2, 4, 8, 12
@@ -18,6 +35,9 @@ class SheetPilot(
     private val rnd: java.util.Random = java.util.Random(),
     private val explore: Double = 0.05,
     val hb: AgendaCore.Bandit = AgendaCore.Bandit(intArrayOf(0, 1, 2)), // jeito: 0 comando, 1 tocar no número, 2 arrastar
+    val g: Genome = Genome(),
+    /** Jeito obrigatório (ex.: 1 = tocar, quando você ajustou as áreas de toque); -1 = o aprendizado escolhe. */
+    private val forceHow: Int = -1,
 ) {
     sealed class Act {
         /** Mexer a coluna [col] ([dir] +1 = valor maior) [rows] linhas pelo jeito [how] (0 comando, 1 tocar, 2 arrastar). */
@@ -36,7 +56,8 @@ class SheetPilot(
     private var pend: Pend? = null
     private var curSig = ""; private var curSince = 0L
     private var awaiting = false; private var preSig = ""; private var scrollAt = 0L
-    var stableMs = 250L; var motionTimeoutMs = 1800L
+    var stableMs = g.stableMs; var motionTimeoutMs = g.motionTimeoutMs
+    private var okCount = 0
     private var okSig = ""; private var okAt = 0L
     private var doneArm = -1; private var judgeArm = -1
     private var gray = 0; private var unread = 0; private var scrolls = 0; private var startAt = 0L
@@ -84,7 +105,7 @@ class SheetPilot(
                 if (after == p.before) {
                     val f = (fails[k] ?: 0) + 1; fails[k] = f
                     note("coluna ${p.col}: ${HOW[p.how]} não mexeu (${f}x)")
-                    if (f >= 2) { bad.getOrPut(p.col) { HashSet() } += p.how; note("coluna ${p.col}: troco o jeito (${HOW[p.how]} não funciona aqui)") }
+                    if (f >= g.failSwitch) { bad.getOrPut(p.col) { HashSet() } += p.how; note("coluna ${p.col}: troco o jeito (${HOW[p.how]} não funciona aqui)") }
                 } else fails.remove(k)
                 if (after != 0 && (after > 0) != (p.before > 0)) note("passou do ponto na coluna ${p.col}: ${p.before} → $after")
             }
@@ -95,8 +116,9 @@ class SheetPilot(
         if (next == null) {
             if (doneArm < 0) doneArm = db.choose("done", { true }, rnd, explore)
             val wait = db.arms[doneArm].toLong()
-            if (okSig != sig) { okSig = sig; okAt = now; return idle(wait) }
-            if (now - okAt < wait) return idle(wait - (now - okAt))
+            if (okSig != sig) { okSig = sig; okAt = now; okCount = 1; return idle(wait) }
+            if (now - okAt < wait * okCount) return idle(wait * okCount - (now - okAt))
+            if (okCount < g.confirmReads - 1) { okCount++; return idle(wait) }
             if (!doneEnabled) return grayDone("Done desligado")
             if (canLook && lumSig != sig) return Act.Look
             if (lumSig == sig && (lum ?: 255) < 200) { lumSig = ""; return grayDone("Done cinza ($lum)") }
@@ -109,12 +131,14 @@ class SheetPilot(
         val badHere = bad[col] ?: emptySet<Int>()
         if (badHere.size >= 3) return Act.Fail("a rodinha $col não anda de jeito nenhum")
         // jeito: o de melhor nota nesta coluna (tocar = no número 1 ou 2 linhas pra lá, que sempre está visível)
-        val how = hb.choose("c$col", { h -> h !in badHere }, rnd, explore)
+        val how = if (forceHow >= 0 && forceHow !in badHere) forceHow
+            else if (hb.value("c$col", 0) == 0.6 && hb.value("c$col", 1) == 0.6 && hb.value("c$col", 2) == 0.6 && g.firstHow !in badHere) g.firstHow // coluna nova: começa pelo jeito do genoma
+            else hb.choose("c$col", { h -> h !in badHere }, rnd, g.explore)
         val rows: Int; val arm: Int; val key = AgendaCore.wheelKey(col, diff)
         when (how) {
             0 -> { arm = wb.choose(key, { it <= Math.abs(diff) && it <= maxRows(col) }, rnd, explore); rows = wb.arms[arm] }
-            1 -> { arm = 0; rows = minOf(Math.abs(diff), 2) }
-            else -> { arm = 0; rows = minOf(Math.abs(diff), 3) }
+            1 -> { arm = 0; rows = minOf(Math.abs(diff), g.tapRows) }
+            else -> { arm = 0; rows = minOf(Math.abs(diff), g.dragRows) }
         }
         pend = Pend(col, diff, arm, key, how, rows)
         awaiting = true; preSig = sig; scrollAt = now; scrolls++

@@ -1048,6 +1048,7 @@ class ScreenReader : AccessibilityService() {
                     } else show("▶ Nada pra seguir: toque em 🤖 Agendar todos", 0xEEB45309.toInt())
                 }
             }
+            b("🎯", 0xFF5B9DFF.toInt()) { areasEdit() }
             b("✓", 0xFF4CC68E.toInt()) { AgendarTreino.add(this, true, "você marcou", cTarget, "✓ certo (passo $cStep)"); judgeDone(true, "você marcou certo"); show("✓ anotado como CERTO", 0xEE15803D.toInt()) }
             b("✗", 0xFFFF5A5A.toInt()) { AgendarTreino.add(this, false, "você marcou", cTarget, "✗ errado (passo $cStep, rodinhas: ${wOkSig.ifEmpty { "?" }})"); judgeDone(false, "você marcou errado"); show("✗ anotado como ERRADO: toque em ⏸ Corrigir pra me mostrar", 0xEEB45309.toInt()) }
             val lp = android.view.WindowManager.LayoutParams(-2, -2, android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -1134,9 +1135,12 @@ class ScreenReader : AccessibilityService() {
         val z = java.time.Instant.ofEpochMilli(cTarget).atZone(java.time.ZoneId.systemDefault())
         val wheels = all.filter { it.isScrollable && rect(it).centerY() in top..bottom }
         val band = wheels.map { rect(it).centerY() }.sorted().let { if (it.isEmpty()) (top + bottom) / 2 else it[it.size / 2] }
-        val r = AgendaCore.wheelRead(all.filter { n -> rect(n).centerY() in top..bottom && n !== title }.map { AgendaCore.WItem(t(it), rect(it).centerX(), rect(it).centerY()) }, band, dpx(45), java.time.LocalDate.now())
+        val areas = loadAreas()
+        val r = if (areas != null) readAreas(all, areas) else AgendaCore.wheelRead(all.filter { n -> rect(n).centerY() in top..bottom && n !== title }.map { AgendaCore.WItem(t(it), rect(it).centerX(), rect(it).centerY()) }, band, dpx(45), java.time.LocalDate.now())
+        lastSheet = Triple(r, band, wheels.size)
         // 🧠 o mesmo cérebro treinado no simulador (SheetPilot)
-        val pilot = cPilot ?: SheetPilot(z, wb(), db(), { c -> AgendarTreino.rowsAtOnce(this, c) }, hb = hb()).also { cPilot = it }
+        val pilot = cPilot ?: SheetPilot(z, wb(), db(), { c -> AgendarTreino.rowsAtOnce(this, c) }, hb = hb(), g = Genome.load(Store.prefs(this).getString("ag_genome", null) ?: TreinoPronto.GENOMA),
+            forceHow = if (areas != null) 1 else -1).also { cPilot = it }
         val doneOn = done.isEnabled && clickable(done)?.isEnabled != false
         val act = pilot.step(r, now, doneOn, canLook = android.os.Build.VERSION.SDK_INT >= 30)
         val sig = r?.toString() ?: "?"
@@ -1155,8 +1159,9 @@ class ScreenReader : AccessibilityService() {
                         if (wheel != null) markDot(x.toFloat(), band.toFloat(), 0xFF5B9DFF.toInt())
                         if (!ok) { if (wheel == null) { /* sem rodinha que rola nessa coluna: conta como "não mexeu" */ } else { pilot.scrollRefused(act.col); clog("rodinha ${act.col}: fim pra ${if (act.dir > 0) "baixo" else "cima"}", emptyList()) } }
                     }
-                    1 -> { // TOCA no número que quer (1–2 linhas pra lá: valor maior fica embaixo)
-                        val y = band + act.dir * act.rows * rowH
+                    1 -> { // TOCA no número que quer (1–2 linhas pra lá: valor maior fica embaixo). Com áreas: logo abaixo/acima da SUA área
+                        val box = areas?.getOrNull(act.col)
+                        val y = if (box != null) box.exactCenterY() + act.dir * act.rows * box.height() else band + act.dir * act.rows * rowH
                         val path = android.graphics.Path().apply { moveTo(x.toFloat(), y) }
                         try { dispatchGesture(android.accessibilityservice.GestureDescription.Builder().addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 60)).build(), null, null) } catch (e: Exception) { }
                         markDot(x.toFloat(), y, 0xFF36D399.toInt())
@@ -1198,6 +1203,78 @@ class ScreenReader : AccessibilityService() {
         }
     }
     private var cPilot: SheetPilot? = null; private var wLastSig = ""
+    private var lastSheet: Triple<AgendaCore.WRead?, Int, Int>? = null
+
+    // ================= 🎯 ÁREAS DE TOQUE: um quadrado por rodinha (Dia · Hora · Min · AM/PM) em cima da faixa do meio =================
+    /** Suas áreas (em pixels), ou null se não ajustou. */
+    private fun loadAreas(): List<android.graphics.Rect>? {
+        val s = Store.prefs(this).getString("ag_areas", null) ?: return null
+        val dm = resources.displayMetrics
+        return try { s.split(";").map { b -> val p = b.split(",").map { it.toFloat() }; android.graphics.Rect((p[0] * dm.widthPixels).toInt(), (p[1] * dm.heightPixels).toInt(), (p[2] * dm.widthPixels).toInt(), (p[3] * dm.heightPixels).toInt()) }.takeIf { it.size >= 3 } } catch (e: Exception) { null }
+    }
+    private fun saveAreas(l: List<android.graphics.Rect>) {
+        val dm = resources.displayMetrics
+        Store.prefs(this).edit().putString("ag_areas", l.joinToString(";") { r -> listOf(r.left.toFloat() / dm.widthPixels, r.top.toFloat() / dm.heightPixels, r.right.toFloat() / dm.widthPixels, r.bottom.toFloat() / dm.heightPixels).joinToString(",") { "%.4f".format(java.util.Locale.US, it) } }).apply()
+    }
+    /** Lê o número que está DENTRO de cada área (o mais perto do meio dela). */
+    private fun readAreas(all: List<AccessibilityNodeInfo>, a: List<android.graphics.Rect>): AgendaCore.WRead? {
+        val today = java.time.LocalDate.now()
+        fun inBox(i: Int) = a.getOrNull(i)?.let { b -> all.filter { n -> val t = ((n.text ?: n.contentDescription) ?: "").toString().trim(); t.isNotEmpty() && b.contains(rect(n).centerX(), rect(n).centerY()) }
+            .minByOrNull { n -> Math.abs(rect(n).centerY() - b.centerY()) + Math.abs(rect(n).centerX() - b.centerX()) / 4 }?.let { ((it.text ?: it.contentDescription) ?: "").toString().trim() } }
+        val d = inBox(0)?.let { AgendaCore.wheelDate(it, today) }
+        val hh = inBox(1)?.toIntOrNull(); val mm = inBox(2)?.toIntOrNull()
+        val ap = inBox(3)
+        val twelve = a.size >= 4
+        return AgendaCore.WRead(d, hh, mm, ap?.takeIf { it.isNotEmpty() }?.lowercase()?.startsWith("p"), twelve, a.map { it.centerX() }, a[0].height().coerceAtLeast(dpx(20)), a[0].centerY())
+    }
+
+    private var areaEditor: android.widget.FrameLayout? = null
+    /** Abre o ajuste: 4 quadrados que você arrasta (meio) e estica (canto ◢). Começa em cima das rodinhas que eu achei. */
+    fun areasEdit() {
+        if (areaEditor != null) return
+        cPaused = true
+        val dm = resources.displayMetrics
+        val start = loadAreas() ?: lastSheet?.first?.let { r -> r.colX.map { x -> android.graphics.Rect(x - dpx(48), lastSheet!!.second - r.rowH / 2, x + dpx(48), lastSheet!!.second + r.rowH / 2) } }
+            ?: listOf(0.33f, 0.52f, 0.62f, 0.75f).map { fx -> val x = (fx * dm.widthPixels).toInt(); android.graphics.Rect(x - dpx(48), (dm.heightPixels * 0.75).toInt(), x + dpx(48), (dm.heightPixels * 0.79).toInt()) }
+        val boxes = start.map { android.graphics.Rect(it) }.toMutableList()
+        while (boxes.size < 4) boxes += android.graphics.Rect(boxes.last()).apply { offset(dpx(90), 0) }
+        val colors = listOf(0xFF5B9DFF.toInt(), 0xFF36D399.toInt(), 0xFFFFD166.toInt(), 0xFFFF5C82.toInt())
+        val names = listOf("Dia", "Hora", "Min", "AM/PM")
+        val f = android.widget.FrameLayout(this)
+        val views = ArrayList<android.widget.TextView>()
+        fun place(i: Int) { val b = boxes[i]; views[i].layoutParams = android.widget.FrameLayout.LayoutParams(b.width(), b.height()).apply { leftMargin = b.left; topMargin = b.top }; views[i].requestLayout() }
+        boxes.forEachIndexed { i, b ->
+            val v = android.widget.TextView(this).apply { text = "${names[i]} ◢"; textSize = 11f; setTextColor(colors[i]); gravity = android.view.Gravity.BOTTOM or android.view.Gravity.END; setPadding(dpx(4), 0, dpx(4), dpx(2))
+                background = android.graphics.drawable.GradientDrawable().apply { setColor(colors[i] and 0x33FFFFFF); setStroke(dpx(2), colors[i]); cornerRadius = dpx(6).toFloat() } }
+            views += v; f.addView(v); place(i)
+            var sx = 0f; var sy = 0f; var orig = android.graphics.Rect(); var resize = false
+            v.setOnTouchListener { _, ev ->
+                when (ev.action) {
+                    android.view.MotionEvent.ACTION_DOWN -> { sx = ev.rawX; sy = ev.rawY; orig = android.graphics.Rect(boxes[i]); resize = ev.x > v.width - dpx(28) && ev.y > v.height - dpx(28) }
+                    android.view.MotionEvent.ACTION_MOVE -> { val dx = (ev.rawX - sx).toInt(); val dy = (ev.rawY - sy).toInt()
+                        boxes[i] = if (resize) android.graphics.Rect(orig.left, orig.top, (orig.right + dx).coerceAtLeast(orig.left + dpx(24)), (orig.bottom + dy).coerceAtLeast(orig.top + dpx(18))) else android.graphics.Rect(orig).apply { offset(dx, dy) }
+                        place(i) }
+                }
+                true
+            }
+        }
+        val bar = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL; setPadding(dpx(8), dpx(8), dpx(8), dpx(8))
+            background = android.graphics.drawable.GradientDrawable().apply { setColor(0xEE1C1C24.toInt()); cornerRadius = dpx(18).toFloat() } }
+        fun bb(t: String, c: Int, on: () -> Unit) = bar.addView(android.widget.TextView(this).apply { text = t; textSize = 14f; setTextColor(c); setPadding(dpx(12), dpx(8), dpx(12), dpx(8)); setOnClickListener { on() } })
+        fun close() { try { wm.removeView(f) } catch (e: Exception) { }; areaEditor = null }
+        bb("💾 Salvar", 0xFF4CC68E.toInt()) { saveAreas(boxes); close(); cPilot = null; show("🎯 Áreas salvas: agora eu leio o número DENTRO de cada quadrado e toco logo abaixo/acima até bater. Toque em ▶.", 0xEE15803D.toInt()) }
+        bb("🗑 Sem áreas", 0xFFFF5A5A.toInt()) { Store.prefs(this).edit().remove("ag_areas").apply(); close(); cPilot = null; show("Áreas apagadas: volto a achar as rodinhas sozinho.") }
+        bb("✕", 0xFFB0B4C0.toInt()) { close() }
+        f.addView(bar, android.widget.FrameLayout.LayoutParams(-2, -2).apply { gravity = android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL; topMargin = dpx(150) })
+        f.addView(android.widget.TextView(this).apply { text = "Ponha cada quadrado em cima do número da FAIXA DO MEIO (o escolhido). Arraste pelo meio, estique pelo ◢."; textSize = 12f; setTextColor(0xFFFFFFFF.toInt()); setPadding(dpx(12), dpx(8), dpx(12), dpx(8))
+            background = android.graphics.drawable.GradientDrawable().apply { setColor(0xCC000000.toInt()); cornerRadius = dpx(12).toFloat() } },
+            android.widget.FrameLayout.LayoutParams(-1, -2).apply { gravity = android.view.Gravity.TOP; topMargin = dpx(210); leftMargin = dpx(16); rightMargin = dpx(16) })
+        try {
+            wm.addView(f, android.view.WindowManager.LayoutParams(-1, -1, android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, android.graphics.PixelFormat.TRANSLUCENT))
+            areaEditor = f
+        } catch (e: Exception) { ErrLog.log(this, "áreas de toque", e) }
+    }
 
     private var wLast: Triple<Int, String, String>? = null
     // 🎯 aprendizado: rodinhas (quantas linhas por vez) e Done (quanto esperar), salvos no celular
