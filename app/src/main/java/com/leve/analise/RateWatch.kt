@@ -256,7 +256,7 @@ class ScreenReader : AccessibilityService() {
     companion object { @Volatile var instance: ScreenReader? = null }
     private var last = 0L
 
-    override fun onServiceConnected() { super.onServiceConnected(); instance = this; try { restoreGood(); saveTeach() } catch (e: Exception) { } } // 💾 guarda a config que está dando certo
+    override fun onServiceConnected() { super.onServiceConnected(); instance = this; try { restoreGood(); saveTeach(); AutoPilot.schedule(this) } catch (e: Exception) { } } // 💾 guarda a config que está dando certo
     override fun onDestroy() { instance = null; hideReadBtn(); super.onDestroy() }
 
     // ================= 📖 botão "Ler agora" (aparece só no Threads/Instagram) =================

@@ -151,6 +151,8 @@ object SelfTest {
             try { appendLine("🎯 Treino do Agendar: " + AgendarTreino.summary(c)) } catch (e: Exception) { }
             try { appendLine("📱 App duplo: " + DualApp.status(c)) } catch (e: Exception) { }
             try { appendLine(ScheduleCap.status(c)) } catch (e: Exception) { }
+            try { appendLine(AutoPilot.status(c)) } catch (e: Exception) { }
+            try { appendLine(DataSources.status(c)) } catch (e: Exception) { }
             Store.prefs(c).getLong("ensino_salvo", 0).takeIf { it > 0 }?.let { appendLine("💾 Config do Agendar salva em " + android.text.format.DateFormat.format("dd/MM HH:mm", it) + " · agendados com sucesso: " + Store.prefs(c).getInt("auto_ok_n", 0)) }
             Store.prefs(c).getString("ensino", null)?.takeIf { it.length > 2 }?.let { j -> try { val a = org.json.JSONArray(j); appendLine("🎓 Ensinado (${a.length()} passos): " + (0 until a.length()).joinToString(" › ") { i -> a.getJSONObject(i).let { o -> if (o.optString("t") == "toque") "[${o.optString("ctx")}] ${o.optString("l").ifEmpty { o.optString("id").substringAfterLast('/') }}" else "rodinha ${o.optInt("col")} ${o.optInt("mudou")} (dy ${o.optInt("dy")})" } }.take(2500)) } catch (e: Exception) { } }
             Store.prefs(c).getString("auto_result", null)?.let { appendLine("Piloto automático (último lote): $it") }

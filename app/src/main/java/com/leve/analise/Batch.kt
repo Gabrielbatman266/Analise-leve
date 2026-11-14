@@ -111,7 +111,9 @@ object Batch {
             if (t < now + min || t < last + gap) {
                 t = maxOf(now + 20 * 60_000L, last + gap)
                 t = (t + five - 1) / five * five                   // redondo de 5 em 5 min
-                while (!free(t)) t += five
+                t = BatchTimes.inWindow(t)                         // passou das 23h30 → amanhã 8h (antes podia cair de madrugada)
+                val others = pend.filter { it !== o }.map { it.optLong("at") }
+                while (!free(t) || others.any { Math.abs(it - t) < gap }) t = BatchTimes.inWindow(t + five)
                 o.put("at", t).put("movido", true)
             }
             last = t
@@ -178,6 +180,7 @@ class BatchActivity : Activity() {
         root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(18), dp(16), dp(28)) }
         setContentView(ScrollView(this).apply { setBackgroundColor(BG); addView(root) })
         Batch.refreshTimes(this)
+        AutoPilot.schedule(this)
         draw()
     }
 
@@ -228,6 +231,29 @@ class BatchActivity : Activity() {
             tv((if (o.optBoolean("done")) "✓ " else "") + hm(o.optLong("at")), 17f, if (o.optBoolean("done")) OK else FG, col, true)
             tv(o.optString("cap").replace('\n', ' ').take(70), 12f, MUTED, col)
             if (!o.optBoolean("done")) card.setOnClickListener { itemMenu(i) }
+        }
+        // 🛫 piloto automático
+        tv("🛫 Piloto automático", 15f, FG, root, true)
+        tv(AutoPilot.status(this), 12f, MUTED, root)
+        btn("🛫 Piloto: " + (if (AutoPilot.on(this)) "LIGADO (monta e agenda sozinho a cada ~90 min)" else "desligado"), root, primary = AutoPilot.on(this)) { AutoPilot.setOn(this, !AutoPilot.on(this)); draw() }
+        if (AutoPilot.on(this)) {
+            tv("Posts por dia:", 13f, FG, root)
+            val rp = row(root); listOf(4, 6, 8, 10, 12).forEach { n -> btn("$n", rp, weight = true, on = AutoPilot.perDay(this) == n) { AutoPilot.setPerDay(this, n); draw() } }
+            tv("Deixar pronto quantos dias à frente:", 13f, FG, root)
+            val rd = row(root); listOf(1, 2, 3).forEach { n -> btn("$n", rd, weight = true, on = AutoPilot.daysAhead(this) == n) { AutoPilot.setDaysAhead(this, n); draw() } }
+            btn("▶ Rodar o piloto agora", root) { Toast.makeText(this, AutoPilot.tick(this), Toast.LENGTH_LONG).show(); draw() }
+        }
+        btn("📡 Testar as fontes de dados", root) {
+            Toast.makeText(this, "Testando…", Toast.LENGTH_SHORT).show()
+            Thread {
+                val api = if (ThreadsApi.on(this)) try { "API: " + ThreadsApi.sync(this, force = true) } catch (e: Exception) { "API: erro ${e.message}" } else "API: não conectada (opcional)"
+                runOnUiThread {
+                    AlertDialog.Builder(this).setTitle("📡 Fontes de dados").setMessage(DataSources.status(this) + "\n\n" + api +
+                        "\n\n📊 Coleta pelo leitor: abre seu perfil, lê os números de cada post e volta. Quer rodar agora?")
+                        .setPositiveButton("📊 Coletar agora") { _, _ -> Toast.makeText(this, Macro.start(this), Toast.LENGTH_LONG).show() }
+                        .setNegativeButton("Fechar", null).show()
+                }
+            }.start()
         }
         btn("🖼 Escolher as fotos pra postar (da galeria)", root) { pickChosen() }
         if (left > 0) btn("🤖 Agendar todos sozinho no Threads ($left)", root, primary = true) { auto() }

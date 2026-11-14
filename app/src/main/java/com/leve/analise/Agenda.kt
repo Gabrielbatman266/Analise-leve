@@ -413,6 +413,7 @@ class AgendaReceiver : BroadcastReceiver() {
                     "snooze" -> { Agenda.cancelNotif(c, id); Agenda.snooze(c, id, 15) }
                     "done" -> { Agenda.cancelNotif(c, id); Agenda.markPublished(c, id, "você confirmou") }
                     // 📅 o Threads tinha 25 agendados: um já saiu, o lote continua sozinho
+                    "piloto" -> android.os.Handler(android.os.Looper.getMainLooper()).post { try { AutoPilot.tick(c) } catch (e: Exception) { ErrLog.log(c, "piloto", e) } }
                     "lote" -> android.os.Handler(android.os.Looper.getMainLooper()).post { ScreenReader.instance?.let { if (!it.autoRunning) it.runBatchAuto() } }
                     else -> Agenda.tick(c) // tick, BOOT_COMPLETED, TIME_SET, TIMEZONE_CHANGED, MY_PACKAGE_REPLACED
                 }
