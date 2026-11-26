@@ -34,17 +34,43 @@ class InstaEditor(private val a: MainActivity) {
         const val REQ_MULTI = 34
         const val REQ_IMPORT = 35
         const val REQ_RAW_MANY = 36
+        const val REQ_ADD = 37
+        const val REQ_LAYER_IMG = 38
     }
 
-    private var src: Uri? = null
+    private var src: Uri? = null              // arquivo principal do projeto (1º clipe)
     private var isPhoto = false
     private var photoSecs = 8
-    private var crop = VideoExport.CropSpec()
-    private var music: File? = null
-    private var mute = false
-    private var style = TextStyle.load(a)
     private var base: Bitmap? = null
     private var lastExportId: String? = null
+
+    // ---------- a edição (clipes + camadas + música): tudo mora aqui
+    private var ed = EditState()
+    private val undo = Undo()
+    private var playhead = 0L                 // tempo no vídeo final
+    private var defStyle = TextStyle.load(a)
+    private var music: File?
+        get() = ed.music.takeIf { it.isNotEmpty() }?.let { File(it) }
+        set(v) { ed.music = v?.path ?: ""; if (v == null) { ed.musicStart = 0; ed.musicEnd = 0 } }
+    private var mute: Boolean get() = ed.mute; set(v) { ed.mute = v }
+    private var musicStart: Long get() = ed.musicStart; set(v) { ed.musicStart = v }
+    private var musicEnd: Long get() = ed.musicEnd; set(v) { ed.musicEnd = v }
+    private var musicDurMs: Long get() = ed.musicDur; set(v) { ed.musicDur = v }
+    /** Estilo do texto selecionado (sem texto selecionado: o estilo do próximo texto). */
+    private var style: TextStyle
+        get() = curText()?.style ?: defStyle
+        set(v) { curText()?.style = v; defStyle = v.copy(x = -1f, y = -1f) }
+    /** Recorte do clipe selecionado (ou do que está no cursor). */
+    private var crop: VideoExport.CropSpec
+        get() = curClip()?.crop ?: VideoExport.CropSpec()
+        set(v) { curClip()?.crop = v }
+
+    private fun projDir(): File = projId?.let { Projects.dir(a, it) } ?: a.cacheDir
+    private fun curClipIdx(): Int = if (::timeline.isInitialized && timeline.selKind == "clip" && timeline.selIdx in ed.clips.indices) timeline.selIdx else ed.locate(playhead).first
+    private fun curClip(): Clip? = ed.clips.getOrNull(curClipIdx())
+    private fun curLayer(): Layer? = if (::timeline.isInitialized && timeline.selKind == "layer") ed.layers.getOrNull(timeline.selIdx) else null
+    private fun curText(): Layer? = curLayer()?.takeIf { it.isText }
+    private fun mark() { undo.push(ed); updateUndoBtns() }
 
     private lateinit var preview: ImageView
     private lateinit var video: VideoView
@@ -68,42 +94,44 @@ class InstaEditor(private val a: MainActivity) {
     private lateinit var tvBatch: TextView
     private val redraws = ArrayList<() -> Unit>()
     private lateinit var seek: SeekBar
+    private lateinit var imgSeek: SeekBar
     private lateinit var projBox: LinearLayout
     private var projId: String? = null
     private lateinit var editorCard: LinearLayout
     private lateinit var cutRow: LinearLayout
     private lateinit var tvCut: TextView
-    private var durMs = 0L
-    private var cutStart = 0L
-    private var cutEnd = 0L
-    private var musicStart = 0L
     private lateinit var tvMusicStart: TextView
     private lateinit var timeline: TimelineView
     private lateinit var tlHint: TextView
     private lateinit var pVideo: LinearLayout
-    private lateinit var pMusic: LinearLayout
     private lateinit var pText: LinearLayout
+    private lateinit var pImage: LinearLayout
+    private lateinit var pMusic: LinearLayout
     private lateinit var pExport: LinearLayout
+    private lateinit var tvTextInfo: TextView
+    private lateinit var tvImgInfo: TextView
+    private lateinit var btnSound: Button
+    private lateinit var btnUndo: Button
+    private lateinit var btnRedo: Button
     private val tabBtns = ArrayList<Button>()
-    private var textStart = 0L
-    private var textEnd = 0L
-    private var musicEnd = 0L
-    private var musicDurMs = 0L
     private var waveFor: File? = null
+    private val thumbCache = HashMap<String, List<Bitmap>>()
+    private val thumbLoading = HashSet<String>()
 
     private fun panel(parent: LinearLayout) = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         .also { parent.addView(it, a.lpMatch().apply { topMargin = a.dp(4) }) }
 
+    /** 0 clipe · 1 texto · 2 imagem · 3 música · 4 exportar */
     private fun showPanel(i: Int) {
-        Store.prefs(a).edit().putInt("ed_panel", i).apply()
-        listOf(pVideo, pMusic, pText, pExport).forEachIndexed { k, v -> v.visibility = if (k == i) View.VISIBLE else View.GONE }
+        Store.prefs(a).edit().putInt("ed_panel2", i).apply()
+        listOf(pVideo, pText, pImage, pMusic, pExport).forEachIndexed { k, v -> v.visibility = if (k == i) View.VISIBLE else View.GONE }
         tabBtns.forEachIndexed { k, b ->
             val on = k == i
-            b.setTextColor(if (on) 0xFF1A0A10.toInt() else a.FG); b.textSize = 13f
+            b.setTextColor(if (on) 0xFF1A0A10.toInt() else a.FG); b.textSize = 12f
             b.background = GradientDrawable().apply { setColor(if (on) a.ACCENT else 0xFF1C1C24.toInt()); cornerRadius = a.dp(10).toFloat() }
         }
-        if (i == 1 && music == null && ::timeline.isInitialized && timeline.visibility == View.VISIBLE && pendingMusicAsk) { pendingMusicAsk = false; chooseMusic() }
-        if (i == 2 && etText.text.isBlank() && pendingTextFocus) { pendingTextFocus = false; etText.requestFocus() }
+        if (i == 3 && music == null && pendingMusicAsk) { pendingMusicAsk = false; chooseMusic() }
+        refreshPanels()
     }
     private val SEC_NAMES = listOf("✏ Editar", "🗂 Categorias", "🎬 Fila", "🎵 Músicas", "⚙ Auto")
     private val NAV_ORDER = listOf(2, 1, 0, 3, 4) // ordem dos botões no topo
@@ -117,7 +145,7 @@ class InstaEditor(private val a: MainActivity) {
 
     fun showSection(i: Int, scroll: Boolean = true) {
         if (secs.isEmpty()) return
-        if (curSec == 0 && i != 0) stopPlay()
+        if (curSec == 0 && i != 0) { stopPlay(); pauseEdit() }
         curSec = i
         Store.prefs(a).edit().putInt("ig_sec", i).apply()
         secs.forEachIndexed { k, v -> v.visibility = if (k == i) View.VISIBLE else View.GONE }
@@ -148,74 +176,223 @@ class InstaEditor(private val a: MainActivity) {
     private var pendingMusicAsk = false
     private var postAfter = false
     private lateinit var btnExpPost: Button
-    private var pendingTextFocus = false
 
-    private fun outDur() = maxOf(0L, cutEnd - cutStart)
-    private fun cursorOut(): Long = ((try { video.currentPosition.toLong() } catch (e: Exception) { cutStart }) - cutStart).coerceIn(0, outDur())
-    private fun textVisibleAt(out: Long) = out >= textStart && (textEnd <= 0 || out < textEnd)
+    private fun outDur() = ed.total()
+    private fun cursorOut(): Long = playhead.coerceIn(0, outDur())
 
-    /** Copia o estado do editor pra linha do tempo. */
+    // ------------------------------------------------------------------ linha do tempo
+
+    /** Copia o estado pra linha do tempo e redesenha. */
     private fun syncTimeline() {
         if (!::timeline.isInitialized) return
-        timeline.dur = durMs; timeline.cutS = cutStart; timeline.cutE = cutEnd
-        timeline.musicOn = music != null; timeline.musicName = music?.let { VideoExport.nice(it) } ?: ""
-        timeline.musicDur = musicDurMs; timeline.musicStart = musicStart; timeline.musicEnd = musicEnd
-        timeline.text = etText.text.toString(); timeline.textS = textStart; timeline.textE = textEnd
+        if (timeline.st !== ed) { timeline.st = ed; timeline.relayout() }
+        if (timeline.selKind == "clip" && timeline.selIdx !in ed.clips.indices) { timeline.selKind = ""; timeline.selIdx = -1 }
+        if (timeline.selKind == "layer" && timeline.selIdx !in ed.layers.indices) { timeline.selKind = ""; timeline.selIdx = -1 }
+        if (timeline.selKind == "music" && ed.music.isEmpty()) timeline.selKind = ""
+        timeline.playhead = playhead.coerceIn(0, maxOf(0L, outDur()))
         timeline.invalidate()
     }
 
-    /** Depois de um botão mexer no tempo: atualiza tudo, mostra o ponto e salva. */
-    private fun afterEdit(what: String) {
-        if (cutEnd <= cutStart) cutEnd = durMs
-        syncTimeline(); timeline.clampRel()
-        textStart = timeline.textS; textEnd = timeline.textE; musicEnd = timeline.musicEnd
-        syncCut(); musicLabel2(); scheduleSave()
-        if (editMode) {
-            val ms = when (what) { "cut" -> cutStart; "text" -> cutStart + textStart; else -> null }
-            if (ms != null) { pauseEdit(); seekPrecise(ms); timeline.playhead = ms; updateTextLayer(ms - cutStart) }
-            else if (video.isPlaying) bgmStart(cursorOut())
-        }
+    /** Depois de qualquer mudança na edição: arruma tempos, redesenha tudo e salva. */
+    private fun afterEdit(what: String = "") {
+        ed.clamp()
+        playhead = playhead.coerceIn(0, maxOf(0L, outDur() - 1))
+        syncTimeline(); timeline.relayout()
+        syncCut(); musicLabel2(); refreshPanels(); drawLayers(true); scheduleSave()
+        if (what == "clip" || what == "seek") { pauseEdit(); showAt(playhead) }
+        else if (isPlayingNow() && what == "music") bgmStart(cursorOut())
     }
 
     private fun onTimeline(what: String, fin: Boolean) {
-        cutStart = timeline.cutS; cutEnd = timeline.cutE
-        textStart = timeline.textS; textEnd = timeline.textE
-        musicStart = timeline.musicStart; musicEnd = timeline.musicEnd
+        playhead = timeline.playhead
         when (what) {
-            "cut", "text", "seek" -> {
-                if (video.isPlaying) pauseEdit()
-                seekPrecise(timeline.playhead); tvPos.text = t(timeline.playhead)
-                updateTextLayer(timeline.playhead - cutStart)
-                if (what == "cut") syncCut()
+            "seek", "clip", "layer" -> {
+                if (isPlayingNow()) pauseEdit()
+                showAt(playhead, false, fin); tvPos.text = t(playhead)
+                if (what == "clip") syncCut()
+                if (what == "layer" && fin) refreshPanels()
             }
-            "music" -> { musicLabel2(); if (fin && video.isPlaying) bgmStart(cursorOut()) }
+            "music" -> { musicLabel2(); if (fin && isPlayingNow()) bgmStart(cursorOut()) }
         }
-        if (fin && what != "seek") scheduleSave()
-        if (what == "music" && fin && !video.isPlaying && music != null) previewMusicSnippet()
+        drawLayers(what != "seek")
+        if (fin && what != "seek") { ed.clamp(); timeline.relayout(); scheduleSave() }
+        if (what == "music" && fin && !isPlayingNow() && music != null) previewMusicSnippet()
     }
 
     /** Toca 3 segundos da música a partir do cursor, pra conferir a batida depois de arrastar. */
     private fun previewMusicSnippet() {
         bgmStart(cursorOut())
-        ui.postDelayed({ if (!video.isPlaying) bgmStop() }, 3000)
+        ui.postDelayed({ if (!isPlayingNow()) bgmStop() }, 3000)
     }
 
-    private fun updateTextLayer(out: Long) {
-        if (::textLayer.isInitialized && editMode) textLayer.visibility = if (textVisibleAt(out)) View.VISIBLE else View.INVISIBLE
+    private fun onSelectTimeline() {
+        typingMarked = false
+        when (timeline.selKind) {
+            "clip" -> showPanel(0)
+            "layer" -> showPanel(if (curLayer()?.isText == true) 1 else 2)
+            "music" -> showPanel(3)
+            else -> refreshPanels()
+        }
+        drawLayers(true)
     }
 
-    private fun slip(d: Long) {
-        if (music == null) { a.toast("Escolha uma música primeiro"); return }
-        musicStart = (musicStart + d).coerceIn(0, maxOf(0L, musicDurMs - 1000))
-        afterEdit("music"); if (!video.isPlaying) previewMusicSnippet()
+    private fun updateUndoBtns() {
+        if (!::btnUndo.isInitialized) return
+        btnUndo.alpha = if (undo.canUndo()) 1f else 0.35f; btnRedo.alpha = if (undo.canRedo()) 1f else 0.35f
     }
 
-    private fun cutAtCursor(start: Boolean) {
-        if (durMs <= 0) return
-        val pos = try { video.currentPosition.toLong() } catch (e: Exception) { return }
-        if (start) cutStart = pos.coerceIn(0, cutEnd - 500) else cutEnd = pos.coerceIn(cutStart + 500, durMs)
-        afterEdit("cut")
+    private fun doUndo(redo: Boolean) {
+        val n = (if (redo) undo.redo(ed) else undo.undo(ed)) ?: run { a.toast(if (redo) "Nada pra refazer" else "Nada pra desfazer"); return }
+        n.musicDur = ed.musicDur
+        ed = n; timeline.st = ed
+        updateUndoBtns(); afterEdit("clip"); loadAllThumbs(); updateMusicLabel()
     }
+
+    // ------------------------------------------------------------------ ações estilo CapCut
+
+    /** ✂ Dividir: a camada selecionada, ou o clipe no cursor. */
+    private fun splitHere() {
+        val l = curLayer()
+        if (l != null) {
+            mark()
+            val ni = ed.splitLayer(timeline.selIdx, playhead) ?: run { a.toast("Coloque o cursor no meio da camada pra dividir"); return }
+            timeline.selIdx = ni
+        } else {
+            mark()
+            val ni = ed.splitClip(playhead) ?: run { a.toast("Coloque o cursor no meio de um clipe pra dividir"); return }
+            timeline.selKind = "clip"; timeline.selIdx = ni
+        }
+        afterEdit(); a.toast("✂ Dividido")
+    }
+
+    /** 🗑 Apagar o que está selecionado. */
+    private fun deleteSel() {
+        when (timeline.selKind) {
+            "layer" -> { mark(); ed.layers.removeAt(timeline.selIdx); timeline.selKind = ""; afterEdit() }
+            "music" -> { mark(); music = null; timeline.selKind = ""; updateMusicLabel(); afterEdit() }
+            else -> {
+                val k = curClipIdx()
+                if (ed.clips.size <= 1) { a.toast("Esse é o único clipe. Use ＋ Novo pra começar outro vídeo."); return }
+                mark(); ed.clips.removeAt(k); timeline.selKind = "clip"; timeline.selIdx = minOf(k, ed.clips.size - 1)
+                playhead = ed.startOf(timeline.selIdx); afterEdit("clip")
+            }
+        }
+    }
+
+    private fun duplicateSel() {
+        val l = curLayer()
+        if (l != null) { mark(); ed.layers.add(timeline.selIdx + 1, l.copy()); timeline.selIdx += 1; afterEdit(); a.toast("Camada duplicada"); return }
+        val k = curClipIdx(); val c = ed.clips.getOrNull(k) ?: return
+        mark(); ed.clips.add(k + 1, c.copy()); timeline.selKind = "clip"; timeline.selIdx = k + 1; afterEdit("clip"); a.toast("Clipe duplicado")
+    }
+
+    private fun moveClip(dir: Int) {
+        val k = curClipIdx(); val n = k + dir
+        if (k < 0 || n !in ed.clips.indices) return
+        mark(); val c = ed.clips.removeAt(k); ed.clips.add(n, c)
+        timeline.selKind = "clip"; timeline.selIdx = n; playhead = ed.startOf(n); afterEdit("clip")
+    }
+
+    /** Corta o início (ou o fim) do clipe selecionado onde está o cursor. */
+    private fun trimAtCursor(start: Boolean) {
+        val k = curClipIdx(); val c = ed.clips.getOrNull(k) ?: return
+        val (kk, local) = ed.locate(playhead)
+        if (kk != k) { a.toast("Coloque o cursor em cima do clipe"); return }
+        mark()
+        if (start) c.s = local.coerceIn(0, c.e - 300) else c.e = local.coerceIn(c.s + 300, if (c.photo) 60_000 else c.srcDur)
+        playhead = ed.startOf(k) + (if (start) 0 else c.len - 1)
+        afterEdit("clip")
+    }
+
+    private fun layerTime(which: String) {
+        val l = curLayer() ?: run { a.toast("Selecione uma camada na linha do tempo"); return }
+        mark(); val o = cursorOut(); val tot = outDur()
+        when (which) {
+            "s" -> l.s = o.coerceIn(0, maxOf(0, l.e - 200))
+            "e" -> l.e = o.coerceIn(l.s + 200, tot)
+            else -> { l.s = 0; l.e = tot }
+        }
+        afterEdit()
+    }
+
+    /** Texto novo: o 1º cobre o vídeo todo; os outros entram no cursor por 3 s. */
+    private fun addText(txt: String = ""): Layer {
+        mark()
+        val tot = outDur()
+        val first = ed.layers.none { it.isText }
+        val s = if (first) 0 else cursorOut().coerceIn(0, maxOf(0, tot - 500))
+        val l = Layer("text", txt, defStyle.copy(x = -1f, y = -1f), s = s, e = if (first) tot else minOf(tot, s + 3000))
+        ed.layers.add(l); timeline.selKind = "layer"; timeline.selIdx = ed.layers.size - 1
+        typingMarked = true
+        timeline.relayout(); return l
+    }
+
+    private fun newTextAndEdit() {
+        if (ed.clips.isEmpty()) return
+        addText(); afterEdit(); showPanel(1)
+        loadingText = true; etText.setText(""); loadingText = false
+        etText.requestFocus()
+        (a.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).showSoftInput(etText, 0)
+    }
+
+    private fun toggleSound() {
+        val c = curClip() ?: return
+        mark(); c.sound = !c.sound; applyVolume(); afterEdit()
+    }
+
+    /** Atualiza os textos e botões dos painéis com o que está selecionado. */
+    private fun refreshPanels() {
+        if (!::tvCut.isInitialized) return
+        val k = curClipIdx(); val c = ed.clips.getOrNull(k)
+        syncCut()
+        durRow.visibility = if (c?.photo == true) View.VISIBLE else View.GONE
+        btnSound.text = if (c?.sound != false) "🔊 Som original deste clipe: ligado" else "🔇 Som original deste clipe: desligado"
+        btnSound.visibility = if (c?.photo == true) View.GONE else View.VISIBLE
+        if (c?.photo == true) photoSecs = maxOf(1, (c.len / 1000).toInt())
+        val tl = curText()
+        loadingText = true
+        if (tl != null && etText.text.toString() != tl.text) etText.setText(tl.text)
+        if (tl == null && etText.text.isNotEmpty()) etText.setText("")
+        loadingText = false
+        val nTxt = ed.layers.count { it.isText }
+        tvTextInfo.text = if (tl != null) "Texto ${ed.layers.filter { it.isText }.indexOf(tl) + 1} de $nTxt · aparece ${t(tl.s)} → ${t(tl.e)}. Arraste o texto na prévia pra mudar de lugar; pinça muda o tamanho."
+            else if (nTxt == 0) "Escreva abaixo e o texto aparece no vídeo todo. Pra outro texto em outro momento: ＋ Texto."
+            else "Toque num texto (bloco rosa) na linha do tempo pra editar, ou escreva pra criar um novo."
+        val il = curLayer()?.takeIf { !it.isText }
+        tvImgInfo.text = if (il != null) "Imagem · aparece ${t(il.s)} → ${t(il.e)}. Arraste na prévia pra mudar de lugar; pinça muda o tamanho."
+            else "Coloque uma foto, figurinha ou logo (PNG com fundo transparente fica perfeito) por cima do vídeo."
+        if (il != null && ::imgSeek.isInitialized) imgSeek.progress = (il.scale * 100).toInt().coerceIn(5, 150) - 5
+        if (::seek.isInitialized) seek.progress = style.size - 20
+        redraws.forEach { it() }
+        updateCropUi()
+    }
+
+    // ------------------------------------------------------------------ miniaturas
+
+    private fun loadThumbs(c: Clip) {
+        val key = c.file
+        if (thumbCache.containsKey(key) || !thumbLoading.add(key)) return
+        val f = File(projDir(), c.file)
+        Thread {
+            val out = ArrayList<Bitmap>()
+            try {
+                if (c.photo) BitmapFactory.decodeFile(f.path, BitmapFactory.Options().apply { inSampleSize = 8 })?.let { out.add(it) }
+                else {
+                    val r = android.media.MediaMetadataRetriever(); r.setDataSource(f.path)
+                    val d = maxOf(1L, c.srcDur); val n = minOf(16, maxOf(4, (d / 1000).toInt()))
+                    for (i in 0 until n) {
+                        val us = d * 1000 * i / n + 1000
+                        val b = if (android.os.Build.VERSION.SDK_INT >= 27) r.getScaledFrameAtTime(us, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 96, 170)
+                                else r.getFrameAtTime(us, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let { Bitmap.createScaledBitmap(it, 96, 170, true) }
+                        if (b != null) out.add(b)
+                    }
+                    r.release()
+                }
+            } catch (e: Exception) { }
+            ui.post { thumbLoading.remove(key); thumbCache[key] = out; if (::timeline.isInitialized) timeline.invalidate() }
+        }.start()
+    }
+    private fun loadAllThumbs() = ed.clips.forEach { loadThumbs(it) }
 
     /** Duração e onda da música escolhida (em segundo plano, com cache). */
     private fun refreshMusicMeta() {
@@ -231,48 +408,41 @@ class InstaEditor(private val a: MainActivity) {
         }.start()
     }
 
-    /** Miniaturas do vídeo pra camada de vídeo. */
-    private fun loadThumbs(s: Uri, d: Long) {
-        Thread {
-            val out = ArrayList<Bitmap>()
-            try {
-                val r = android.media.MediaMetadataRetriever(); r.setDataSource(a, s)
-                val n = 10
-                for (i in 0 until n) {
-                    val us = d * 1000 * i / n + 1000
-                    val b = if (android.os.Build.VERSION.SDK_INT >= 27) r.getScaledFrameAtTime(us, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 96, 170)
-                            else r.getFrameAtTime(us, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let { Bitmap.createScaledBitmap(it, 96, 170, true) }
-                    if (b != null) out.add(b)
-                }
-                r.release()
-            } catch (e: Exception) { }
-            ui.post { if (src == s) { timeline.thumbs = out; timeline.invalidate() } }
-        }.start()
-    }
-
     private fun t(ms: Long) = "%d:%02d,%d".format(ms / 60000, (ms / 1000) % 60, (ms % 1000) / 100)
 
     private fun syncCut() {
-        if (durMs <= 0) return
-        tvCut.text = "✂ ${t(cutStart)} → ${t(cutEnd)}  ·  fica com ${t(cutEnd - cutStart)}"
-        syncTimeline()
+        if (!::tvCut.isInitialized) return
+        val k = curClipIdx(); val c = ed.clips.getOrNull(k) ?: run { tvCut.text = ""; return }
+        tvCut.text = "🎬 Clipe ${k + 1} de ${ed.clips.size} · ${t(c.len)}" +
+            (if (c.photo) " (foto)" else "  ·  do ${t(c.s)} ao ${t(c.e)} do original") + "\nVídeo final: ${t(outDur())}"
     }
 
-    private fun nudge(start: Boolean, d: Long) {
-        if (durMs <= 0) return
-        if (start) cutStart = (cutStart + d).coerceIn(0, cutEnd - 500) else cutEnd = (cutEnd + d).coerceIn(cutStart + 500, durMs)
-        syncCut(); scheduleSave(); frameAtCut(start)
-    }
+    // ------------------------------------------------------------------ prévia tocando a sequência
 
     private var mp: MediaPlayer? = null
     private var bgm: MediaPlayer? = null
     private var editMode = false
+    private var isPlay = false
+    private var loadedFile = ""               // arquivo aberto no VideoView
+    private var pendingLocal = -1L            // onde posicionar quando o vídeo abrir
+    private var switching = false             // trocando de clipe: não lê a posição ainda
+    private var photoWall = 0L; private var photoOut0 = 0L
+    private var playClip = -1
+    private var settleUntil = 0L              // logo depois de um seek a posição do player ainda é a antiga
     private lateinit var textLayer: ImageView
     private lateinit var playRow: LinearLayout
     private lateinit var btnTrecho: Button
     private lateinit var tvPos: TextView
+    private var stillSrc: Bitmap? = null      // quadro parado mostrado por cima (foto ou recorte)
+    private val photoCache = HashMap<String, Bitmap>()
 
-    private fun applyVolume() { val v = if (mute || music != null) 0f else 1f; try { mp?.setVolume(v, v) } catch (e: Exception) { } }
+    private fun isPlayingNow() = isPlay
+
+    private fun applyVolume() {
+        val c = ed.clips.getOrNull(if (playClip >= 0) playClip else curClipIdx())
+        val v = if (mute || music != null || c?.sound == false) 0f else 1f
+        try { mp?.setVolume(v, v) } catch (e: Exception) { }
+    }
 
     private fun seekPrecise(ms: Long) {
         val p = mp
@@ -289,62 +459,210 @@ class InstaEditor(private val a: MainActivity) {
     private fun bgmStop() { try { bgm?.stop(); bgm?.release() } catch (e: Exception) { }; bgm = null }
 
     private fun pauseEdit() {
+        isPlay = false
         try { if (video.isPlaying) video.pause() } catch (e: Exception) { }
         bgmStop()
-        if (::btnTrecho.isInitialized) btnTrecho.text = "▶ Ver trecho"
+        if (::btnTrecho.isInitialized) btnTrecho.text = "▶ Tocar"
     }
 
-    /** Toca só o trecho escolhido, em loop, com o texto e a música por cima. */
+    private fun photoBitmap(c: Clip): Bitmap? = photoCache[c.file] ?: try {
+        val f = File(projDir(), c.file)
+        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }; BitmapFactory.decodeFile(f.path, o)
+        var smp = 1; while (maxOf(o.outWidth, o.outHeight) / (smp * 2) >= 1100) smp *= 2
+        BitmapFactory.decodeFile(f.path, BitmapFactory.Options().apply { inSampleSize = smp })?.also { if (photoCache.size > 8) photoCache.clear(); photoCache[c.file] = it }
+    } catch (e: Exception) { null }
+
+    private fun showStill(b: Bitmap?) {
+        stillSrc = b
+        if (b == null) { preview.visibility = View.GONE; return }
+        preview.setImageBitmap(pv(b)); preview.visibility = View.VISIBLE
+    }
+
+    /** Mostra o quadro do tempo [out] (troca de clipe se precisar). */
+    private fun showAt(out: Long, play: Boolean = isPlay, still: Boolean = true) {
+        if (!editMode || ed.clips.isEmpty()) return
+        val (k, local) = ed.locate(out)
+        val c = ed.clips[k]
+        playClip = k
+        if (c.photo) {
+            try { if (video.isPlaying) video.pause() } catch (e: Exception) { }
+            showStill(photoBitmap(c))
+            photoWall = System.currentTimeMillis(); photoOut0 = out
+        } else {
+            if (!play && c.crop.active && still) {
+                // parado com recorte: mostra o quadro já recortado (tocando, o vídeo aparece inteiro)
+                val f = File(projDir(), c.file); val my = ++frameJob
+                Thread { val b = VideoExport.frameAt(a, Uri.fromFile(f), local); ui.post { if (my == frameJob && !isPlay) showStill(b) } }.start()
+            } else showStill(null)
+            if (loadedFile != c.file) {
+                loadedFile = c.file; pendingLocal = local; switching = true; mp = null
+                video.setVideoURI(Uri.fromFile(File(projDir(), c.file)))
+            } else if (switching) pendingLocal = local
+            else {
+                seekPrecise(local); settleUntil = System.currentTimeMillis() + 300
+                if (play && !video.isPlaying) video.start()
+            }
+        }
+        applyVolume()
+        updateLayersAt(out)
+    }
+
+    private var frameJob = 0
+
+    /** Toca a sequência inteira em loop, com as camadas e a música por cima. */
     private fun togglePlay() {
         if (!editMode) { if (video.isPlaying) video.pause() else video.start(); return }
-        if (video.isPlaying) { pauseEdit(); return }
-        var pos = try { video.currentPosition.toLong() } catch (e: Exception) { 0L }
-        if (pos < cutStart || pos >= cutEnd - 200) { seekPrecise(cutStart); pos = cutStart }
-        applyVolume(); video.start(); bgmStart(pos - cutStart)
+        if (isPlay) { pauseEdit(); return }
+        if (playhead >= outDur() - 100) playhead = 0
+        isPlay = true
         btnTrecho.text = "⏸ Pausar"
+        showStill(null)
+        showAt(playhead, true)
+        bgmStart(playhead)
         ui.removeCallbacks(loopTick); ui.post(loopTick)
     }
 
     private val loopTick = object : Runnable {
         override fun run() {
             if (!editMode) return
-            val pos = try { video.currentPosition.toLong() } catch (e: Exception) { 0L }
-            if (video.isPlaying) {
-                tvPos.text = t(pos)
-                timeline.playhead = pos; timeline.invalidate()
-                updateTextLayer(pos - cutStart)
-                if (musicEnd > 0 && pos - cutStart >= musicEnd && bgm != null) bgmStop()
+            if (isPlay && ed.clips.isNotEmpty()) {
+                val k = playClip.coerceIn(0, ed.clips.size - 1); val c = ed.clips[k]
+                val st0 = ed.startOf(k)
+                var out = playhead
+                var next = false
+                if (c.photo) {
+                    out = photoOut0 + (System.currentTimeMillis() - photoWall)
+                    if (out >= st0 + c.len) next = true
+                } else if (!switching && System.currentTimeMillis() >= settleUntil) {
+                    val pos = try { video.currentPosition.toLong() } catch (e: Exception) { c.s }
+                    out = st0 + (pos - c.s).coerceAtLeast(0)
+                    if (pos >= c.e - 40 || (!video.isPlaying && pos > c.s + 100)) next = true
+                }
+                if (next) {
+                    if (k + 1 < ed.clips.size) { out = ed.startOf(k + 1); playhead = out; showAt(out, true) }
+                    else { playhead = 0; showAt(0, true); bgmStart(0) }
+                } else {
+                    playhead = out.coerceIn(0, outDur())
+                }
+                tvPos.text = t(playhead)
+                timeline.playhead = playhead; timeline.invalidate()
+                updateLayersAt(playhead)
+                if (musicEnd > 0 && playhead >= musicEnd && bgm != null) bgmStop()
             }
-            if (video.isPlaying && pos >= cutEnd) { seekPrecise(cutStart); bgmStart(0) }
-            ui.postDelayed(this, 50)
+            ui.postDelayed(this, 40)
         }
     }
 
-    /** Prévia do vídeo de verdade: dá pra tocar o trecho e arrastar o corte vendo o quadro. */
-    private fun showEditVideo(s: Uri) {
+    private var layersKey = "?"
+    /** Desenha na prévia só as camadas visíveis agora (redesenha quando muda). */
+    private fun updateLayersAt(out: Long, force: Boolean = false) {
+        if (!::textLayer.isInitialized || !editMode) return
+        val vis = ed.layers.filter { it.visibleAt(out) && (!it.isText || it.text.isNotBlank()) }
+        val sel = curLayer()
+        val k = vis.joinToString(",") { System.identityHashCode(it).toString() } + "|" + (if (sel != null && sel in vis) System.identityHashCode(sel) else 0)
+        if (!force && k == layersKey) return
+        layersKey = k
+        val b = LayerArt.render(vis, projDir(), 540, 960)
+        // contorno tracejado em volta da camada selecionada (só na prévia)
+        if (sel != null && sel in vis) {
+            val r = LayerArt.box(sel, projDir(), 540, 960)
+            android.graphics.Canvas(b).drawRect(r, android.graphics.Paint().apply {
+                style = android.graphics.Paint.Style.STROKE; strokeWidth = 3f; color = 0xFFFFFFFF.toInt()
+                pathEffect = android.graphics.DashPathEffect(floatArrayOf(12f, 8f), 0f)
+            })
+        }
+        textLayer.setImageBitmap(b)
+    }
+    private fun drawLayers(force: Boolean = false) = updateLayersAt(playhead, force)
+
+    /** Entra no editor com a linha do tempo. */
+    private fun showEditVideo() {
         editMode = true
         afterBox.visibility = View.GONE
-        preview.visibility = View.GONE
         video.visibility = View.VISIBLE; textLayer.visibility = View.VISIBLE; playRow.visibility = View.VISIBLE
-        timeline.visibility = View.VISIBLE; tlHint.visibility = View.VISIBLE
-        timeline.playhead = cutStart; syncTimeline(); updateTextLayer(0)
-        btnTrecho.text = "▶ Ver trecho"
-        video.setVideoURI(s)
+        timeline.visibility = View.VISIBLE; tlHint.visibility = View.VISIBLE; toolBox.visibility = View.VISIBLE
+        loadedFile = ""; isPlay = false; btnTrecho.text = "▶ Tocar"
+        playhead = playhead.coerceIn(0, maxOf(0L, outDur() - 1))
+        timeline.st = ed; timeline.fit(); syncTimeline(); timeline.relayout()
         ui.removeCallbacks(loopTick); ui.post(loopTick)
-        drawPreview()
+        showAt(playhead, false)
+        drawLayers(true); refreshPanels(); updateUndoBtns()
     }
 
-    private var frameJob = 0
-    /** Mostra na prévia o quadro do ponto de corte. */
-    private fun frameAtCut(start: Boolean) {
-        if (editMode) { pauseEdit(); val ms = if (start) cutStart else maxOf(0, cutEnd - 100); seekPrecise(ms); timeline.playhead = ms; timeline.invalidate(); return }
-        val s = src ?: return
-        val ms = if (start) cutStart else maxOf(0, cutEnd - 100)
-        val my = ++frameJob
-        Thread {
-            val b = VideoExport.frameAt(a, s, ms)
-            ui.post { if (my == frameJob && b != null) { if (start) base = b; preview.setImageBitmap(VideoExport.preview(pv(b), etText.text.toString(), style)) } }
-        }.start()
+    private lateinit var toolBox: LinearLayout
+
+    // ---------- arrastar camadas (e o recorte) direto na prévia
+    private var dragMode = ""; private var dx0 = 0f; private var dy0 = 0f; private var dMoved = false
+    private var lx0 = 0f; private var ly0 = 0f; private var dragMarked = false
+    private var pBase = 0f; private var pSpan0 = 1f
+    private val pinch by lazy {
+        android.view.ScaleGestureDetector(a, object : android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScaleBegin(det: android.view.ScaleGestureDetector): Boolean {
+                val l = curLayer() ?: return false
+                pBase = if (l.isText) l.style.size.toFloat() else l.scale; pSpan0 = maxOf(1f, det.currentSpan); return true
+            }
+            override fun onScale(det: android.view.ScaleGestureDetector): Boolean {
+                val l = curLayer() ?: return false
+                if (!dragMarked) { mark(); dragMarked = true }
+                val f = det.currentSpan / pSpan0
+                if (l.isText) l.style.size = (pBase * f).toInt().coerceIn(20, 100) else l.scale = (pBase * f).coerceIn(0.05f, 1.5f)
+                dMoved = true; dragMode = "pinch"; drawLayers(true); return true
+            }
+        })
+    }
+
+    private fun onPreviewTouch(v: View, e: android.view.MotionEvent): Boolean {
+        if (!editMode) { if (e.action == android.view.MotionEvent.ACTION_UP) togglePlay(); return true }
+        pinch.onTouchEvent(e)
+        val fx = e.x / v.width * 540f; val fy = e.y / v.height * 960f
+        when (e.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                v.parent.requestDisallowInterceptTouchEvent(true)
+                dx0 = e.x; dy0 = e.y; dMoved = false; dragMarked = false; dragMode = ""
+                val vis = ed.layers.filter { it.visibleAt(playhead) && (!it.isText || it.text.isNotBlank()) }
+                val hit = (listOfNotNull(curLayer()?.takeIf { it in vis }) + vis.reversed()).firstOrNull {
+                    val r = LayerArt.box(it, projDir(), 540, 960); r.inset(-24f, -24f); r.contains(fx, fy)
+                }
+                if (hit != null) {
+                    if (hit !== curLayer()) { timeline.selKind = "layer"; timeline.selIdx = ed.layers.indexOf(hit); onSelectTimeline() }
+                    val r = LayerArt.box(hit, projDir(), 540, 960)
+                    lx0 = if (hit.isText) (if (hit.style.x >= 0) hit.style.x else 0.5f) else hit.x
+                    ly0 = if (hit.isText) (if (hit.style.y >= 0) hit.style.y else r.centerY() / 960f) else hit.y
+                    dragMode = "layer"
+                } else if (stillSrc != null && crop.active && !isPlay) { dragMode = "crop"; lx0 = e.x; ly0 = e.y }
+            }
+            android.view.MotionEvent.ACTION_MOVE -> {
+                if (e.pointerCount > 1 || dragMode == "pinch") return true
+                if (!dMoved && Math.abs(e.x - dx0) + Math.abs(e.y - dy0) < a.dp(6)) return true
+                dMoved = true
+                when (dragMode) {
+                    "layer" -> {
+                        val l = curLayer() ?: return true
+                        if (!dragMarked) { mark(); dragMarked = true }
+                        var nx = (lx0 + (e.x - dx0) / v.width).coerceIn(0.02f, 0.98f)
+                        var ny = (ly0 + (e.y - dy0) / v.height).coerceIn(0.02f, 0.98f)
+                        if (Math.abs(nx - 0.5f) < 0.025f) nx = 0.5f // gruda no centro
+                        if (Math.abs(ny - 0.5f) < 0.02f) ny = 0.5f
+                        if (l.isText) { l.style.x = nx; l.style.y = ny } else { l.x = nx; l.y = ny }
+                        drawLayers(true)
+                    }
+                    "crop" -> {
+                        if (!dragMarked) { mark(); dragMarked = true }
+                        val k = 2f / maxOf(1f, crop.zoom - 0.9f)
+                        crop = crop.copy(px = (crop.px - (e.x - lx0) / v.width * k).coerceIn(-1f, 1f), py = (crop.py - (e.y - ly0) / v.height * k).coerceIn(-1f, 1f))
+                        lx0 = e.x; ly0 = e.y; stillSrc?.let { preview.setImageBitmap(pv(it)) }
+                    }
+                }
+            }
+            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                v.parent.requestDisallowInterceptTouchEvent(false)
+                if (!dMoved && e.actionMasked == android.view.MotionEvent.ACTION_UP) {
+                    if (dragMode != "layer") togglePlay()
+                } else if (dMoved) { if (dragMode == "pinch") refreshPanels(); updateCropUi(); scheduleSave() }
+                dragMode = ""
+            }
+        }
+        return true
     }
     private lateinit var tvQ: TextView
     private lateinit var modelBox: LinearLayout
@@ -430,11 +748,11 @@ class InstaEditor(private val a: MainActivity) {
         startBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         ce.addView(startBox, a.lpMatch())
         a.text("O que você quer editar?", 16f, a.FG, parent = startBox, bold = true)
-        a.button("✨  Vídeo do Flow", startBox, primary = true) { flowPicker(false) }
+        a.button("✨  Vídeo do Flow", startBox, primary = true) { flowAdd = false; flowPicker(false) }
         a.button("🖼  Vídeo da galeria", startBox) { openGallery("video/*", REQ_VIDEO, false) }
         a.button("📷  Foto → vídeo", startBox) { open("image/*", REQ_PHOTO) }
         a.button("📁  Abrir um esboço salvo", startBox) { showSection(1) }
-        a.text("Os vídeos novos do Flow já viram esboço sozinhos. É só abrir e editar.", 12f, a.MUTED, parent = startBox)
+        a.text("Os vídeos novos do Flow já viram esboço sozinhos. É só abrir e editar. Depois dá pra juntar mais vídeos e fotos com ＋ na linha do tempo.", 12f, a.MUTED, parent = startBox)
         work = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         ce.addView(work, a.lpMatch())
         val pick = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
@@ -449,68 +767,84 @@ class InstaEditor(private val a: MainActivity) {
         a.button("☆ Salvar como modelo", work) { saveModelDialog() }
         renderModels()
 
-        // prévia 9:16
+        // prévia 9:16: vídeo embaixo, quadro parado (foto/recorte) no meio, camadas por cima
         val w = a.resources.displayMetrics.widthPixels - a.dp(64)
         val pw = minOf(w, a.dp(260)); val ph = pw * 16 / 9
         val frame = FrameLayout(a).apply {
             background = GradientDrawable().apply { setColor(0xFF000000.toInt()); cornerRadius = a.dp(12).toFloat(); setStroke(a.dp(1), a.LINE) }
         }
         work.addView(frame, LinearLayout.LayoutParams(pw, ph).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = a.dp(8) })
-        preview = ImageView(a).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
-        frame.addView(preview, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        run {
-            var lx = 0f; var ly = 0f
-            preview.setOnTouchListener { v, e ->
-                if (!crop.active || base == null) return@setOnTouchListener false
-                when (e.action) {
-                    android.view.MotionEvent.ACTION_DOWN -> { lx = e.x; ly = e.y; v.parent.requestDisallowInterceptTouchEvent(true) }
-                    android.view.MotionEvent.ACTION_MOVE -> {
-                        val k = 2f / maxOf(1f, crop.zoom - 0.9f)
-                        crop = crop.copy(px = (crop.px - (e.x - lx) / v.width * k).coerceIn(-1f, 1f), py = (crop.py - (e.y - ly) / v.height * k).coerceIn(-1f, 1f))
-                        lx = e.x; ly = e.y; drawPreview()
-                    }
-                    android.view.MotionEvent.ACTION_UP -> { updateCropUi(); scheduleSave() }
-                }
-                true
-            }
-        }
         video = VideoView(a).apply { visibility = View.GONE }
         frame.addView(video, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER))
         video.setOnPreparedListener { p ->
             mp = p; p.isLooping = !editMode; applyVolume()
-            if (editMode) seekPrecise(cutStart)
+            if (editMode) {
+                switching = false
+                val c = ed.clips.getOrNull(playClip)
+                seekPrecise(if (pendingLocal >= 0) pendingLocal else c?.s ?: 0); pendingLocal = -1
+                settleUntil = System.currentTimeMillis() + 300
+                if (isPlay) video.start()
+            }
         }
-        video.setOnClickListener { togglePlay() }
+        preview = ImageView(a).apply { scaleType = ImageView.ScaleType.FIT_CENTER; setBackgroundColor(0xFF000000.toInt()) }
+        frame.addView(preview, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         textLayer = ImageView(a).apply { scaleType = ImageView.ScaleType.FIT_CENTER; visibility = View.GONE }
         frame.addView(textLayer, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        textLayer.setOnTouchListener { v, e -> onPreviewTouch(v, e) }
+        video.setOnClickListener { togglePlay() }
         playRow = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; visibility = View.GONE }
         work.addView(playRow, a.lpMatch().apply { topMargin = a.dp(6) })
-        btnTrecho = a.button("▶ Ver trecho", playRow, primary = true, weight = true) { togglePlay() }
-        tvPos = TextView(a).apply { setTextColor(a.FG); textSize = 15f; gravity = Gravity.CENTER; text = "0:00,0" }
-        playRow.addView(tvPos, LinearLayout.LayoutParams(a.dp(90), ViewGroup.LayoutParams.WRAP_CONTENT))
+        btnUndo = a.button("↶", playRow) { doUndo(false) }
+        btnTrecho = a.button("▶ Tocar", playRow, primary = true, weight = true) { togglePlay() }
+        btnRedo = a.button("↷", playRow) { doUndo(true) }
+        tvPos = TextView(a).apply { setTextColor(a.FG); textSize = 14f; gravity = Gravity.CENTER; text = "0:00,0" }
+        playRow.addView(tvPos, LinearLayout.LayoutParams(a.dp(70), ViewGroup.LayoutParams.WRAP_CONTENT))
 
-        // ---------- linha do tempo (camadas) + ferramentas de cada camada
+        // ---------- linha do tempo (clipes + camadas + música)
         timeline = TimelineView(a).apply { visibility = View.GONE }
         work.addView(timeline, a.lpMatch().apply { topMargin = a.dp(10) })
-        tlHint = a.text("Toque numa camada pra editar. Bordas cortam; arrastar a música sincroniza; o bloco do texto escolhe quando ele aparece.", 11f, a.MUTED, parent = work)
+        timeline.thumbs = { c -> thumbCache[c.file] }
+        tlHint = a.text("Arraste pro lado pra andar no vídeo · pinça = zoom · toque num bloco pra selecionar · alças brancas cortam · ＋ junta outro vídeo ou foto.", 11f, a.MUTED, parent = work)
         tlHint.visibility = View.GONE
-        timeline.onSelect = { tk ->
-            if (tk == 1 && music == null) pendingMusicAsk = true
-            if (tk == 2) pendingTextFocus = true
-            showPanel(tk)
-        }
+        timeline.onSelect = { onSelectTimeline() }
+        timeline.onBeforeEdit = { mark() }
         timeline.onChange = { what, fin -> onTimeline(what, fin) }
+        timeline.onAddClip = { addClipDialog() }
+        timeline.onAddMusic = { pendingMusicAsk = false; showPanel(3); chooseMusic() }
+
+        // barra de ferramentas (igual à de baixo do CapCut)
+        toolBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        work.addView(toolBox, a.lpMatch())
+        val tb1 = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        toolBox.addView(tb1, a.lpMatch())
+        a.button("✂ Dividir", tb1, weight = true) { splitHere() }.textSize = 12.5f
+        a.button("⧉ Duplicar", tb1, weight = true) { duplicateSel() }.textSize = 12.5f
+        a.button("🗑 Apagar", tb1, weight = true) { deleteSel() }.textSize = 12.5f
+        val tb2 = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        toolBox.addView(tb2, a.lpMatch())
+        a.button("＋ Vídeo", tb2, weight = true) { addClipDialog() }.textSize = 12.5f
+        a.button("＋ Texto", tb2, weight = true) { newTextAndEdit() }.textSize = 12.5f
+        a.button("＋ Imagem", tb2, weight = true) { openGallery("image/*", REQ_LAYER_IMG, false) }.textSize = 12.5f
+
         val tabs = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
         work.addView(tabs, a.lpMatch().apply { topMargin = a.dp(8) })
-        listOf("🎬 Vídeo", "🎵 Música", "T Texto", "⬆ Exportar").forEachIndexed { i, n ->
-            tabBtns += a.button(n, tabs, weight = true) { showPanel(i); if (i < 3) { timeline.selected = i; timeline.invalidate() } }
+        listOf("🎬 Clipe", "T Texto", "🖼 Imagem", "🎵 Música", "⬆ Salvar").forEachIndexed { i, n ->
+            tabBtns += a.button(n, tabs, weight = true) {
+                when (i) {
+                    0 -> { timeline.selKind = "clip"; timeline.selIdx = ed.locate(playhead).first }
+                    1 -> if (curText() == null) ed.layers.indexOfFirst { it.isText && it.visibleAt(playhead) }.takeIf { it >= 0 }?.let { timeline.selKind = "layer"; timeline.selIdx = it }
+                    2 -> if (curLayer()?.isText != false) ed.layers.indexOfFirst { !it.isText && it.visibleAt(playhead) }.takeIf { it >= 0 }?.let { timeline.selKind = "layer"; timeline.selIdx = it }
+                    3 -> if (music != null) timeline.selKind = "music" else pendingMusicAsk = true
+                }
+                typingMarked = false; timeline.invalidate(); drawLayers(true); showPanel(i)
+            }.also { it.textSize = 12f }
         }
-        pVideo = panel(work); pMusic = panel(work); pText = panel(work); pExport = panel(work)
+        pVideo = panel(work); pText = panel(work); pImage = panel(work); pMusic = panel(work); pExport = panel(work)
 
-        // texto
-        a.text("Texto no vídeo (Enter = novo parágrafo)", 12f, a.MUTED, parent = pText)
+        // ---------- T texto (o selecionado)
+        tvTextInfo = a.text("", 12f, a.MUTED, parent = pText)
         etText = EditText(a).apply {
-            setTextColor(a.FG); setHintTextColor(a.MUTED); textSize = 16f; hint = "Escreva aqui…"
+            setTextColor(a.FG); setHintTextColor(a.MUTED); textSize = 16f; hint = "Escreva aqui… (Enter = novo parágrafo)"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             minLines = 3; maxLines = 8; gravity = Gravity.TOP or Gravity.START
             background = GradientDrawable().apply { setColor(a.BG); cornerRadius = a.dp(10).toFloat(); setStroke(a.dp(1), a.LINE) }
@@ -518,70 +852,110 @@ class InstaEditor(private val a: MainActivity) {
             addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, x: Int, y: Int, z: Int) {}
                 override fun onTextChanged(s: CharSequence?, x: Int, y: Int, z: Int) {}
-                override fun afterTextChanged(s: Editable?) { schedulePreview(); scheduleSave(); syncTimeline() }
+                override fun afterTextChanged(s: Editable?) { onTyped(s?.toString().orEmpty()) }
             })
         }
         pText.addView(etText, a.lpMatch())
+        val tt = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        pText.addView(tt, a.lpMatch())
+        a.button("＋ Outro texto", tt, weight = true) { newTextAndEdit() }
+        a.button("✂ Dividir", tt, weight = true) { splitHere() }
+        a.button("🗑", tt) { deleteSel() }
 
-        a.text("Tamanho", 12f, a.MUTED, parent = pText)
+        a.text("Tamanho (ou pinça na prévia)", 12f, a.MUTED, parent = pText)
         seek = SeekBar(a)
         pText.addView(seek.apply {
             max = 80; progress = style.size - 20
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) { style.size = p + 20; schedulePreview() }
-                override fun onStartTrackingTouch(sb: SeekBar?) {}
-                override fun onStopTrackingTouch(sb: SeekBar?) { style.save(a); scheduleSave() }
+                override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) { if (fromUser) { style.size = p + 20; schedulePreview() } }
+                override fun onStartTrackingTouch(sb: SeekBar?) { mark() }
+                override fun onStopTrackingTouch(sb: SeekBar?) { defStyle.size = style.size; style.save(a); scheduleSave() }
             })
         }, a.lpMatch())
         a.text("Cor", 12f, a.MUTED, parent = pText)
-        redraws += a.chips(pText, TextStyle.COLORS.keys.toList(), { style.color }) { style.color = it; changed() }
+        redraws += a.chips(pText, TextStyle.COLORS.keys.toList(), { style.color }) { mark(); style.color = it; changed() }
         a.text("Fundo do texto", 12f, a.MUTED, parent = pText)
-        redraws += a.chips(pText, TextStyle.BGS, { style.bg }) { style.bg = it; changed() }
+        redraws += a.chips(pText, TextStyle.BGS, { style.bg }) { mark(); style.bg = it; changed() }
         a.text("Fonte", 12f, a.MUTED, parent = pText)
-        redraws += a.chips(pText, TextStyle.FONTS, { style.font }) { style.font = it; changed() }
-        a.text("Posição e alinhamento", 12f, a.MUTED, parent = pText)
-        redraws += a.chips(pText, TextStyle.POS, { style.pos }) { style.pos = it; changed() }
-        redraws += a.chips(pText, TextStyle.ALIGNS, { style.align }) { style.align = it; changed() }
+        redraws += a.chips(pText, TextStyle.FONTS, { style.font }) { mark(); style.font = it; changed() }
+        a.text("Posição (ou arraste o texto na prévia) e alinhamento", 12f, a.MUTED, parent = pText)
+        redraws += a.chips(pText, TextStyle.POS, { if (style.y >= 0) "" else style.pos }) { mark(); style.pos = it; style.x = -1f; style.y = -1f; changed() }
+        redraws += a.chips(pText, TextStyle.ALIGNS, { style.align }) { mark(); style.align = it; changed() }
 
-        a.text("Quando o texto aparece (ou arraste o bloco rosa na linha do tempo)", 12f, a.MUTED, parent = pText)
+        a.text("Quando aparece (ou arraste o bloco rosa na linha do tempo)", 12f, a.MUTED, parent = pText)
         val tr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
         pText.addView(tr, a.lpMatch())
-        a.button("Aparece no cursor", tr, weight = true) { val o = cursorOut(); textStart = o.coerceIn(0, maxOf(0, (if (textEnd > 0) textEnd else outDur()) - 300)); afterEdit("text") }
-        a.button("Some no cursor", tr, weight = true) { val o = cursorOut(); textEnd = if (o >= outDur() - 150) 0 else o.coerceAtLeast(textStart + 300); afterEdit("text") }
-        a.button("O vídeo todo", pText) { textStart = 0; textEnd = 0; afterEdit("text") }
+        a.button("Aparece no cursor", tr, weight = true) { layerTime("s") }
+        a.button("Some no cursor", tr, weight = true) { layerTime("e") }
+        a.button("O vídeo todo", pText) { layerTime("all") }
 
-        // camada Vídeo: corte
-        cutRow = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        // ---------- 🖼 imagem por cima (a selecionada)
+        tvImgInfo = a.text("", 12f, a.MUTED, parent = pImage)
+        a.button("＋ Colocar imagem", pImage, primary = true) { openGallery("image/*", REQ_LAYER_IMG, false) }
+        a.text("Tamanho (ou pinça na prévia)", 12f, a.MUTED, parent = pImage)
+        imgSeek = SeekBar(a)
+        pImage.addView(imgSeek.apply {
+            max = 145
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) { if (fromUser) curLayer()?.takeIf { !it.isText }?.let { it.scale = (p + 5) / 100f; drawLayers(true) } }
+                override fun onStartTrackingTouch(sb: SeekBar?) { mark() }
+                override fun onStopTrackingTouch(sb: SeekBar?) { scheduleSave() }
+            })
+        }, a.lpMatch())
+        val ir = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        pImage.addView(ir, a.lpMatch())
+        a.button("Aparece no cursor", ir, weight = true) { layerTime("s") }
+        a.button("Some no cursor", ir, weight = true) { layerTime("e") }
+        val ir2 = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        pImage.addView(ir2, a.lpMatch())
+        a.button("O vídeo todo", ir2, weight = true) { layerTime("all") }
+        a.button("Centralizar", ir2, weight = true) { curLayer()?.takeIf { !it.isText }?.let { mark(); it.x = 0.5f; it.y = 0.5f; afterEdit() } }
+
+        // ---------- 🎬 clipe selecionado
+        cutRow = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         pVideo.addView(cutRow, a.lpMatch())
         tvCut = a.text("", 14f, a.FG, parent = cutRow, bold = true)
-        a.text("Arraste as bordas brancas na linha do tempo, ou corte onde está o cursor:", 12f, a.MUTED, parent = cutRow)
+        a.text("Arraste as alças brancas do clipe na linha do tempo, ou corte onde está o cursor:", 12f, a.MUTED, parent = cutRow)
         val cr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
         cutRow.addView(cr, a.lpMatch())
-        a.button("✂ Início no cursor", cr, weight = true) { cutAtCursor(true) }
-        a.button("✂ Fim no cursor", cr, weight = true) { cutAtCursor(false) }
-        a.button("Sem corte (vídeo inteiro)", cutRow) { cutStart = 0; cutEnd = durMs; afterEdit("cut") }
+        a.button("✂ Começa aqui", cr, weight = true) { trimAtCursor(true) }
+        a.button("✂ Termina aqui", cr, weight = true) { trimAtCursor(false) }
+        val mvr = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        cutRow.addView(mvr, a.lpMatch())
+        a.button("◀ Mover", mvr, weight = true) { moveClip(-1) }
+        a.button("Mover ▶", mvr, weight = true) { moveClip(1) }
+        a.button("↺ Inteiro", mvr, weight = true) {
+            val c = curClip() ?: return@button
+            if (c.photo) return@button
+            mark(); c.s = 0; c.e = c.srcDur; afterEdit("clip")
+        }
+        btnSound = a.button("", cutRow) { toggleSound() }
 
         // duração (foto)
         durRow = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         pVideo.addView(durRow, a.lpMatch())
-        a.text("Duração da foto em vídeo", 12f, a.MUTED, parent = durRow)
-        redraws += a.chips(durRow, listOf("5s", "8s", "12s", "15s"), { "${photoSecs}s" }) { photoSecs = it.removeSuffix("s").toInt(); scheduleSave() }
+        a.text("Quanto tempo a foto fica na tela", 12f, a.MUTED, parent = durRow)
+        redraws += a.chips(durRow, listOf("2s", "3s", "5s", "8s", "12s", "15s"), { "${photoSecs}s" }) {
+            val c = curClip() ?: return@chips
+            if (!c.photo) return@chips
+            mark(); photoSecs = it.removeSuffix("s").toInt(); c.s = 0; c.e = photoSecs * 1000L; afterEdit("clip")
+        }
 
-        // ⛶ recortar / zoom
+        // ⛶ recortar / zoom (do clipe selecionado)
         val cc = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         pVideo.addView(cc, a.lpMatch().apply { topMargin = a.dp(10) })
-        a.text("⛶ Recortar / zoom", 14f, a.FG, parent = cc, bold = true)
+        a.text("⛶ Recortar / zoom deste clipe", 14f, a.FG, parent = cc, bold = true)
         a.text("Corta bordas, marca d'água no canto ou algo que você não quer. Com zoom, arraste a prévia parada pra escolher o pedaço.", 12f, a.MUTED, parent = cc)
-        redraws += a.chips(cc, listOf("Original", "Preencher 9:16"), { if (crop.fill) "Preencher 9:16" else "Original" }) { crop = crop.copy(fill = it != "Original"); afterCrop() }
+        redraws += a.chips(cc, listOf("Original", "Preencher 9:16"), { if (crop.fill) "Preencher 9:16" else "Original" }) { mark(); crop = crop.copy(fill = it != "Original"); afterCrop() }
         redraws += a.chips(cc, listOf("1x", "1.2x", "1.5x", "2x", "3x"), { listOf(1f, 1.2f, 1.5f, 2f, 3f).minBy { z -> Math.abs(z - crop.zoom) }.let { z -> if (z == 1f) "1x" else "${z}x".replace(".0x", "x") } }) {
-            crop = crop.copy(zoom = it.removeSuffix("x").toFloat()); afterCrop()
+            mark(); crop = crop.copy(zoom = it.removeSuffix("x").toFloat()); afterCrop()
         }
         val cropRow = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
         cc.addView(cropRow, a.lpMatch())
         listOf("◀" to (-0.2f to 0f), "▲" to (0f to -0.2f), "▼" to (0f to 0.2f), "▶" to (0.2f to 0f)).forEach { (t, d) ->
-            a.button(t, cropRow, weight = true) { crop = crop.copy(px = (crop.px + d.first).coerceIn(-1f, 1f), py = (crop.py + d.second).coerceIn(-1f, 1f)); afterCrop() }
+            a.button(t, cropRow, weight = true) { mark(); crop = crop.copy(px = (crop.px + d.first).coerceIn(-1f, 1f), py = (crop.py + d.second).coerceIn(-1f, 1f)); afterCrop() }
         }
-        a.button("↺ Sem recorte", cropRow, weight = true) { crop = VideoExport.CropSpec(); afterCrop() }
+        a.button("↺ Sem recorte", cropRow, weight = true) { mark(); crop = VideoExport.CropSpec(); afterCrop() }
         tvCrop = a.text("", 11f, a.MUTED, parent = cc)
 
         // 🧽 remover objeto com IA (fotos)
@@ -594,11 +968,14 @@ class InstaEditor(private val a: MainActivity) {
         btnRm = a.button("🧽 O que remover?", rr2, primary = true, weight = true) { removeObjectDialog() }
         btnUndoRm = a.button("↺ Voltar a original", rr2, weight = true) { undoRemove() }
 
-        // camada Música
+        // ---------- 🎵 música
         tvMusic = a.text("", 14f, a.FG, parent = pMusic, bold = true)
-        a.button("🎵 Escolher música", pMusic, primary = true) { chooseMusic() }
+        val mrA = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        pMusic.addView(mrA, a.lpMatch())
+        a.button("🎵 Escolher música", mrA, primary = true, weight = true) { chooseMusic() }
+        a.button("🗑 Tirar", mrA) { if (music != null) { mark(); music = null; updateMusicLabel(); afterEdit() } }
         tvMusicStart = a.text("", 12f, a.MUTED, parent = pMusic)
-        a.text("Sincronizar: arraste a onda verde na linha do tempo até a batida bater, ou ajuste fino o ponto da música:", 12f, a.MUTED, parent = pMusic)
+        a.text("Sincronizar: toque na trilha verde e arraste a onda até a batida bater, ou ajuste fino o ponto da música:", 12f, a.MUTED, parent = pMusic)
         val mr0 = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
         pMusic.addView(mr0, a.lpMatch())
         a.button("−0,5s", mr0, weight = true) { slip(-500) }
@@ -607,11 +984,11 @@ class InstaEditor(private val a: MainActivity) {
         a.button("+0,5s", mr0, weight = true) { slip(500) }
         val mr1 = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
         pMusic.addView(mr1, a.lpMatch())
-        a.button("✂ Música para no cursor", mr1, weight = true) { val o = cursorOut(); musicEnd = if (o >= outDur() - 150 || o < 500) 0 else o; afterEdit("music") }
-        a.button("Até o fim", mr1, weight = true) { musicEnd = 0; afterEdit("music") }
+        a.button("✂ Música para no cursor", mr1, weight = true) { mark(); val o = cursorOut(); musicEnd = if (o >= outDur() - 150 || o < 500) 0 else o; afterEdit("music") }
+        a.button("Até o fim", mr1, weight = true) { mark(); musicEnd = 0; afterEdit("music") }
         updateMusicLabel()
 
-        // legenda + exportar
+        // ---------- legenda + exportar
         a.text("Legenda do post", 12f, a.MUTED, parent = pExport)
         etCap = EditText(a).apply {
             setTextColor(a.FG); setHintTextColor(a.MUTED); textSize = 15f; hint = "Legenda que vai no Instagram"
@@ -646,9 +1023,9 @@ class InstaEditor(private val a: MainActivity) {
         afterBox = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         work.addView(afterBox, a.lpMatch())
         a.button("Postar no Instagram ↗", afterBox, primary = true) { lastExportId?.let { post(it, etCap.text.toString()) } }
-        a.button("Voltar pra edição", afterBox) { val s0 = src; if (s0 != null && !isPhoto) showEditVideo(s0) else { showImagePreview(); drawPreview() } }
+        a.button("Voltar pra edição", afterBox) { if (src != null) showEditVideo() }
 
-        showPanel(Store.prefs(a).getInt("ed_panel", 0))
+        showPanel(Store.prefs(a).getInt("ed_panel2", 0).coerceIn(0, 4))
         updateEmpty()
 
         // ---------- músicas
@@ -788,6 +1165,7 @@ class InstaEditor(private val a: MainActivity) {
     }
 
     private fun applyModel(m: org.json.JSONObject) {
+        mark()
         style = styleOf(m.optJSONObject("style") ?: org.json.JSONObject()); style.save(a)
         music = m.optString("music").takeIf { it.isNotEmpty() }?.let { File(it) }?.takeIf { it.exists() }
         musicStart = m.optLong("musicStart"); mute = m.optBoolean("mute"); photoSecs = m.optInt("secs", 8)
@@ -796,7 +1174,9 @@ class InstaEditor(private val a: MainActivity) {
         m.optString("text").takeIf { it.isNotEmpty() }?.let { etText.setText(it) }
         seek.progress = style.size - 20
         redraws.forEach { it() }
+        ed.clips.firstOrNull()?.takeIf { it.photo && ed.clips.size == 1 }?.let { it.s = 0; it.e = photoSecs * 1000L }
         updateMusicLabel(); drawPreview(); scheduleSave()
+        if (editMode) afterEdit()
         curModel = m.optString("name")
         a.toast("Modelo \"${m.optString("name")}\" aplicado")
     }
@@ -1132,8 +1512,9 @@ class InstaEditor(private val a: MainActivity) {
             if (photo) 0 else cs, if (photo || ce <= 0 || ce >= dur) 0 else ce, ms,
             if (photo) 0 else p.optLong("textStart"), if (photo) 0 else p.optLong("textEnd"), if (photo || m != null) 0 else p.optLong("musicEnd"), VideoExport.cropOf(p))
         tvMany.setTextColor(a.MUTED); tvMany.text = "Exportando ${i + 1} de ${ids.size}…"
-        VideoExport.export(a, job, { pr -> tvMany.text = "Exportando ${i + 1} de ${ids.size}… $pr%" }) { out, _ ->
-            if (out == null) { exportMany(ids, m, i + 1, ok); return@export }
+        val prog: (Int) -> Unit = { pr -> tvMany.text = "Exportando ${i + 1} de ${ids.size}… $pr%" }
+        val fin: (File?, String?) -> Unit = fin@{ out, _ ->
+            if (out == null) { exportMany(ids, m, i + 1, ok); return@fin }
             val cap = p.optString("caption").ifBlank { Captions.randomCaption(a) }
             Thread {
                 val vid = VideoExport.addToLibrary(a, out, cap)
@@ -1142,6 +1523,9 @@ class InstaEditor(private val a: MainActivity) {
                 ui.post { renderLibrary(); exportMany(ids, m, i + 1, ok + 1) }
             }.start()
         }
+        // esboço com vários clipes/camadas (e sem modelo por cima): exporta a edição inteira
+        val multi = if (m == null) p.optJSONObject("edit")?.let { EditState.of(it) }?.takeIf { it.clips.isNotEmpty() && !it.simple() } else null
+        if (multi != null) VideoExport.exportEdit(a, multi, Projects.dir(a, ids[i]), q, prog, fin) else VideoExport.export(a, job, prog, fin)
     }
 
     // ------------------------------------------------------------------ projetos
@@ -1151,58 +1535,42 @@ class InstaEditor(private val a: MainActivity) {
 
     private fun saveNow() {
         val id = projId ?: return
+        if (ed.clips.isEmpty()) return
         Projects.update(a, id) {
-            it.put("photo", isPhoto); it.put("secs", photoSecs)
-            it.put("text", etText.text.toString()); it.put("caption", etCap.text.toString())
-            it.put("style", org.json.JSONObject().put("size", style.size).put("color", style.color).put("bg", style.bg)
-                .put("pos", style.pos).put("font", style.font).put("align", style.align))
-            it.put("music", music?.path ?: ""); it.put("mute", mute); it.put("updated", System.currentTimeMillis())
-            it.put("cutStart", cutStart); it.put("cutEnd", cutEnd); it.put("musicStart", musicStart)
-            it.put("textStart", textStart); it.put("textEnd", textEnd); it.put("musicEnd", musicEnd)
-            VideoExport.putCrop(it, crop)
+            ed.saveTo(it)
+            it.put("caption", etCap.text.toString()); it.put("updated", System.currentTimeMillis())
         }
-        base?.let { b -> Projects.saveThumb(a, id, VideoExport.preview(pv(b), etText.text.toString(), style)) }
+        base?.let { b ->
+            val th = VideoExport.fit916(VideoExport.cropBitmap(b, ed.clips[0].crop)).copy(Bitmap.Config.ARGB_8888, true)
+            LayerArt.draw(android.graphics.Canvas(th), ed.layers.filter { it.visibleAt(minOf(500L, outDur() - 1)) }, projDir(), th.width, th.height)
+            Projects.saveThumb(a, id, th)
+        }
         ui.removeCallbacks(projRefresh); ui.postDelayed(projRefresh, 800)
     }
     private val projRefresh = Runnable { renderProjects() }
 
     private fun newProject() {
-        saveNow()
-        projId = null; src = null; base = null; isPhoto = false; music = null; mute = false; lastExportId = null; curModel = ""
-        cutStart = 0; cutEnd = 0; durMs = 0; musicStart = 0; cutRow.visibility = View.GONE; crop = VideoExport.CropSpec()
-        textStart = 0; textEnd = 0; musicEnd = 0; timeline.thumbs = emptyList(); syncTimeline()
-        etText.setText(""); etCap.setText(""); durRow.visibility = View.GONE
+        saveNow(); pauseEdit()
+        projId = null; src = null; base = null; isPhoto = false; lastExportId = null; curModel = ""
+        ed = EditState(); undo.clear(); playhead = 0; timeline.st = ed; timeline.selKind = ""; syncTimeline()
+        loadingText = true; etText.setText(""); loadingText = false; etCap.setText(""); durRow.visibility = View.GONE
         tvSrc.setTextColor(a.MUTED); tvSrc.text = "Escolha um vídeo ou uma foto pra começar."
-        updateMusicLabel(); showImagePreview(); drawPreview(); renderProjects(); updateEmpty()
+        updateMusicLabel(); showImagePreview(); renderProjects(); updateEmpty()
     }
 
     private fun openProject(id: String) {
-        saveNow()
+        saveNow(); pauseEdit()
         val o = Projects.get(a, id) ?: return
         val photo = o.optBoolean("photo")
         val f = Projects.srcFile(a, id, photo)
         if (!f.exists()) { a.toast("O arquivo desse projeto sumiu"); return }
         projId = null // evita salvar enquanto carrega
         isPhoto = photo; src = Uri.fromFile(f); photoSecs = o.optInt("secs", 8)
-        o.optJSONObject("style")?.let { st ->
-            style = TextStyle(st.optInt("size", 52), st.optString("color", "Branco"), st.optString("bg", "Faixa escura"),
-                st.optString("pos", "Baixo"), st.optString("font", "Negrito"), st.optString("align", "Centro"))
-        }
-        etText.setText(o.optString("text")); etCap.setText(o.optString("caption"))
-        music = o.optString("music").takeIf { it.isNotEmpty() }?.let { File(it) }?.takeIf { it.exists() }
-        mute = o.optBoolean("mute")
-        cutStart = o.optLong("cutStart"); cutEnd = o.optLong("cutEnd"); musicStart = o.optLong("musicStart")
-        textStart = o.optLong("textStart"); textEnd = o.optLong("textEnd"); musicEnd = o.optLong("musicEnd")
-        crop = VideoExport.cropOf(o)
-        timeline.thumbs = emptyList()
-        seek.progress = style.size - 20
-        redraws.forEach { it() }
-        durRow.visibility = if (photo) View.VISIBLE else View.GONE
-        updateMusicLabel()
+        etCap.setText(o.optString("caption"))
         projId = id
         loadBase(if (photo) "Projeto de foto aberto" else "Projeto de vídeo aberto")
         showSection(0)
-        a.toast("Esboço aberto: mude texto e música e exporte")
+        a.toast("Esboço aberto")
     }
 
     // ------------------------------------------------------------------ 🗂 categorias
@@ -1565,14 +1933,14 @@ class InstaEditor(private val a: MainActivity) {
 
     // ------------------------------------------------------------------ prévia
 
-    private fun changed() { style.save(a); schedulePreview(); scheduleSave() }
+    private fun changed() { defStyle = style.copy(x = -1f, y = -1f); style.save(a); schedulePreview(); scheduleSave() }
 
     private val previewTask = Runnable { drawPreview() }
-    private fun schedulePreview() { ui.removeCallbacks(previewTask); ui.postDelayed(previewTask, 120) }
+    private fun schedulePreview() { ui.removeCallbacks(previewTask); ui.postDelayed(previewTask, 60) }
 
     private fun drawPreview() {
+        if (editMode) { drawLayers(true); if (::timeline.isInitialized) timeline.invalidate(); return }
         val txt = etText.text.toString()
-        if (editMode) { textLayer.setImageBitmap(VideoExport.textBitmap(txt, style, 540, 960)); return }
         val b = base
         if (b == null) {
             // sem mídia: mostra o texto num fundo escuro pra testar o estilo
@@ -1583,6 +1951,28 @@ class InstaEditor(private val a: MainActivity) {
         preview.setImageBitmap(VideoExport.preview(pv(b), txt, style))
     }
 
+    private var loadingText = false
+    private var typingMarked = false
+
+    /** Digitou no campo do texto: muda o texto selecionado (ou cria um, se não tiver). */
+    private fun onTyped(s: String) {
+        if (loadingText || !editMode) return
+        var l = curText()
+        if (l == null) {
+            if (s.isBlank()) return
+            l = addText(s)
+        } else if (!typingMarked) { mark(); typingMarked = true }
+        l.text = s
+        drawLayers(true); timeline.invalidate(); scheduleSave()
+        if (::tvTextInfo.isInitialized && tvTextInfo.text.startsWith("Escreva")) refreshPanels()
+    }
+
+    private fun slip(d: Long) {
+        if (music == null) { a.toast("Escolha uma música primeiro"); return }
+        mark(); musicStart = (musicStart + d).coerceIn(0, maxOf(0L, musicDurMs - 1000))
+        afterEdit("music"); if (!isPlayingNow()) previewMusicSnippet()
+    }
+
     private lateinit var tvCrop: TextView
     private lateinit var tvRm: TextView
     private lateinit var btnRm: Button
@@ -1590,29 +1980,36 @@ class InstaEditor(private val a: MainActivity) {
 
     private fun afterCrop() {
         redraws.forEach { it() }
-        if (editMode) showImagePreview() else drawPreview()
+        if (editMode) { pauseEdit(); showAt(playhead, false) } else drawPreview()
         updateCropUi(); scheduleSave()
     }
+
+    private fun photoClipFile(): File? = curClip()?.takeIf { it.photo }?.let { File(projDir(), it.file) }
 
     private fun updateCropUi() {
         if (!::tvCrop.isInitialized) return
         tvCrop.text = if (!crop.active) "Sem recorte." else "Recorte ativo" + (if (crop.zoom > 1.01f) " · zoom ${"%.1f".format(crop.zoom)}x" else "") + (if (crop.fill) " · preenchendo 9:16" else "") +
             ". A prévia parada mostra o resultado; tocando ▶ o vídeo aparece inteiro."
-        val orig = projId?.let { File(Projects.srcFile(a, it, true).path + ".orig") }
-        tvRm.text = if (isPhoto) "Escreva o que tirar da foto (ex.: \"a garrafa na mesa\", \"a pessoa no fundo\", \"o texto na parede\"). A IA apaga e preenche o fundo; o resto fica igual." +
+        val pf = photoClipFile()
+        val orig = pf?.let { File(it.path + ".orig") }
+        tvRm.text = if (pf != null) "Escreva o que tirar da foto (ex.: \"a garrafa na mesa\", \"a pessoa no fundo\", \"o texto na parede\"). A IA apaga e preenche o fundo; o resto fica igual." +
             (if (Ai.provider(a) != "gemini") "\n⚠ Precisa da IA do Google (Gemini) nos Ajustes: a do Claude não edita imagem." else "")
             else "Em vídeo a IA não consegue apagar quadro a quadro aqui no celular. Use ⛶ Recortar pra tirar o que está na borda, ou refaça o vídeo no Flow pedindo sem o objeto. Em fotos funciona."
-        btnRm.isEnabled = isPhoto; btnUndoRm.visibility = if (isPhoto && orig?.exists() == true) View.VISIBLE else View.GONE
+        btnRm.isEnabled = pf != null; btnUndoRm.visibility = if (orig?.exists() == true) View.VISIBLE else View.GONE
+    }
+
+    private fun afterPhotoChange(label: String) {
+        photoCache.clear(); thumbCache.clear(); loadAllThumbs()
+        if (curClipIdx() == 0) base = photoClipFile()?.let { BitmapFactory.decodeFile(it.path) }?.let { VideoExport.fit916(it) } ?: base
+        showAt(playhead, false); updateCropUi(); scheduleSave(); a.toast(label)
     }
 
     private fun removeObjectDialog() {
-        val id = projId ?: run { a.toast("Abra uma foto primeiro"); return }
-        if (!isPhoto) return
+        val f = photoClipFile() ?: run { a.toast("Selecione uma foto na linha do tempo"); return }
         val et = EditText(a).apply { hint = "Ex.: a garrafa em cima da mesa" }
         AlertDialog.Builder(a).setTitle("O que remover da foto?").setView(et)
             .setPositiveButton("🧽 Remover") { _, _ ->
                 val what = et.text.toString().trim(); if (what.isEmpty()) return@setPositiveButton
-                val f = Projects.srcFile(a, id, true)
                 btnRm.isEnabled = false; tvRm.setTextColor(a.MUTED); tvRm.text = "A IA está removendo \"$what\"…"
                 Thread {
                     val msg = try {
@@ -1622,7 +2019,7 @@ class InstaEditor(private val a: MainActivity) {
                     } catch (e: Exception) { e.message ?: "erro" }
                     ui.post {
                         btnRm.isEnabled = true
-                        if (msg == null) { tvRm.setTextColor(a.OK); loadBase("Foto sem \"$what\""); ui.postDelayed({ updateCropUi(); tvRm.setTextColor(a.OK); tvRm.text = "✓ Removido. Não gostou? ↺ Voltar a original." }, 600) }
+                        if (msg == null) { tvRm.setTextColor(a.OK); afterPhotoChange("Foto sem \"$what\""); ui.postDelayed({ tvRm.setTextColor(a.OK); tvRm.text = "✓ Removido. Não gostou? ↺ Voltar a original." }, 600) }
                         else { tvRm.setTextColor(a.ACCENT); tvRm.text = "⚠ $msg" }
                     }
                 }.start()
@@ -1630,20 +2027,21 @@ class InstaEditor(private val a: MainActivity) {
     }
 
     private fun undoRemove() {
-        val id = projId ?: return
-        val f = Projects.srcFile(a, id, true); val orig = File(f.path + ".orig")
+        val f = photoClipFile() ?: return
+        val orig = File(f.path + ".orig")
         if (!orig.exists()) return
         orig.copyTo(f, true); orig.delete()
-        loadBase("Foto original de volta"); ui.postDelayed({ updateCropUi() }, 300)
+        afterPhotoChange("Foto original de volta")
     }
 
     /** Quadro da prévia já com recorte/zoom, numa tela 9:16 igual ao exportado. */
     private fun pv(b: Bitmap) = VideoExport.fit916(VideoExport.cropBitmap(b, crop))
 
+    /** Sai do editor de linha do tempo (prévia parada simples). */
     private fun showImagePreview() {
-        editMode = false; bgmStop(); ui.removeCallbacks(loopTick); mp = null
+        editMode = false; isPlay = false; bgmStop(); ui.removeCallbacks(loopTick); mp = null; loadedFile = ""
         if (::textLayer.isInitialized) { textLayer.visibility = View.GONE; playRow.visibility = View.GONE }
-        if (::timeline.isInitialized) { timeline.visibility = View.GONE; tlHint.visibility = View.GONE }
+        if (::timeline.isInitialized) { timeline.visibility = View.GONE; tlHint.visibility = View.GONE; toolBox.visibility = View.GONE }
         video.stopPlayback(); video.visibility = View.GONE; preview.visibility = View.VISIBLE
         afterBox.visibility = View.GONE
     }
@@ -1694,7 +2092,20 @@ class InstaEditor(private val a: MainActivity) {
 
     /** Devolve true se o resultado era deste editor. */
     fun onResult(req: Int, res: Int, data: Intent?): Boolean {
-        if (req != REQ_VIDEO && req != REQ_PHOTO && req != REQ_MUSIC && req != REQ_MULTI && req != REQ_IMPORT && req != REQ_RAW_MANY) return false
+        if (req != REQ_VIDEO && req != REQ_PHOTO && req != REQ_MUSIC && req != REQ_MULTI && req != REQ_IMPORT && req != REQ_RAW_MANY && req != REQ_ADD && req != REQ_LAYER_IMG) return false
+        if (req == REQ_ADD) {
+            if (res != android.app.Activity.RESULT_OK || data == null) return true
+            val uris = ArrayList<Uri>()
+            data.clipData?.let { cd -> for (k in 0 until cd.itemCount) uris.add(cd.getItemAt(k).uri) }
+            if (uris.isEmpty()) data.data?.let { uris.add(it) }
+            if (uris.isNotEmpty()) addClips(uris)
+            return true
+        }
+        if (req == REQ_LAYER_IMG) {
+            val u = data?.data
+            if (res == android.app.Activity.RESULT_OK && u != null) addImageLayer(u)
+            return true
+        }
         if (req == REQ_RAW_MANY) {
             val cat = pendingCat; pendingCat = null
             if (res != android.app.Activity.RESULT_OK || data == null) return true
@@ -1742,9 +2153,10 @@ class InstaEditor(private val a: MainActivity) {
                     } catch (e: Exception) { false }
                     ui.post {
                         if (!ok) { Projects.remove(a, pid); a.toast("Não abriu essa foto"); return@post }
+                        saveNow(); pauseEdit()
                         projId = pid; isPhoto = true; src = Uri.fromFile(f); durRow.visibility = View.VISIBLE
                         pendingCat?.let { cx -> Projects.update(a, pid) { it.put("ctx", cx) } }; pendingCat = null
-                        loadBase("Foto salva no projeto: vira um vídeo de ${photoSecs}s"); saveNow(); renderProjects()
+                        loadBase("Foto salva no projeto: vira um vídeo de ${photoSecs}s"); renderProjects()
                     }
                 }.start()
             }
@@ -1760,23 +2172,27 @@ class InstaEditor(private val a: MainActivity) {
 
     private fun loadBase(label: String) {
         val s = src ?: return
+        val pid = projId ?: return
         updateEmpty(); if (curSec != 0) showSection(0)
         showImagePreview()
         tvSrc.text = label; tvSrc.setTextColor(a.OK)
-        cutRow.visibility = if (isPhoto) View.GONE else View.VISIBLE
         Thread {
             val b = VideoExport.baseFrame(a, s, isPhoto)
             val d = if (isPhoto) 0L else VideoExport.durationMs(a, s)
+            val st = EditState.fromProject(Projects.get(a, pid) ?: org.json.JSONObject(), d)
+            // clipes de vídeo sem duração salva (ou arquivo trocado): mede de novo
+            st.clips.forEach { c -> if (!c.photo && c.srcDur <= 0) { c.srcDur = VideoExport.durationMs(File(Projects.dir(a, pid), c.file)); if (c.e <= c.s || c.e > c.srcDur) { c.s = 0; c.e = c.srcDur } } }
+            st.clips.removeAll { !File(Projects.dir(a, pid), it.file).exists() || it.len <= 0 }
             ui.post {
-                base = b; durMs = d
-                updateCropUi()
-                if (!isPhoto && d > 0) {
-                    if (cutEnd <= 0 || cutEnd > d) cutEnd = d
-                    if (cutStart >= cutEnd) cutStart = 0
-                    syncCut()
-                    showEditVideo(s)
-                    loadThumbs(s, d)
-                } else drawPreview()
+                if (projId != pid) return@post
+                base = b
+                if (st.clips.isEmpty()) { a.toast("Não consegui ler esse vídeo"); return@post }
+                ed = st; undo.clear(); playhead = 0
+                timeline.st = ed; timeline.selKind = "clip"; timeline.selIdx = 0
+                photoCache.clear(); loadAllThumbs()
+                loadingText = true; etText.setText(""); loadingText = false
+                updateMusicLabel(); refreshMusicMeta()
+                showEditVideo()
             }
         }.start()
     }
@@ -1791,10 +2207,101 @@ class InstaEditor(private val a: MainActivity) {
             if (ok) VideoExport.baseFrame(a, Uri.fromFile(f), false)?.let { Projects.saveThumb(a, pid, it) }
             ui.post {
                 if (!ok) { Projects.remove(a, pid); a.toast("Não consegui abrir esse vídeo"); return@post }
+                saveNow(); pauseEdit()
                 projId = pid; isPhoto = false; src = Uri.fromFile(f); durRow.visibility = View.GONE
-                cutStart = 0; cutEnd = 0; crop = VideoExport.CropSpec()
                 pendingCat?.let { cx -> Projects.update(a, pid) { it.put("ctx", cx) } }; pendingCat = null
-                loadBase("Vídeo salvo no projeto"); saveNow(); renderProjects()
+                loadBase("Vídeo salvo no projeto"); renderProjects()
+            }
+        }.start()
+    }
+
+    // ------------------------------------------------------------------ ＋ juntar mais vídeos / fotos / imagens
+
+    private var flowAdd = false
+
+    private fun addClipDialog() {
+        if (projId == null || ed.clips.isEmpty()) { a.toast("Abra um vídeo primeiro"); return }
+        pauseEdit()
+        AlertDialog.Builder(a).setTitle("Juntar no vídeo (entra depois do clipe do cursor)")
+            .setItems(arrayOf("✨  Vídeo do Flow", "🖼  Vídeos da galeria (vários)", "📷  Fotos da galeria (várias)", "📁  Arquivos (vídeo ou foto)")) { _, i ->
+                when (i) {
+                    0 -> { flowAdd = true; flowPicker(false) }
+                    1 -> openGallery("video/*", REQ_ADD, true)
+                    2 -> openGallery("image/*", REQ_ADD, true)
+                    else -> {
+                        val it2 = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            type = "*/*"; addCategory(Intent.CATEGORY_OPENABLE); putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("video/*", "image/*"))
+                        }
+                        @Suppress("DEPRECATION")
+                        a.startActivityForResult(it2, REQ_ADD)
+                    }
+                }
+            }.show()
+    }
+
+    /** Copia cada arquivo pra pasta do projeto e põe na linha do tempo depois do clipe do cursor. */
+    private fun addClips(uris: List<Uri>) {
+        val pid = projId ?: return
+        val dir = Projects.dir(a, pid)
+        tvProg.setTextColor(a.MUTED); tvProg.text = "Juntando ${uris.size} arquivo(s)…"
+        Thread {
+            val got = ArrayList<Clip>()
+            uris.forEachIndexed { n, u ->
+                try {
+                    val mime = a.contentResolver.getType(u) ?: ""
+                    val stamp = System.currentTimeMillis().toString(36) + n
+                    if (mime.startsWith("image")) {
+                        val f = File(dir, "clip_$stamp.jpg")
+                        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        a.contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it, null, o) }
+                        var smp = 1; while (maxOf(o.outWidth, o.outHeight) / (smp * 2) >= 2160) smp *= 2
+                        val b = a.contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = smp }) } ?: return@forEachIndexed
+                        val r = a.rotateByExif(u, b); f.outputStream().use { r.compress(Bitmap.CompressFormat.JPEG, 95, it) } // JPEG novo = sem metadados
+                        got += Clip(f.name, true, 0, 0, 3000)
+                    } else {
+                        val f = File(dir, "clip_$stamp.mp4")
+                        a.contentResolver.openInputStream(u)?.use { i -> f.outputStream().use { i.copyTo(it) } }
+                        val d = VideoExport.durationMs(f)
+                        if (d <= 0) { f.delete(); return@forEachIndexed }
+                        got += Clip(f.name, false, d, 0, d)
+                    }
+                } catch (e: Exception) { }
+                ui.post { tvProg.text = "Juntando ${n + 1} de ${uris.size}…" }
+            }
+            ui.post {
+                if (projId != pid) return@post
+                if (got.isEmpty()) { tvProg.setTextColor(a.ACCENT); tvProg.text = "Não consegui abrir esse(s) arquivo(s)"; return@post }
+                mark()
+                val k = ed.locate(playhead).first + 1
+                ed.clips.addAll(k, got)
+                timeline.selKind = "clip"; timeline.selIdx = k; playhead = ed.startOf(k)
+                got.forEach { loadThumbs(it) }
+                timeline.fit(); afterEdit("clip"); showPanel(0)
+                tvProg.setTextColor(a.OK); tvProg.text = "✓ ${got.size} clipe(s) adicionado(s). Vídeo final: ${t(outDur())}"
+            }
+        }.start()
+    }
+
+    /** 🖼 Imagem por cima do vídeo (foto, figurinha, logo) no cursor por 3 s. */
+    private fun addImageLayer(u: Uri) {
+        val pid = projId ?: return
+        Thread {
+            val f = File(Projects.dir(a, pid), "ov_" + System.currentTimeMillis().toString(36) + ".png")
+            val ok = try {
+                val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                a.contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it, null, o) }
+                var smp = 1; while (maxOf(o.outWidth, o.outHeight) / (smp * 2) >= 1080) smp *= 2
+                val b = a.contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = smp }) }
+                if (b == null) false else { val r = a.rotateByExif(u, b); f.outputStream().use { r.compress(Bitmap.CompressFormat.PNG, 100, it) }; true }
+            } catch (e: Exception) { false }
+            ui.post {
+                if (!ok || projId != pid) { a.toast("Não abriu essa imagem"); return@post }
+                mark()
+                val tot = outDur(); val s = cursorOut().coerceIn(0, maxOf(0, tot - 500))
+                ed.layers.add(Layer("image", file = f.name, s = s, e = minOf(tot, s + 3000)))
+                timeline.selKind = "layer"; timeline.selIdx = ed.layers.size - 1
+                afterEdit(); showPanel(2)
             }
         }.start()
     }
@@ -1840,7 +2347,7 @@ class InstaEditor(private val a: MainActivity) {
         AlertDialog.Builder(a).setTitle("Escolher vídeo")
             .setItems(arrayOf("✨  Vídeos do Flow", "🖼  Galeria", "📁  Arquivos e pastas")) { _, i ->
                 when (i) {
-                    0 -> flowPicker(false)
+                    0 -> { flowAdd = false; flowPicker(false) }
                     1 -> openGallery("video/*", REQ_VIDEO, false)
                     else -> openFiles("video/*", REQ_VIDEO, false)
                 }
@@ -1878,7 +2385,7 @@ class InstaEditor(private val a: MainActivity) {
             val row = LinearLayout(a).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(a.dp(6), a.dp(6), a.dp(6), a.dp(6))
                 background = GradientDrawable().apply { setColor(a.CARD); cornerRadius = a.dp(10).toFloat(); setStroke(a.dp(1), a.LINE) }
-                setOnClickListener { dialog?.dismiss(); loadVideoUri(v.uri) }
+                setOnClickListener { dialog?.dismiss(); if (flowAdd) { flowAdd = false; addClips(listOf(v.uri)) } else loadVideoUri(v.uri) }
             }
             box.addView(row, a.lpMatch().apply { topMargin = a.dp(6) })
             row.addView(ImageView(a).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF000000.toInt()); thumbs.getOrNull(i)?.let { setImageBitmap(it) } },
@@ -1918,6 +2425,7 @@ class InstaEditor(private val a: MainActivity) {
         val names = mutableListOf("Som original do vídeo", "Sem som", "Importar música do celular…")
         names.addAll(list.map { "♪ " + VideoExport.nice(it) })
         AlertDialog.Builder(a).setTitle("Música de fundo").setItems(names.toTypedArray()) { _, i ->
+            if (i != 2) mark()
             when (i) {
                 0 -> { music = null; mute = false }
                 1 -> { music = null; mute = true }
@@ -1925,6 +2433,7 @@ class InstaEditor(private val a: MainActivity) {
                 else -> { music = list[i - 3]; mute = false; musicStart = 0; musicEnd = 0 }
             }
             updateMusicLabel(); scheduleSave()
+            if (editMode) { if (music != null) timeline.selKind = "music"; afterEdit() }
         }.show()
     }
 
@@ -2015,41 +2524,53 @@ class InstaEditor(private val a: MainActivity) {
     private fun export() {
         val s = src ?: run { a.toast("Escolha um vídeo ou uma foto primeiro"); return }
         if (VideoExport.busy()) { a.toast("Já está exportando"); return }
-        stopPlay(); showImagePreview()
+        if (ed.clips.isEmpty()) { a.toast("A linha do tempo está vazia"); return }
+        saveNow(); stopPlay(); pauseEdit()
         btnExport.isEnabled = false; btnExpPost.isEnabled = false
         tvProg.setTextColor(a.MUTED); tvProg.text = "Exportando ${quality()}…"
         a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        val job = VideoExport.Job(s, isPhoto, photoSecs, etText.text.toString(), style.copy(), music, mute, quality(),
-            if (isPhoto) 0 else cutStart, if (isPhoto || cutEnd >= durMs) 0 else cutEnd, musicStart,
-            if (isPhoto) 0 else textStart, if (isPhoto) 0 else textEnd, if (isPhoto) 0 else musicEnd, crop)
         val qn = quality()
-        VideoExport.export(a, job, { p -> tvProg.text = "Exportando $qn… $p%" }) { f, err ->
-            a.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            btnExport.isEnabled = true; btnExpPost.isEnabled = true
-            if (f == null) { tvProg.setTextColor(a.ACCENT); tvProg.text = "Não deu: $err"; return@export }
-            tvProg.text = "Salvando…"
-            Thread {
-                val id = VideoExport.addToLibrary(a, f, etCap.text.toString().trim())
-                val txt0 = etText.text.toString().trim()
-                val cx0 = projId?.let { Projects.get(a, it)?.optString("ctx") }.orEmpty()
-                VideoExport.updateLib(a, id) { it.put("texto", txt0); it.put("modelo", curModel); it.put("ctx", cx0) }
-                if (txt0.isNotEmpty()) { OverlayDB.add(a, txt0, "meu", cx0); OverlayDB.used(a, txt0, cx0) }
-                val pid = projId
-                if (pid != null) {
-                    VideoExport.updateLib(a, id) { it.put("proj", pid) }
-                    Projects.update(a, pid) { it.put("versoes", it.optInt("versoes") + 1) }
-                }
-                ui.post {
-                    lastExportId = id
-                    tvProg.setTextColor(a.OK); tvProg.text = "Pronto! Toque no vídeo pra pausar."
-                    preview.visibility = View.GONE; video.visibility = View.VISIBLE
-                    video.setVideoURI(Uri.fromFile(File(VideoExport.videoDir(a), "$id.mp4"))); video.start()
-                    afterBox.visibility = View.VISIBLE
-                    renderLibrary(); renderProjects()
-                    if (postAfter) { postAfter = false; post(id, etCap.text.toString()) }
-                }
-            }.start()
+        val txt0 = ed.layers.firstOrNull { it.isText && it.text.isNotBlank() }
+        val done: (File?, String?) -> Unit = { f, err -> onExported(f, err, ed.layers.filter { it.isText && it.text.isNotBlank() }.joinToString("\n") { it.text.trim() }) }
+        if (ed.simple()) {
+            // 1 clipe e no máx. 1 texto: o caminho de sempre
+            val c = ed.clips[0]; val tot = outDur()
+            val job = VideoExport.Job(Uri.fromFile(File(projDir(), c.file)), c.photo, maxOf(1, (c.len / 1000).toInt()), txt0?.text ?: "", (txt0?.style ?: style).copy(), music, mute, qn,
+                if (c.photo) 0 else c.s, if (c.photo || c.e >= c.srcDur) 0 else c.e, musicStart,
+                txt0?.s ?: 0, txt0?.let { if (it.e >= tot - 50) 0 else it.e } ?: 0, musicEnd, c.crop)
+            VideoExport.export(a, job, { p -> tvProg.text = "Exportando $qn… $p%" }, done)
+        } else {
+            tvProg.text = "Exportando $qn: ${ed.clips.size} clipe(s), ${ed.layers.size} camada(s)…"
+            VideoExport.exportEdit(a, ed.copy(), projDir(), qn, { p -> tvProg.text = "Exportando $qn… $p%" }, done)
         }
+    }
+
+    private fun onExported(f: File?, err: String?, txtAll: String) {
+        a.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        btnExport.isEnabled = true; btnExpPost.isEnabled = true
+        if (f == null) { tvProg.setTextColor(a.ACCENT); tvProg.text = "Não deu: $err"; return }
+        tvProg.text = "Salvando…"
+        Thread {
+            val id = VideoExport.addToLibrary(a, f, etCap.text.toString().trim())
+            val cx0 = projId?.let { Projects.get(a, it)?.optString("ctx") }.orEmpty()
+            VideoExport.updateLib(a, id) { it.put("texto", txtAll); it.put("modelo", curModel); it.put("ctx", cx0) }
+            if (txtAll.isNotEmpty()) { OverlayDB.add(a, txtAll, "meu", cx0); OverlayDB.used(a, txtAll, cx0) }
+            val pid = projId
+            if (pid != null) {
+                VideoExport.updateLib(a, id) { it.put("proj", pid) }
+                Projects.update(a, pid) { it.put("versoes", it.optInt("versoes") + 1) }
+            }
+            ui.post {
+                lastExportId = id
+                tvProg.setTextColor(a.OK); tvProg.text = "Pronto! Toque no vídeo pra pausar."
+                showImagePreview()
+                preview.visibility = View.GONE; video.visibility = View.VISIBLE
+                video.setVideoURI(Uri.fromFile(File(VideoExport.videoDir(a), "$id.mp4"))); video.start()
+                afterBox.visibility = View.VISIBLE
+                renderLibrary(); renderProjects()
+                if (postAfter) { postAfter = false; post(id, etCap.text.toString()) }
+            }
+        }.start()
     }
 
     private fun post(id: String, caption: String) {

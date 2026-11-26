@@ -49,9 +49,14 @@ data class TextStyle(
     var pos: String = "Baixo",
     var font: String = "Negrito",
     var align: String = "Centro",
+    var x: Float = -1f,          // posição livre (arrastada na prévia): centro do texto, 0..1; -1 = usa "pos"
+    var y: Float = -1f,
 ) {
     fun save(c: Context) = Store.prefs(c).edit().putString("txt_style",
         JSONObject().put("size", size).put("color", color).put("bg", bg).put("pos", pos).put("font", font).put("align", align).toString()).apply()
+
+    fun json(): JSONObject = JSONObject().put("size", size).put("color", color).put("bg", bg).put("pos", pos).put("font", font).put("align", align)
+        .put("x", x.toDouble()).put("y", y.toDouble())
 
     companion object {
         val COLORS = linkedMapOf("Branco" to Color.WHITE, "Preto" to Color.BLACK, "Amarelo" to 0xFFFFD43B.toInt(),
@@ -60,6 +65,8 @@ data class TextStyle(
         val POS = listOf("Cima", "Meio", "Baixo")
         val FONTS = listOf("Negrito", "Fina", "Serifa", "Manuscrita", "Condensada")
         val ALIGNS = listOf("Esquerda", "Centro", "Direita")
+        fun of(o: JSONObject?): TextStyle = if (o == null) TextStyle() else TextStyle(o.optInt("size", 52), o.optString("color", "Branco"), o.optString("bg", "Faixa escura"),
+            o.optString("pos", "Baixo"), o.optString("font", "Negrito"), o.optString("align", "Centro"), o.optDouble("x", -1.0).toFloat(), o.optDouble("y", -1.0).toFloat())
         fun load(c: Context): TextStyle = try {
             val o = JSONObject(Store.prefs(c).getString("txt_style", "{}") ?: "{}")
             TextStyle(o.optInt("size", 52), o.optString("color", "Branco"), o.optString("bg", "Faixa escura"),
@@ -115,7 +122,16 @@ object VideoExport {
     fun textBitmap(text: String, st: TextStyle, w: Int = W, h: Int = H): Bitmap {
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         if (text.isBlank()) return bmp
-        val cv = Canvas(bmp)
+        drawText(Canvas(bmp), text, st, w, h)
+        return bmp
+    }
+
+    /** Caixa (em pixels) que o texto ocupa num quadro w x h: pra arrastar na prévia. */
+    fun textBox(text: String, st: TextStyle, w: Int, h: Int): RectF = drawText(null, text, st, w, h)
+
+    /** Desenha o texto (ou só mede, com cv = null) e devolve a caixa ocupada. */
+    fun drawText(cv: Canvas?, text: String, st: TextStyle, w: Int, h: Int): RectF {
+        if (text.isBlank()) return RectF()
         val color = TextStyle.COLORS[st.color] ?: Color.WHITE
         val tp = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             this.color = color; textSize = w * st.size / 1000f; typeface = typeface(st.font)
@@ -125,13 +141,15 @@ object VideoExport {
         val maxW = (w * 0.84f).toInt()
         @Suppress("DEPRECATION")
         val sl = StaticLayout(text.trimEnd(), tp, maxW, align, 1.12f, 0f, false)
-        val left = (w - maxW) / 2f
-        val top = when (st.pos) { "Cima" -> h * 0.15f; "Meio" -> (h - sl.height) / 2f; else -> h * 0.80f - sl.height }
+        val left = (w - maxW) / 2f + (if (st.x >= 0f) (st.x - 0.5f) * w else 0f)
+        val top = if (st.y >= 0f) h * st.y - sl.height / 2f
+                  else when (st.pos) { "Cima" -> h * 0.15f; "Meio" -> (h - sl.height) / 2f; else -> h * 0.80f - sl.height }
+        var minL = maxW.toFloat(); var maxR = 0f
+        for (i in 0 until sl.lineCount) { minL = minOf(minL, sl.getLineLeft(i)); maxR = maxOf(maxR, sl.getLineRight(i)) }
+        val padX = w * 0.035f; val padY = w * 0.022f
+        val box = RectF(left + minL - padX, top - padY, left + maxR + padX, top + sl.height + padY)
+        if (cv == null) return box
         if (st.bg == "Faixa escura" || st.bg == "Faixa clara") {
-            var minL = maxW.toFloat(); var maxR = 0f
-            for (i in 0 until sl.lineCount) { minL = minOf(minL, sl.getLineLeft(i)); maxR = maxOf(maxR, sl.getLineRight(i)) }
-            val padX = w * 0.035f; val padY = w * 0.022f
-            val box = RectF(left + minL - padX, top - padY, left + maxR + padX, top + sl.height + padY)
             val bgc = if (st.bg == "Faixa escura") 0x99000000.toInt() else 0xE6FFFFFF.toInt()
             cv.drawRoundRect(box, w * 0.03f, w * 0.03f, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = bgc })
         }
@@ -142,7 +160,7 @@ object VideoExport {
             StaticLayout(text.trimEnd(), stroke, maxW, align, 1.12f, 0f, false).draw(cv)
         }
         sl.draw(cv); cv.restore()
-        return bmp
+        return box
     }
 
     // ------------------------------------------------------------------ prévia
@@ -326,6 +344,79 @@ object VideoExport {
             t.start(comp, out.path)
             pollProgress(onProgress)
         } catch (e: Exception) { onDone(null, e.message) }
+    }
+
+    /**
+     * Exporta uma edição com vários clipes (vídeos e fotos em sequência) e camadas de texto/imagem por cima.
+     * [dir] = pasta do projeto (onde ficam os clipes e as imagens).
+     */
+    fun exportEdit(c: Context, st: EditState, dir: File, quality: String, onProgress: (Int) -> Unit, onDone: (File?, String?) -> Unit) {
+        val out = File(c.cacheDir, "exp_${System.currentTimeMillis()}.mp4")
+        val qq = q(quality)
+        try {
+            val music = st.music.takeIf { it.isNotEmpty() }?.let { File(it) }?.takeIf { it.exists() }
+            val noOrig = music != null || st.mute
+            val layers = st.layers.filter { (it.isText && it.text.isNotBlank()) || (!it.isText && File(dir, it.file).exists()) }
+            val items = ArrayList<EditedMediaItem>()
+            var t = 0L
+            var anySilent = false
+            st.clips.forEach { cl ->
+                val f = File(dir, cl.file)
+                if (!f.exists() || cl.len <= 0) return@forEach
+                val uri = Uri.fromFile(f)
+                val fx = ArrayList<androidx.media3.common.Effect>()
+                if (cl.crop.active) {
+                    val (sw, sh) = displaySize(c, uri, cl.photo)
+                    val n = cropNdc(sw, sh, cl.crop)
+                    fx.add(Crop(n[0], n[1], n[2], n[3]))
+                }
+                fx.add(Presentation.createForWidthAndHeight(qq.w, qq.h, Presentation.LAYOUT_SCALE_TO_FIT))
+                val mine = layers.filter { it.s < t + cl.len && it.e > t }
+                if (mine.isNotEmpty()) fx.add(OverlayEffect(ImmutableList.of(LayersOverlay(mine, t, dir, qq.w, qq.h))))
+                val media = if (cl.photo) MediaItem.Builder().setUri(uri).setMimeType(MimeTypes.IMAGE_JPEG).build()
+                    else MediaItem.Builder().setUri(uri).setClippingConfiguration(
+                        MediaItem.ClippingConfiguration.Builder().setStartPositionMs(cl.s).setEndPositionMs(cl.e).build()).build()
+                val b = EditedMediaItem.Builder(media).setEffects(Effects(emptyList(), fx))
+                if (cl.photo) {
+                    @Suppress("DEPRECATION")
+                    b.setDurationUs(cl.len * 1000L)
+                    b.setFrameRate(30)
+                }
+                if (noOrig || !cl.sound) b.setRemoveAudio(true)
+                if (cl.photo || !cl.sound) anySilent = true
+                items.add(b.build())
+                t += cl.len
+            }
+            if (items.isEmpty()) { onDone(null, "Nenhum clipe na linha do tempo"); return }
+            val seqs = ArrayList<EditedMediaItemSequence>()
+            seqs.add(EditedMediaItemSequence(items))
+            if (music != null) {
+                val clip = MediaItem.ClippingConfiguration.Builder().setStartPositionMs(st.musicStart)
+                if (st.musicEnd > 0) clip.setEndPositionMs(st.musicStart + st.musicEnd)
+                val mi = MediaItem.Builder().setUri(Uri.fromFile(music)).setClippingConfiguration(clip.build()).build()
+                seqs.add(EditedMediaItemSequence(listOf(EditedMediaItem.Builder(mi).build()), st.musicEnd <= 0))
+            }
+            val cb = Composition.Builder(seqs)
+            // clipes sem som (fotos, ou som desligado) no meio de clipes com som: o app preenche com silêncio
+            if (!noOrig && (anySilent || items.size > 1)) cb.experimentalSetForceAudioTrack(true)
+            val comp = cb.build()
+            val enc = DefaultEncoderFactory.Builder(c)
+                .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(qq.bitrate).build())
+                .setEnableFallback(true).build()
+            val tr = Transformer.Builder(c)
+                .setVideoMimeType(qq.mime).setAudioMimeType(MimeTypes.AUDIO_AAC)
+                .setEncoderFactory(enc)
+                .setMuxerFactory(CleanMuxerFactory())
+                .addListener(object : Transformer.Listener {
+                    override fun onCompleted(composition: Composition, exportResult: ExportResult) { current = null; onDone(out, null) }
+                    override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
+                        current = null; out.delete(); onDone(null, exportException.message ?: "Erro ao exportar")
+                    }
+                }).build()
+            current = tr
+            tr.start(comp, out.path)
+            pollProgress(onProgress)
+        } catch (e: Exception) { current = null; onDone(null, e.message) }
     }
 
     /** Cópia nova de um vídeo já pronto: mesma imagem e som (sem reprocessar), sem os dados do original. */

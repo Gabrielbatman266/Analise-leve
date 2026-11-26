@@ -36,3 +36,5 @@ Sem eles, o build guarda uma chave no cache do GitHub Actions, que expira se fic
 - `Ai.kt`: chamadas ao Claude/Gemini.
 - `Store.kt`: fila de prints e banco de posts (`posts.json`).
 - `MainActivity.kt`: tela única.
+- `Edit.kt`: editor estilo CapCut — clipes em sequência (vídeos e fotos), dividir, camadas de texto e imagem, desfazer.
+- `TimelineView.kt`: linha do tempo com cursor fixo no meio, zoom de pinça, trilhas de clipes, camadas e música.
